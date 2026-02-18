@@ -8,16 +8,41 @@ import queue
 import shlex
 import subprocess
 import threading
-import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CC_BIN = ROOT / "bin" / "cc"
 
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ModuleNotFoundError:
+    tk = None  # type: ignore[assignment]
+    ttk = None  # type: ignore[assignment]
+
+
+def tkinter_available() -> bool:
+    return tk is not None and ttk is not None
+
+
+def missing_tkinter_message() -> str:
+    return """\
+❌ O módulo tkinter não está instalado nesta instalação de Python.
+
+Para usar a interface gráfica nativa, instala as dependências do sistema:
+
+- Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y python3-tk
+- Fedora/RHEL:   sudo dnf install -y python3-tkinter
+- Arch Linux:    sudo pacman -S tk
+- macOS (python.org): reinstalar Python com Tcl/Tk incluído
+
+Depois corre novamente: make desktop
+"""
+
 
 class CCDesktopApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: Any) -> None:
         self.root = root
         self.root.title("CC Desktop")
         self.root.geometry("900x620")
@@ -147,11 +172,23 @@ class CCDesktopApp:
         self.root.after(120, self._poll_queue)
 
 
-def main() -> None:
-    root = tk.Tk()
+def main() -> int:
+    if not tkinter_available():
+        print(missing_tkinter_message())
+        return 1
+
+    try:
+        root = tk.Tk()
+    except Exception as exc:
+        print("❌ Não foi possível abrir a janela desktop:")
+        print(f"   {exc}")
+        print("\nSe estiver em servidor/WSL/container sem ambiente gráfico, corre no teu desktop local ou configura DISPLAY.")
+        return 1
+
     _app = CCDesktopApp(root)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

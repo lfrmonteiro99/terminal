@@ -30,7 +30,7 @@ ui-test:
 	python3 tests/ui_smoke.py
 
 desktop:
-	python3 ui/app.py
+	python3 ui/app.py || (echo "" && echo "Desktop app falhou. Ver README (secção 'Erros comuns no make desktop')." && exit 1)
 
 demo:
 	PATH="$$PWD/bin:$$PATH" cc --help
