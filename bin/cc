@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CC_DEFAULT_BRANCH="${CC_DEFAULT_BRANCH:-main}"
+
+info() { printf 'ℹ️  %s\n' "$*"; }
+ok() { printf '✅ %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*"; }
+err() { printf '❌ %s\n' "$*" >&2; }
+
+usage() {
+  cat <<'USAGE'
+cc - AI/Git terminal helper (MVP)
+
+Usage:
+  cc doctor
+  cc branch start <ticket-slug>
+  cc review
+  cc sync
+  cc commit [type] [message...]
+  cc pr
+
+Examples:
+  cc branch start 1234-login-flow
+  cc commit feat "add login validation"
+USAGE
+}
+
+require_git_repo() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    err "Not inside a git repository"
+    exit 1
+  }
+}
+
+ensure_clean_tree() {
+  local changes
+  changes="$(git status --porcelain)"
+  if [[ -n "$changes" ]]; then
+    err "Working tree is not clean. Commit/stash before this operation."
+    git status --short
+    exit 1
+  fi
+}
+
+cmd_doctor() {
+  require_git_repo
+  local branch ahead_behind
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  ahead_behind="$(git rev-list --left-right --count "origin/${CC_DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "n/a")"
+  info "Repository: $(basename "$(git rev-parse --show-toplevel)")"
+  info "Branch: ${branch:-detached}"
+  info "Ahead/Behind vs origin/${CC_DEFAULT_BRANCH}: ${ahead_behind}"
+  if git diff --quiet && git diff --cached --quiet; then
+    ok "Working tree clean"
+  else
+    warn "Working tree has local changes"
+    git status --short
+  fi
+  if command -v gh >/dev/null 2>&1; then ok "gh installed"; else warn "gh not installed"; fi
+}
+
+cmd_branch_start() {
+  require_git_repo
+  local slug="$1"
+  ensure_clean_tree
+  git fetch --all --prune
+  git checkout "${CC_DEFAULT_BRANCH}"
+  git pull --ff-only origin "${CC_DEFAULT_BRANCH}" || true
+  local name="feature/${slug}"
+  git checkout -b "$name"
+  ok "Branch criada: $name"
+}
+
+cmd_review() {
+  require_git_repo
+  if git diff --quiet && git diff --cached --quiet; then
+    warn "Sem alterações para rever."
+    exit 0
+  fi
+  info "Ficheiros alterados:"
+  git diff --name-status
+  echo
+  info "Resumo por ficheiro:"
+  git diff --stat
+  echo
+  info "Últimos commits:"
+  git log --oneline -n 5
+}
+
+cmd_sync() {
+  require_git_repo
+  git fetch origin
+  git rebase "origin/${CC_DEFAULT_BRANCH}"
+  ok "Rebase concluído com origin/${CC_DEFAULT_BRANCH}"
+}
+
+cmd_commit() {
+  require_git_repo
+  local type="${1:-chore}"
+  shift || true
+  local msg="${*:-update files}"
+  if ! [[ "$type" =~ ^(feat|fix|chore|refactor|docs|test|perf)$ ]]; then
+    err "Invalid commit type: $type"
+    exit 1
+  fi
+  git add -A
+  git commit -m "${type}: ${msg}"
+  ok "Commit criado"
+}
+
+cmd_pr() {
+  require_git_repo
+  if ! command -v gh >/dev/null 2>&1; then
+    err "gh CLI not installed"
+    exit 1
+  fi
+  local branch title body
+  branch="$(git branch --show-current)"
+  title="${branch}: update"
+  body=$'## Summary\n- update from cc CLI\n\n## Testing\n- local checks'
+  gh pr create --fill --title "$title" --body "$body"
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    doctor) cmd_doctor "$@" ;;
+    branch)
+      sub="${1:-}"; shift || true
+      case "$sub" in
+        start)
+          [[ $# -ge 1 ]] || { err "Missing ticket-slug"; usage; exit 1; }
+          cmd_branch_start "$1"
+          ;;
+        *) err "Unknown branch subcommand: $sub"; usage; exit 1 ;;
+      esac
+      ;;
+    review) cmd_review "$@" ;;
+    sync) cmd_sync "$@" ;;
+    commit) cmd_commit "$@" ;;
+    pr) cmd_pr "$@" ;;
+    ""|-h|--help|help) usage ;;
+    *) err "Unknown command: $cmd"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"
