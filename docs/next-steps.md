@@ -1,38 +1,29 @@
-# O que fazer agora (plano prático)
+# O que fazer agora
 
-## Resposta curta à tua pergunta
+## Resposta curta
 
-- **Como corro isto?** -> `make setup && export PATH="$PWD/bin:$PATH" && make run`
-- **Como testo?** -> `make test`
-- **É uma app?** -> Sim, é uma app **CLI** (terminal), não web app.
+- Sim, já tens **interface gráfica nativa no OS**: `make desktop`.
+- Se quiseres modo terminal: `make run` e `cc ...`.
 
-## 1) Executar localmente
+## Arranque rápido
 
 ```bash
 make setup
-export PATH="$PWD/bin:$PATH"
-cc doctor
+make desktop
 ```
 
-## 2) Exercitar o fluxo Git assistido
+## Testes
 
 ```bash
-cc branch start 1234-login-flow
-# ... editar ficheiros
-cc review
-cc commit feat "implement login flow"
-cc sync
+make test
+make ui-test
 ```
 
-## 3) Abrir PR (quando `gh` estiver autenticado)
+## Fluxo recomendado na app desktop
 
-```bash
-cc pr
-```
-
-## 4) Melhorias imediatas
-
-- ligar `cc do`/`cc ask` ao provider de IA
-- adicionar leitura de `.cc-terminal.yml`
-- adicionar checks automáticos em `cc commit` (lint + testes)
-- adicionar bloqueio explícito para commits em `main`
+1. Clicar `Doctor`
+2. Criar branch em `branch start`
+3. Rever com `Review`
+4. Fazer `Commit`
+5. Sincronizar com `Sync`
+6. Abrir `PR`

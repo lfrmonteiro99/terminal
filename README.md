@@ -1,48 +1,41 @@
-# AI Dev Terminal (MVP)
+# CC Desktop (Interface gráfica nativa para OS)
 
-Sim — isto **já é uma app**, mas em formato de **CLI de terminal** (não interface gráfica/web).
+Agora tens uma app **gráfica nativa** (desktop), sem browser.
 
-## O que é
+## Componentes
 
-- `bin/cc`: app CLI principal
-- `Makefile`: atalhos para correr e testar
-- `tests/smoke.sh`: testes de fumo automáticos
+- `bin/cc`: CLI com operações Git assistidas.
+- `ui/app.py`: app desktop Tkinter (janela nativa no OS).
+- `Makefile`: atalhos de execução.
+- `tests/smoke.sh`: smoke tests da CLI.
+- `tests/ui_smoke.py`: smoke test da app desktop.
 
-## Como correr
+## Como correr a app gráfica
 
 ```bash
 make setup
-export PATH="$PWD/bin:$PATH"
-make run
+make desktop
 ```
 
-Também podes chamar diretamente:
+Abre uma janela nativa com ações:
+
+- Doctor
+- Review
+- Sync
+- PR
+- branch start
+- commit
+
+## Como correr no terminal (CLI)
 
 ```bash
-PATH="$PWD/bin:$PATH" cc --help
+make run
+make doctor
 ```
 
 ## Como testar
 
 ```bash
 make test
+make ui-test
 ```
-
-Isto valida:
-- sintaxe do script
-- help output
-- diagnóstico (`cc doctor`)
-- comportamento de erro (`cc commit` com tipo inválido)
-
-## Comandos disponíveis (MVP)
-
-- `cc doctor`
-- `cc branch start <ticket-slug>`
-- `cc review`
-- `cc sync`
-- `cc commit [type] [message...]`
-- `cc pr`
-
-## Nota importante
-
-Este MVP é focado em Git + fluxo de terminal. A integração AI (`cc ask`, `cc do`) é o próximo passo.
