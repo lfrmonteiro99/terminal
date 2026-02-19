@@ -23,6 +23,10 @@ def main() -> int:
         print("desktop app symbols missing")
         return 1
 
+    if not module.tkinter_available():
+        print("warning: tkinter not installed; desktop runtime test skipped")
+        return 0
+
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
         print("warning: no DISPLAY set; skipping runtime window check")
         return 0
