@@ -31,7 +31,7 @@ A desktop application for managing AI coding sessions with git-integrated sandbo
 |-------|---------|
 | `terminal-core` | Shared types, protocol definitions, config |
 | `terminal-daemon` | WebSocket server, dispatcher, git engine, persistence, Claude subprocess runner |
-| `terminal-app` | Tauri desktop shell (future — currently scaffolded) |
+| `terminal-app` | Tauri v2 native desktop shell — embeds daemon in-process, auto-connects frontend |
 
 ### Key Design Decisions
 
@@ -77,6 +77,42 @@ docker compose down
 docker compose down -v
 ```
 
+## Native Desktop App (Tauri)
+
+The Tauri app bundles the daemon in-process — double-click the `.exe` and you're running. No Docker, no manual WebSocket URLs, no token files.
+
+### Prerequisites
+
+- **Rust** 1.88+
+- **Node.js** 18+ with npm
+- **Tauri CLI**: `cargo install tauri-cli --version "^2"`
+- **WebView2** (Windows — bundled by the installer on first run)
+
+### Development
+
+```bash
+cd crates/terminal-app
+cargo tauri dev
+```
+
+This starts the Vite dev server and the Tauri window simultaneously. The embedded daemon starts on a random port, and the frontend auto-discovers it via `invoke('get_daemon_info')`.
+
+### Build
+
+```bash
+cd crates/terminal-app
+cargo tauri build
+```
+
+Produces `.exe` and `.msi` in `target/release/bundle/`.
+
+### How It Works
+
+- **DaemonMode::Embedded**: The daemon starts as a `tokio::spawn` task inside the Tauri process. Port/token are held in memory only — no files written to disk.
+- **Auto-connect**: The frontend detects Tauri via `__TAURI_INTERNALS__`, polls `get_daemon_info` with exponential backoff until the daemon is ready, then connects the WebSocket automatically.
+- **Single instance**: `tauri-plugin-single-instance` prevents multiple windows. Launching again focuses the existing window.
+- **Clean shutdown**: `RunEvent::Exit` sends a shutdown signal via `oneshot` channel. No orphaned processes.
+
 ## Running Tests
 
 ```bash
@@ -98,7 +134,7 @@ If you prefer running natively:
 
 ### Prerequisites
 
-- **Rust** 1.85+ (`rustup install stable`)
+- **Rust** 1.88+ (`rustup install stable`)
 - **Node.js** 18+ with npm
 - **Git** 2.20+
 
@@ -146,17 +182,18 @@ terminal/
 │   │   └── src/
 │   │       ├── models.rs       # Session, Run, RunState, DiffStat, StashEntry, WorktreeMeta
 │   │       ├── protocol/v1.rs  # AppCommand + AppEvent (serde tagged enums)
-│   │       └── config.rs       # DaemonConfig
+│   │       └── config.rs       # DaemonConfig, DaemonMode (Standalone/Embedded)
 │   ├── terminal-daemon/        # Backend server
 │   │   └── src/
-│   │       ├── main.rs         # Entry point, wiring
+│   │       ├── lib.rs          # Library entry: start_server(), DaemonHandle
+│   │       ├── main.rs         # Standalone CLI entry point
 │   │       ├── server.rs       # Axum WebSocket server
 │   │       ├── dispatcher.rs   # Command handler, run lifecycle, git integration
 │   │       ├── git_engine.rs   # Pure CLI git wrapper (24 async operations)
 │   │       ├── persistence.rs  # JSON file CRUD, atomic writes, crash recovery
 │   │       ├── claude_runner.rs# Claude subprocess management
 │   │       └── parser.rs       # Claude output parser
-│   └── terminal-app/           # Tauri shell (scaffolded)
+│   └── terminal-app/           # Tauri v2 native shell (embeds daemon)
 └── frontend/
     └── src/
         ├── App.tsx             # Main layout, event handlers
@@ -195,5 +232,6 @@ See `crates/terminal-core/src/protocol/v1.rs` for the complete protocol definiti
 - [x] **Phase 1**: Daemon skeleton — WebSocket server, session/run lifecycle, subprocess runner, parser, dispatcher, React frontend
 - [x] **Phase 2**: Git sandbox — worktree isolation, persistence, crash recovery, merge/revert, SessionSidebar, PostRunSummary
 - [x] **Phase 2.1**: Stash viewer, dirty working directory detection + warning modal
+- [x] **Phase 2.2**: Native Tauri app — embedded daemon, auto-connect frontend, single-instance, clean shutdown
 - [ ] **Phase 3**: Resilience — Windows Job Objects, reconnect state rebuild, DiffViewer with syntax highlighting
 - [ ] **Phase 4**: Memory + Polish — `.project-intelligence`, timeline/audit view, output virtualization
