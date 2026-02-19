@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub enum DaemonMode {
+    #[default]
+    Standalone,
+    Embedded,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
+    /// Daemon mode: Standalone writes port/token to disk, Embedded keeps in memory only
+    pub mode: DaemonMode,
     /// Address to bind to (default: 127.0.0.1)
     pub host: String,
     /// Port (0 = random)
@@ -25,6 +34,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("."));
         Self {
+            mode: DaemonMode::Standalone,
             host: std::env::var("TERMINAL_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
             port: std::env::var("TERMINAL_PORT")
                 .ok()

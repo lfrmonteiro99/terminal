@@ -9,6 +9,8 @@ import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
 
+const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
 const inputStyle: React.CSSProperties = {
   padding: 8,
   fontFamily: 'monospace',
@@ -34,9 +36,32 @@ function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const [prompt, setPrompt] = useState('');
-  const [daemonUrl, setDaemonUrl] = useState('ws://127.0.0.1:3000/ws');
+  const [daemonUrl, setDaemonUrl] = useState(IS_TAURI ? '' : 'ws://127.0.0.1:3000/ws');
   const [authToken, setAuthToken] = useState('');
   const [projectRoot, setProjectRoot] = useState('');
+
+  // Tauri mode: poll get_daemon_info until daemon is ready, then auto-connect
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let cancelled = false;
+    const poll = async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (cancelled) return;
+        try {
+          const info = await invoke<{ port: number; token: string }>('get_daemon_info');
+          setDaemonUrl(`ws://127.0.0.1:${info.port}/ws`);
+          setAuthToken(info.token);
+          return;
+        } catch {
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        }
+      }
+      console.error('Daemon did not become ready after 10 attempts');
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleEvent = useCallback(
     (event: AppEvent) => {
@@ -154,8 +179,8 @@ function AppContent() {
         )}
       </div>
 
-      {/* Connection setup (show when disconnected) */}
-      {status === 'disconnected' && (
+      {/* Connection setup (show when disconnected, browser mode only) */}
+      {!IS_TAURI && status === 'disconnected' && (
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>
           <input
             value={daemonUrl}
@@ -169,6 +194,12 @@ function AppContent() {
             placeholder="Auth token (from ~/.terminal-daemon/auth_token)"
             style={inputStyle}
           />
+        </div>
+      )}
+      {/* Tauri mode: show connecting status */}
+      {IS_TAURI && status !== 'connected' && (
+        <div style={{ padding: 16, color: '#f0a500', fontFamily: 'monospace', fontSize: 13 }}>
+          Connecting to embedded daemon...
         </div>
       )}
 

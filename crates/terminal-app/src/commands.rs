@@ -1,32 +1,22 @@
+use crate::DaemonState;
 use serde::Serialize;
+use std::sync::Mutex;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DaemonInfo {
     pub port: u16,
     pub token: String,
 }
 
-/// Read daemon connection info from ~/.terminal-daemon/
+/// Returns daemon connection info from managed state.
+/// Returns Err("Daemon not ready") if the embedded daemon hasn't started yet.
 #[tauri::command]
-pub async fn get_daemon_info() -> Result<DaemonInfo, String> {
-    let home = dirs_next::home_dir().ok_or("Cannot find home directory")?;
-    let data_dir = home.join(".terminal-daemon");
-
-    let port_str = tokio::fs::read_to_string(data_dir.join("port"))
-        .await
-        .map_err(|e| format!("Failed to read port file: {}. Is the daemon running?", e))?;
-
-    let port: u16 = port_str
-        .trim()
-        .parse()
-        .map_err(|e| format!("Invalid port: {}", e))?;
-
-    let token = tokio::fs::read_to_string(data_dir.join("auth_token"))
-        .await
-        .map_err(|e| format!("Failed to read auth token: {}", e))?;
-
-    Ok(DaemonInfo {
-        port,
-        token: token.trim().to_string(),
-    })
+pub async fn get_daemon_info(
+    state: tauri::State<'_, Mutex<DaemonState>>,
+) -> Result<DaemonInfo, String> {
+    let lock = state.lock().map_err(|e| e.to_string())?;
+    match &lock.info {
+        Some(info) => Ok(info.clone()),
+        None => Err("Daemon not ready".into()),
+    }
 }

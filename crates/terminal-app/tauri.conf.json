@@ -10,7 +10,6 @@
     "beforeBuildCommand": "npm run build --prefix ../../frontend"
   },
   "app": {
-    "title": "Terminal",
     "windows": [
       {
         "title": "Terminal",

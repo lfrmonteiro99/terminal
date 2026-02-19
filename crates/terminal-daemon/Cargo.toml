@@ -3,6 +3,10 @@ name = "terminal-daemon"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "terminal_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "terminal-daemon"
 path = "src/main.rs"
