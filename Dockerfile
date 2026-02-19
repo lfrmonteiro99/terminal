@@ -19,12 +19,28 @@ RUN mkdir -p crates/terminal-core/src crates/terminal-daemon/src \
     && echo "fn main() {}" > crates/terminal-daemon/src/main.rs
 
 # Pre-fetch and compile dependencies
-RUN cargo build 2>/dev/null || true
+RUN cargo build --release -p terminal-daemon 2>/dev/null || true
 
 # Now copy real source
 COPY crates/ crates/
 
-# Build
-RUN cargo build
+# Build release binary
+RUN cargo build --release -p terminal-daemon
 
-CMD ["cargo", "test"]
+# --- Runtime ---
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/terminal-daemon /usr/local/bin/terminal-daemon
+
+ENV TERMINAL_HOST=0.0.0.0
+ENV TERMINAL_PORT=3000
+ENV TERMINAL_DATA_DIR=/data
+ENV RUST_LOG=info
+
+EXPOSE 3000
+
+CMD ["terminal-daemon"]
