@@ -1,0 +1,19 @@
+[package]
+name = "terminal-app"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+terminal-core = { path = "../terminal-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+tracing.workspace = true
+dirs-next = "2"
