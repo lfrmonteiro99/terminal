@@ -1,5 +1,32 @@
 services:
-  dev:
+  # --- Run the full app: docker compose up ---
+  daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - daemon-data:/data
+    environment:
+      - TERMINAL_HOST=0.0.0.0
+      - TERMINAL_PORT=3000
+      - TERMINAL_DATA_DIR=/data
+      - RUST_LOG=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_DAEMON_WS_URL=ws://daemon:3000/ws
+    depends_on:
+      - daemon
+
+  # --- Run tests: docker compose run --rm test ---
+  test:
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -9,11 +36,12 @@ services:
       - cargo-cache:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
       - target-cache:/app/target
-    command: cargo test --workspace
-    ports:
-      - "0:8080"
+    command: cargo test -p terminal-core -p terminal-daemon
+    profiles:
+      - test
 
 volumes:
+  daemon-data:
   cargo-cache:
   cargo-git:
   target-cache:
