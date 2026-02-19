@@ -25,6 +25,9 @@ export interface AppState {
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
   dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
   stashDrawerOpen: boolean;
+  // Sidebar layout
+  activeSidebarView: 'explorer' | 'changes' | 'git';
+  sidebarCollapsed: boolean;
 }
 
 const initialState: AppState = {
@@ -45,6 +48,8 @@ const initialState: AppState = {
   stashDiffs: new Map(),
   dirtyWarning: null,
   stashDrawerOpen: false,
+  activeSidebarView: 'changes',
+  sidebarCollapsed: false,
 };
 
 // --- Actions ---
@@ -56,7 +61,9 @@ type Action =
   | { type: 'SELECT_RUN'; runId: string | null }
   | { type: 'CLEAR_ERROR' }
   | { type: 'TOGGLE_STASH_DRAWER' }
-  | { type: 'DISMISS_DIRTY_WARNING' };
+  | { type: 'DISMISS_DIRTY_WARNING' }
+  | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
+  | { type: 'TOGGLE_SIDEBAR' };
 
 const MAX_OUTPUT_LINES = 2000;
 
@@ -79,6 +86,12 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'DISMISS_DIRTY_WARNING':
       return { ...state, dirtyWarning: null };
+
+    case 'SET_SIDEBAR_VIEW':
+      return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
+
+    case 'TOGGLE_SIDEBAR':
+      return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
 
     case 'HANDLE_EVENT': {
       const event = action.event;

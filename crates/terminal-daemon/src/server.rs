@@ -34,6 +34,7 @@ async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     let (mut sender, mut receiver) = socket.split();
+    info!("New WebSocket connection, awaiting auth...");
 
     // Step 1: Auth handshake — first message must be Auth command
     let authed = match tokio::time::timeout(
@@ -43,13 +44,33 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     .await
     {
         Ok(Some(Ok(Message::Text(text)))) => {
-            match serde_json::from_str::<AppCommand>(&text) {
+            info!("Auth message received: {}", &*text);
+            match serde_json::from_str::<AppCommand>(&*text) {
                 Ok(AppCommand::Auth { token }) if token == state.auth_token => {
                     let resp = serde_json::to_string(&AppEvent::AuthSuccess).unwrap();
                     let _ = sender.send(Message::Text(resp.into())).await;
                     true
                 }
-                _ => {
+                Ok(AppCommand::Auth { .. }) => {
+                    warn!("Auth failed: token mismatch");
+                    let resp = serde_json::to_string(&AppEvent::AuthFailed {
+                        reason: "Invalid token".into(),
+                    })
+                    .unwrap();
+                    let _ = sender.send(Message::Text(resp.into())).await;
+                    false
+                }
+                Ok(other) => {
+                    warn!("Auth failed: expected Auth command, got {:?}", other);
+                    let resp = serde_json::to_string(&AppEvent::AuthFailed {
+                        reason: "Expected Auth command".into(),
+                    })
+                    .unwrap();
+                    let _ = sender.send(Message::Text(resp.into())).await;
+                    false
+                }
+                Err(e) => {
+                    warn!("Auth failed: could not parse message: {}", e);
                     let resp = serde_json::to_string(&AppEvent::AuthFailed {
                         reason: "Invalid token".into(),
                     })
@@ -59,7 +80,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                 }
             }
         }
-        _ => false,
+        Ok(Some(Ok(other))) => {
+            warn!("Auth failed: expected Text message, got {:?}", other);
+            false
+        }
+        Ok(Some(Err(e))) => {
+            warn!("Auth failed: WebSocket error: {}", e);
+            false
+        }
+        Ok(None) => {
+            warn!("Auth failed: connection closed before auth");
+            false
+        }
+        Err(_) => {
+            warn!("Auth failed: 10s timeout");
+            false
+        }
     };
 
     if !authed {

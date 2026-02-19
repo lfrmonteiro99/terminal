@@ -68,6 +68,28 @@ pub enum AppCommand {
         stash_message: String,
     },
 
+    // Sidebar commands (Phase 3)
+    ListDirectory { path: PathBuf },
+    GetChangedFiles {
+        mode: String,
+        run_id: Option<Uuid>,
+    },
+    GetFileDiff {
+        file_path: PathBuf,
+        mode: String,
+        run_id: Option<Uuid>,
+    },
+    GetRepoStatus,
+    GetCommitHistory { limit: usize },
+    StageFile { path: PathBuf },
+    UnstageFile { path: PathBuf },
+    CreateCommit { message: String },
+    CheckoutBranch { name: String },
+    CreateBranch {
+        name: String,
+        from: Option<String>,
+    },
+
     // System
     GetStatus,
     Ping,
@@ -149,6 +171,34 @@ pub enum AppEvent {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
+    },
+
+    // Sidebar events (Phase 3)
+    DirectoryListing {
+        path: PathBuf,
+        entries: Vec<FileTreeEntry>,
+    },
+    ChangedFilesList {
+        mode: String,
+        run_id: Option<Uuid>,
+        files: Vec<FileChange>,
+    },
+    FileDiffResult {
+        file_path: PathBuf,
+        diff: String,
+        stat: Option<DiffStat>,
+    },
+    RepoStatusResult {
+        status: RepoStatusSnapshot,
+    },
+    CommitHistoryResult {
+        commits: Vec<CommitEntry>,
+    },
+    CommitCreated {
+        hash: String,
+    },
+    BranchChanged {
+        name: String,
     },
 
     // Session

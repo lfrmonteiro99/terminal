@@ -69,6 +69,28 @@ export interface FileChange {
   status: FileStatus;
 }
 
+export interface FileTreeEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size?: number;
+}
+
+export interface CommitEntry {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+export interface RepoStatus {
+  branch: string;
+  head: string;
+  clean: boolean;
+  staged_count: number;
+  unstaged_count: number;
+}
+
 export interface SessionSummary {
   id: string;
   project_root: string;
@@ -99,7 +121,18 @@ export type AppCommand =
   | { type: 'GetStashFiles'; stash_index: number }
   | { type: 'GetStashDiff'; stash_index: number; file_path: string | null }
   | { type: 'CheckDirtyState' }
-  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string };
+  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string }
+  // Phase 3: Sidebar commands
+  | { type: 'ListDirectory'; path: string }
+  | { type: 'GetChangedFiles'; mode: 'working' | 'run'; run_id?: string }
+  | { type: 'GetFileDiff'; file_path: string; mode: 'working' | 'run'; run_id?: string }
+  | { type: 'GetRepoStatus' }
+  | { type: 'GetCommitHistory'; limit: number }
+  | { type: 'StageFile'; path: string }
+  | { type: 'UnstageFile'; path: string }
+  | { type: 'CreateCommit'; message: string }
+  | { type: 'CheckoutBranch'; name: string }
+  | { type: 'CreateBranch'; name: string; from?: string };
 
 // --- Events (Daemon -> Client) ---
 
@@ -128,4 +161,12 @@ export type AppEvent =
   | { type: 'StashFiles'; stash_index: number; files: FileChange[] }
   | { type: 'StashDiff'; stash_index: number; diff: string; stat: DiffStat | null }
   | { type: 'DirtyState'; status: DirtyStatus }
-  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode };
+  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode }
+  // Phase 3: Sidebar events
+  | { type: 'DirectoryListing'; path: string; entries: FileTreeEntry[] }
+  | { type: 'ChangedFilesList'; mode: 'working' | 'run'; run_id?: string; files: FileChange[] }
+  | { type: 'FileDiffResult'; file_path: string; diff: string; stat: DiffStat | null }
+  | { type: 'RepoStatusResult'; status: RepoStatus }
+  | { type: 'CommitHistoryResult'; commits: CommitEntry[] }
+  | { type: 'CommitCreated'; hash: string }
+  | { type: 'BranchChanged'; name: string };

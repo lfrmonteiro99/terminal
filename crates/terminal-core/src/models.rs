@@ -177,6 +177,33 @@ pub struct WorktreeMeta {
     pub last_modified: DateTime<Utc>,
 }
 
+// --- Sidebar Types (Phase 3) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTreeEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitEntry {
+    pub hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoStatusSnapshot {
+    pub branch: String,
+    pub head: String,
+    pub clean: bool,
+    pub staged_count: usize,
+    pub unstaged_count: usize,
+}
+
 // --- Stash / Dirty State Types ---
 
 /// Git stash entry

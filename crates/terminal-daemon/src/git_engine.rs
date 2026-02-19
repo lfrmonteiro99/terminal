@@ -471,6 +471,151 @@ pub async fn stash_push(cwd: &Path, message: &str) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Sidebar operations (Phase 3)
+// ---------------------------------------------------------------------------
+
+/// List directory entries, skipping hidden files and common noise.
+/// Directories are sorted first, then alphabetically by name.
+pub async fn list_directory(dir: &Path) -> Result<Vec<FileTreeEntry>> {
+    let mut entries = Vec::new();
+    let mut read_dir = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|e| GitError::CommandFailed(format!("read_dir: {}", e)))?;
+    while let Some(entry) = read_dir
+        .next_entry()
+        .await
+        .map_err(|e| GitError::CommandFailed(format!("next_entry: {}", e)))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "node_modules" || name == "target" {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .await
+            .map_err(|e| GitError::CommandFailed(format!("metadata: {}", e)))?;
+        let is_dir = metadata.is_dir();
+        let relative = entry
+            .path()
+            .strip_prefix(dir)
+            .unwrap_or(&entry.path())
+            .to_string_lossy()
+            .to_string();
+        entries.push(FileTreeEntry {
+            name,
+            path: relative,
+            is_dir,
+            size: if is_dir { None } else { Some(metadata.len()) },
+        });
+    }
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(entries)
+}
+
+/// Atomic snapshot of repo status: branch, HEAD, clean flag, staged/unstaged counts.
+pub async fn repo_status_snapshot(cwd: &Path) -> Result<RepoStatusSnapshot> {
+    let branch = current_branch(cwd)
+        .await?
+        .unwrap_or_else(|| "HEAD (detached)".to_string());
+    let head = head_oid(cwd)
+        .await
+        .unwrap_or_else(|_| "unknown".to_string());
+    let status = working_dir_status(cwd).await?;
+    Ok(RepoStatusSnapshot {
+        branch,
+        head: head[..7.min(head.len())].to_string(),
+        clean: status.staged.is_empty() && status.unstaged.is_empty(),
+        staged_count: status.staged.len(),
+        unstaged_count: status.unstaged.len(),
+    })
+}
+
+/// Recent commit history via `git log`.
+pub async fn commit_history(cwd: &Path, limit: usize) -> Result<Vec<CommitEntry>> {
+    let output = run_git(
+        cwd,
+        &[
+            "log",
+            "--oneline",
+            "--format=%h|||%s|||%an|||%aI",
+            &format!("-{}", limit),
+        ],
+    )
+    .await?;
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.splitn(4, "|||").collect();
+        if parts.len() == 4 {
+            entries.push(CommitEntry {
+                hash: parts[0].to_string(),
+                message: parts[1].to_string(),
+                author: parts[2].to_string(),
+                date: parts[3].to_string(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+/// Stage a file (`git add`).
+pub async fn stage_file(cwd: &Path, path: &Path) -> Result<()> {
+    run_git(cwd, &["add", &path.to_string_lossy()]).await?;
+    Ok(())
+}
+
+/// Unstage a file (`git reset HEAD`).
+pub async fn unstage_file(cwd: &Path, path: &Path) -> Result<()> {
+    run_git(cwd, &["reset", "HEAD", "--", &path.to_string_lossy()]).await?;
+    Ok(())
+}
+
+/// Create a commit and return the short hash.
+pub async fn create_commit(cwd: &Path, message: &str) -> Result<String> {
+    run_git(cwd, &["commit", "-m", message]).await?;
+    let hash = head_oid(cwd).await?;
+    Ok(hash[..7.min(hash.len())].to_string())
+}
+
+/// Checkout an existing branch.
+pub async fn checkout_branch(cwd: &Path, name: &str) -> Result<()> {
+    run_git(cwd, &["checkout", name]).await?;
+    Ok(())
+}
+
+/// Create a new branch, optionally from a base ref.
+pub async fn create_branch(cwd: &Path, name: &str, from: Option<&str>) -> Result<()> {
+    match from {
+        Some(base) => run_git(cwd, &["checkout", "-b", name, base]).await?,
+        None => run_git(cwd, &["checkout", "-b", name]).await?,
+    };
+    Ok(())
+}
+
+/// Combined staged + unstaged diff for a single file.
+pub async fn working_dir_file_diff(cwd: &Path, file_path: &Path) -> Result<String> {
+    let staged = run_git(cwd, &["diff", "--cached", "--", &file_path.to_string_lossy()])
+        .await
+        .unwrap_or_default();
+    let unstaged = run_git(cwd, &["diff", "--", &file_path.to_string_lossy()])
+        .await
+        .unwrap_or_default();
+    if !staged.is_empty() && !unstaged.is_empty() {
+        Ok(format!(
+            "=== Staged ===\n{}\n=== Unstaged ===\n{}",
+            staged, unstaged
+        ))
+    } else if !staged.is_empty() {
+        Ok(staged)
+    } else {
+        Ok(unstaged)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

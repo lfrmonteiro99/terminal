@@ -3,13 +3,12 @@ import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.t
 import { useWebSocket } from './hooks/useWebSocket.ts';
 import { RunPanel } from './components/RunPanel.tsx';
 import { DecisionPanel } from './components/DecisionPanel.tsx';
-import { SessionSidebar } from './components/SessionSidebar.tsx';
+import { ActivityBar } from './components/ActivityBar.tsx';
+import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { PostRunSummary } from './components/PostRunSummary.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
-
-const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const inputStyle: React.CSSProperties = {
   padding: 8,
@@ -36,30 +35,46 @@ function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const [prompt, setPrompt] = useState('');
-  const [daemonUrl, setDaemonUrl] = useState(IS_TAURI ? '' : 'ws://127.0.0.1:3000/ws');
+  const [daemonUrl, setDaemonUrl] = useState('');
   const [authToken, setAuthToken] = useState('');
   const [projectRoot, setProjectRoot] = useState('');
+  const [tauriMode, setTauriMode] = useState<boolean | null>(null); // null = unknown yet
 
-  // Tauri mode: poll get_daemon_info until daemon is ready, then auto-connect
+  // On mount: detect Tauri via dynamic import probe, then auto-connect or fall back
   useEffect(() => {
-    if (!IS_TAURI) return;
     let cancelled = false;
-    const poll = async () => {
-      const { invoke } = await import('@tauri-apps/api/core');
-      for (let attempt = 0; attempt < 10; attempt++) {
-        if (cancelled) return;
-        try {
-          const info = await invoke<{ port: number; token: string }>('get_daemon_info');
-          setDaemonUrl(`ws://127.0.0.1:${info.port}/ws`);
-          setAuthToken(info.token);
-          return;
-        } catch {
-          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+
+    const detectAndConnect = async () => {
+      try {
+        // Probe: if @tauri-apps/api/core resolves and invoke works, we're in Tauri
+        const { invoke } = await import('@tauri-apps/api/core');
+        console.log('[Tauri] API module resolved, polling for daemon...');
+
+        for (let attempt = 0; attempt < 15; attempt++) {
+          if (cancelled) return;
+          try {
+            const info = await invoke<{ port: number; token: string }>('get_daemon_info');
+            console.log('[Tauri] Daemon ready on port', info.port);
+            setDaemonUrl(`ws://127.0.0.1:${info.port}/ws`);
+            setAuthToken(info.token);
+            setTauriMode(true);
+            return;
+          } catch (e) {
+            console.log(`[Tauri] Attempt ${attempt + 1} failed:`, e);
+            await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          }
         }
+        console.error('[Tauri] Daemon did not become ready after 15 attempts');
+        setTauriMode(true);
+      } catch {
+        // Import failed or invoke bridge absent → browser mode
+        console.log('[Browser] Tauri API not available, using manual connection');
+        setDaemonUrl('ws://127.0.0.1:3000/ws');
+        setTauriMode(false);
       }
-      console.error('Daemon did not become ready after 10 attempts');
     };
-    poll();
+
+    detectAndConnect();
     return () => { cancelled = true; };
   }, []);
 
@@ -75,6 +90,14 @@ function AppContent() {
     token: authToken,
     onEvent: handleEvent,
   });
+
+  const handleBrowse = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({ directory: true, title: 'Select project root' });
+    if (typeof selected === 'string') {
+      setProjectRoot(selected);
+    }
+  };
 
   const handleStartSession = () => {
     if (projectRoot.trim()) {
@@ -123,6 +146,30 @@ function AppContent() {
     }
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
+
+  // Keyboard shortcuts for sidebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'b') {
+        e.preventDefault();
+        dispatch({ type: 'TOGGLE_SIDEBAR' });
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'E') {
+        e.preventDefault();
+        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' });
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'G') {
+        e.preventDefault();
+        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' });
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'H') {
+        e.preventDefault();
+        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [dispatch]);
 
   // Determine if selectedRun is in a terminal state
   const selectedRunObj = state.selectedRun ? state.runs.get(state.selectedRun) : undefined;
@@ -180,7 +227,7 @@ function AppContent() {
       </div>
 
       {/* Connection setup (show when disconnected, browser mode only) */}
-      {!IS_TAURI && status === 'disconnected' && (
+      {!tauriMode && status === 'disconnected' && (
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>
           <input
             value={daemonUrl}
@@ -197,7 +244,7 @@ function AppContent() {
         </div>
       )}
       {/* Tauri mode: show connecting status */}
-      {IS_TAURI && status !== 'connected' && (
+      {tauriMode && status !== 'connected' && (
         <div style={{ padding: 16, color: '#f0a500', fontFamily: 'monospace', fontSize: 13 }}>
           Connecting to embedded daemon...
         </div>
@@ -213,6 +260,11 @@ function AppContent() {
             style={{ ...inputStyle, flex: 1 }}
             onKeyDown={(e) => e.key === 'Enter' && handleStartSession()}
           />
+          {tauriMode && (
+            <button onClick={handleBrowse} style={buttonStyle}>
+              Browse
+            </button>
+          )}
           <button onClick={handleStartSession} style={buttonStyle}>
             Start Session
           </button>
@@ -222,7 +274,8 @@ function AppContent() {
       {/* Body: sidebar + main content */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Sidebar (when session active) */}
-        {state.activeSession && <SessionSidebar />}
+        {state.activeSession && <ActivityBar />}
+        {state.activeSession && <SidebarContainer />}
 
         {/* Main panel */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -292,21 +345,6 @@ function AppContent() {
         {state.runState && (
           <span>State: {state.runState.type}</span>
         )}
-        <button
-          onClick={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
-          style={{
-            marginLeft: 'auto',
-            backgroundColor: 'transparent',
-            border: 'none',
-            color: '#888',
-            cursor: 'pointer',
-            fontFamily: 'monospace',
-            fontSize: 11,
-            padding: '2px 8px',
-          }}
-        >
-          Stashes{state.stashes.length > 0 ? ` (${state.stashes.length})` : ''}
-        </button>
       </div>
 
       {/* Dirty Warning Modal */}

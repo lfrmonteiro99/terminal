@@ -29,6 +29,7 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![commands::get_daemon_info])
         // Pre-create state as None BEFORE run() — avoids race condition
         .manage(Mutex::new(DaemonState {
