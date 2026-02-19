@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
+import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
 import { RunPanel } from './components/RunPanel.tsx';
 import { DecisionPanel } from './components/DecisionPanel.tsx';
@@ -8,6 +9,7 @@ import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { PostRunSummary } from './components/PostRunSummary.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
+import { DiffPanel } from './components/DiffPanel.tsx';
 import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
 
 const inputStyle: React.CSSProperties = {
@@ -166,6 +168,9 @@ function AppContent() {
         e.preventDefault();
         dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
       }
+      if (e.key === 'Escape') {
+        dispatch({ type: 'CLOSE_DIFF' });
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -181,6 +186,7 @@ function AppContent() {
     isTerminalState(selectedRunObj.state);
 
   return (
+    <SendProvider value={send}>
     <div
       style={{
         display: 'flex',
@@ -326,6 +332,8 @@ function AppContent() {
               )}
             </>
           )}
+          {/* DiffPanel — split mode */}
+          {state.diffPanel.open && state.diffPanel.mode === 'split' && <DiffPanel />}
         </div>
       </div>
 
@@ -379,6 +387,9 @@ function AppContent() {
         />
       )}
 
+      {/* DiffPanel — overlay mode */}
+      {state.diffPanel.open && state.diffPanel.mode === 'overlay' && <DiffPanel />}
+
       {/* Stash Drawer */}
       {state.stashDrawerOpen && (
         <StashDrawer
@@ -389,6 +400,7 @@ function AppContent() {
         />
       )}
     </div>
+    </SendProvider>
   );
 }
 

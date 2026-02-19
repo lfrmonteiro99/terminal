@@ -1,5 +1,5 @@
-import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, DiffStat, DirtyStatus, FileChange, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
+import { createContext, useContext, useEffect, useReducer, type Dispatch, type ReactNode } from 'react';
+import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, RepoStatus, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
 
 // --- State ---
 
@@ -28,6 +28,13 @@ export interface AppState {
   // Sidebar layout
   activeSidebarView: 'explorer' | 'changes' | 'git';
   sidebarCollapsed: boolean;
+  // Phase 3: Sidebar state
+  changesContext: { mode: 'working' | 'run'; runId?: string };
+  changedFiles: { context: { mode: 'working' | 'run'; runId?: string }; files: FileChange[] } | null;
+  repoStatus: RepoStatus | null;
+  commitHistory: CommitEntry[];
+  explorerTree: Map<string, FileTreeEntry[]>;
+  diffPanel: { open: boolean; mode: 'split' | 'overlay' | 'inline'; file: string | null; diff: string | null; stat: DiffStat | null };
 }
 
 const initialState: AppState = {
@@ -50,6 +57,18 @@ const initialState: AppState = {
   stashDrawerOpen: false,
   activeSidebarView: 'changes',
   sidebarCollapsed: false,
+  changesContext: { mode: 'working' },
+  changedFiles: null,
+  repoStatus: null,
+  commitHistory: [],
+  explorerTree: new Map(),
+  diffPanel: {
+    open: false,
+    mode: (localStorage.getItem('diff-mode') as 'split' | 'overlay' | 'inline') || 'split',
+    file: null,
+    diff: null,
+    stat: null,
+  },
 };
 
 // --- Actions ---
@@ -63,7 +82,11 @@ type Action =
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
-  | { type: 'TOGGLE_SIDEBAR' };
+  | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
+  | { type: 'OPEN_DIFF'; file: string }
+  | { type: 'CLOSE_DIFF' }
+  | { type: 'SET_DIFF_MODE'; mode: AppState['diffPanel']['mode'] };
 
 const MAX_OUTPUT_LINES = 2000;
 
@@ -92,6 +115,18 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
+
+    case 'SET_CHANGES_CONTEXT':
+      return { ...state, changesContext: action.context, changedFiles: null };
+
+    case 'OPEN_DIFF':
+      return { ...state, diffPanel: { ...state.diffPanel, open: true, file: action.file, diff: null, stat: null } };
+
+    case 'CLOSE_DIFF':
+      return { ...state, diffPanel: { ...state.diffPanel, open: false, file: null, diff: null, stat: null } };
+
+    case 'SET_DIFF_MODE':
+      return { ...state, diffPanel: { ...state.diffPanel, mode: action.mode } };
 
     case 'HANDLE_EVENT': {
       const event = action.event;
@@ -254,6 +289,47 @@ function reducer(state: AppState, action: Action): AppState {
             },
           };
 
+        case 'DirectoryListing': {
+          const explorerTree = new Map(state.explorerTree);
+          explorerTree.set(event.path, event.entries);
+          return { ...state, explorerTree };
+        }
+
+        case 'ChangedFilesList': {
+          // Fix 1: Guard against stale response — only commit if context matches
+          const ctx = state.changesContext;
+          if (event.mode !== ctx.mode) return state;
+          if (event.mode === 'run' && event.run_id !== ctx.runId) return state;
+          return {
+            ...state,
+            changedFiles: {
+              context: { mode: event.mode, runId: event.run_id },
+              files: event.files,
+            },
+          };
+        }
+
+        case 'FileDiffResult': {
+          // Fix 2: Guard against stale diff response from rapid clicks
+          if (event.file_path !== state.diffPanel.file) return state;
+          return {
+            ...state,
+            diffPanel: { ...state.diffPanel, diff: event.diff, stat: event.stat },
+          };
+        }
+
+        case 'RepoStatusResult':
+          return { ...state, repoStatus: event.status };
+
+        case 'CommitHistoryResult':
+          return { ...state, commitHistory: event.commits };
+
+        case 'CommitCreated':
+          return state;
+
+        case 'BranchChanged':
+          return { ...state, repoStatus: state.repoStatus ? { ...state.repoStatus, branch: event.name } : null };
+
         default:
           return state;
       }
@@ -271,6 +347,11 @@ const AppDispatchContext = createContext<Dispatch<Action>>(() => {});
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+
+  // Fix 3: Persist diffPanel.mode to localStorage via useEffect (not in reducer)
+  useEffect(() => {
+    localStorage.setItem('diff-mode', state.diffPanel.mode);
+  }, [state.diffPanel.mode]);
 
   return (
     <AppStateContext.Provider value={state}>
