@@ -255,6 +255,222 @@ pub async fn merge_abort(cwd: &Path) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Dirty state / Stash operations
+// ---------------------------------------------------------------------------
+
+/// Returns dirty status of working directory (staged + unstaged files).
+/// Uses `git status --porcelain=v1`.
+pub async fn working_dir_status(cwd: &Path) -> Result<DirtyStatus> {
+    let output = run_git(cwd, &["status", "--porcelain=v1"]).await?;
+
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+
+    if output.is_empty() {
+        return Ok(DirtyStatus { staged, unstaged });
+    }
+
+    for line in output.lines() {
+        if line.len() < 3 {
+            continue;
+        }
+        let x = line.as_bytes()[0]; // index (staged) status
+        let y = line.as_bytes()[1]; // worktree (unstaged) status
+        let path = PathBuf::from(line[3..].to_string());
+
+        // Untracked files: "??" — treat as unstaged Added
+        if x == b'?' && y == b'?' {
+            unstaged.push(DirtyFile {
+                path,
+                status: FileStatus::Added,
+            });
+            continue;
+        }
+
+        // Staged: X is not ' ' and not '?'
+        if x != b' ' && x != b'?' {
+            let status = match x {
+                b'A' => FileStatus::Added,
+                b'M' => FileStatus::Modified,
+                b'D' => FileStatus::Deleted,
+                b'R' => FileStatus::Renamed(path.clone()),
+                _ => FileStatus::Modified,
+            };
+            staged.push(DirtyFile {
+                path: path.clone(),
+                status,
+            });
+        }
+
+        // Unstaged: Y is not ' ' and not '?'
+        if y != b' ' && y != b'?' {
+            let status = match y {
+                b'A' => FileStatus::Added,
+                b'M' => FileStatus::Modified,
+                b'D' => FileStatus::Deleted,
+                b'R' => FileStatus::Renamed(path.clone()),
+                _ => FileStatus::Modified,
+            };
+            unstaged.push(DirtyFile { path, status });
+        }
+    }
+
+    Ok(DirtyStatus { staged, unstaged })
+}
+
+/// List all stashes.
+/// Uses `git stash list --format="%gd|||%s|||%ci"`.
+pub async fn stash_list(cwd: &Path) -> Result<Vec<StashEntry>> {
+    let output = run_git(cwd, &["stash", "list", "--format=%gd|||%s|||%ci"]).await?;
+
+    if output.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.splitn(3, "|||").collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        // Extract index from "stash@{N}"
+        let gd = parts[0];
+        let index = gd
+            .strip_prefix("stash@{")
+            .and_then(|s| s.strip_suffix('}'))
+            .and_then(|s| s.parse::<usize>().ok())
+            .ok_or_else(|| GitError::ParseError(format!("invalid stash ref: {}", gd)))?;
+
+        let message = parts[1].to_string();
+        let date = parts[2].to_string();
+
+        // Try to extract branch from message patterns:
+        // "WIP on <branch>: <hash> <msg>" or "On <branch>: <msg>"
+        let branch = if let Some(rest) = message.strip_prefix("WIP on ") {
+            rest.split(':').next().map(|s| s.to_string())
+        } else if let Some(rest) = message.strip_prefix("On ") {
+            rest.split(':').next().map(|s| s.to_string())
+        } else {
+            None
+        };
+
+        entries.push(StashEntry {
+            index,
+            message,
+            branch,
+            date,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Show files changed in a stash.
+/// Uses `git stash show stash@{N} --name-status`.
+pub async fn stash_show_files(cwd: &Path, index: usize) -> Result<Vec<FileChange>> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "show", &stash_ref, "--name-status"]).await?;
+
+    if output.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut changes = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let status_code = parts[0];
+        let path = PathBuf::from(parts[1]);
+
+        let status = if status_code.starts_with('R') {
+            let new_path = if parts.len() >= 3 {
+                PathBuf::from(parts[2])
+            } else {
+                path.clone()
+            };
+            FileStatus::Renamed(new_path)
+        } else {
+            match status_code {
+                "A" => FileStatus::Added,
+                "M" => FileStatus::Modified,
+                "D" => FileStatus::Deleted,
+                _ => FileStatus::Modified,
+            }
+        };
+
+        changes.push(FileChange { path, status });
+    }
+
+    Ok(changes)
+}
+
+/// Show diff for a specific file in a stash.
+/// Uses `git diff stash@{N}^..stash@{N} -- <filepath>`.
+pub async fn stash_show_file_diff(cwd: &Path, index: usize, file_path: &Path) -> Result<String> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let parent_ref = format!("stash@{{{}}}^", index);
+    let range = format!("{}..{}", parent_ref, stash_ref);
+    let file_str = file_path.to_string_lossy();
+    run_git(cwd, &["diff", &range, "--", &file_str]).await
+}
+
+/// Show full diff for a stash.
+/// Uses `git stash show -p stash@{N}`.
+pub async fn stash_show_diff(cwd: &Path, index: usize) -> Result<String> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    run_git(cwd, &["stash", "show", "-p", &stash_ref]).await
+}
+
+/// Show diff stat for a stash.
+/// Uses `git stash show --numstat stash@{N}` and reuses DiffStat parsing logic.
+pub async fn stash_show_stat(cwd: &Path, index: usize) -> Result<DiffStat> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "show", "--numstat", &stash_ref]).await?;
+
+    let mut file_stats = Vec::new();
+    let mut total_insertions: usize = 0;
+    let mut total_deletions: usize = 0;
+
+    if !output.is_empty() {
+        for line in output.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let insertions = parts[0].parse::<usize>().unwrap_or(0);
+            let deletions = parts[1].parse::<usize>().unwrap_or(0);
+            let path = PathBuf::from(parts[2]);
+
+            total_insertions += insertions;
+            total_deletions += deletions;
+
+            file_stats.push(FileDiffStat {
+                path,
+                insertions,
+                deletions,
+            });
+        }
+    }
+
+    Ok(DiffStat {
+        files_changed: file_stats.len(),
+        insertions: total_insertions,
+        deletions: total_deletions,
+        file_stats,
+    })
+}
+
+/// Push a stash with message.
+/// Uses `git stash push -m "<message>"`.
+pub async fn stash_push(cwd: &Path, message: &str) -> Result<()> {
+    run_git(cwd, &["stash", "push", "-m", message]).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -555,5 +771,116 @@ mod tests {
         branch_delete(repo.path(), branch_name, true)
             .await
             .expect("branch_delete");
+    }
+
+    // --- Dirty state / Stash tests ---
+
+    #[tokio::test]
+    async fn test_working_dir_status_clean() {
+        let repo = init_test_repo();
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+        assert!(status.staged.is_empty(), "staged should be empty on clean repo");
+        assert!(status.unstaged.is_empty(), "unstaged should be empty on clean repo");
+    }
+
+    #[tokio::test]
+    async fn test_working_dir_status_dirty() {
+        let repo = init_test_repo();
+
+        // Create a new file and stage it
+        std::fs::write(repo.path().join("new.txt"), "hello\n").expect("write file");
+        StdCommand::new("git")
+            .args(["add", "new.txt"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+
+        // Modify the same file again (so it's staged AND unstaged)
+        std::fs::write(repo.path().join("new.txt"), "hello world\n").expect("modify file");
+
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+
+        // Staged: new.txt as Added
+        assert_eq!(status.staged.len(), 1, "should have 1 staged file");
+        assert_eq!(status.staged[0].path, PathBuf::from("new.txt"));
+        assert_eq!(status.staged[0].status, FileStatus::Added);
+
+        // Unstaged: new.txt as Modified (staged version differs from worktree)
+        assert_eq!(status.unstaged.len(), 1, "should have 1 unstaged file");
+        assert_eq!(status.unstaged[0].path, PathBuf::from("new.txt"));
+        assert_eq!(status.unstaged[0].status, FileStatus::Modified);
+    }
+
+    #[tokio::test]
+    async fn test_working_dir_status_untracked() {
+        let repo = init_test_repo();
+
+        // Create a file but do not stage it
+        std::fs::write(repo.path().join("untracked.txt"), "content\n").expect("write file");
+
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+
+        assert!(status.staged.is_empty(), "no staged files");
+        assert_eq!(status.unstaged.len(), 1, "should have 1 unstaged file");
+        assert_eq!(status.unstaged[0].path, PathBuf::from("untracked.txt"));
+        assert_eq!(status.unstaged[0].status, FileStatus::Added);
+    }
+
+    #[tokio::test]
+    async fn test_stash_lifecycle() {
+        let repo = init_test_repo();
+
+        // Create and commit a file first (stash needs at least one commit)
+        std::fs::write(repo.path().join("file.txt"), "original\n").expect("write file");
+        StdCommand::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+        StdCommand::new("git")
+            .args(["commit", "-m", "add file.txt"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git commit");
+
+        // Modify the file
+        std::fs::write(repo.path().join("file.txt"), "modified\n").expect("modify file");
+
+        // Stash the changes
+        stash_push(repo.path(), "test stash message")
+            .await
+            .expect("stash_push");
+
+        // Working dir should be clean after stash
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+        assert!(status.staged.is_empty(), "staged should be empty after stash");
+        assert!(status.unstaged.is_empty(), "unstaged should be empty after stash");
+
+        // Verify stash list returns 1 entry
+        let stashes = stash_list(repo.path()).await.expect("stash_list");
+        assert_eq!(stashes.len(), 1, "should have 1 stash entry");
+        assert_eq!(stashes[0].index, 0);
+
+        // Verify stash_show_files returns the modified file
+        let files = stash_show_files(repo.path(), 0).await.expect("stash_show_files");
+        assert_eq!(files.len(), 1, "stash should have 1 changed file");
+        assert_eq!(files[0].path, PathBuf::from("file.txt"));
+        assert_eq!(files[0].status, FileStatus::Modified);
+
+        // Verify stash_show_diff returns non-empty diff
+        let diff = stash_show_diff(repo.path(), 0).await.expect("stash_show_diff");
+        assert!(!diff.is_empty(), "stash diff should not be empty");
+        assert!(diff.contains("modified"), "diff should contain the new content");
+
+        // Verify stash_show_stat returns correct stats
+        let stat = stash_show_stat(repo.path(), 0).await.expect("stash_show_stat");
+        assert_eq!(stat.files_changed, 1);
+        assert!(stat.insertions > 0 || stat.deletions > 0, "stat should show changes");
+
+        // Verify stash_show_file_diff returns diff for the specific file
+        let file_diff = stash_show_file_diff(repo.path(), 0, Path::new("file.txt"))
+            .await
+            .expect("stash_show_file_diff");
+        assert!(!file_diff.is_empty(), "file diff should not be empty");
     }
 }

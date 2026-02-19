@@ -177,6 +177,28 @@ export function SessionSidebar() {
           );
         })}
       </div>
+
+      {/* Git section */}
+      <div style={{ borderTop: '1px solid #333', padding: '12px 16px', flexShrink: 0 }}>
+        <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+          Git
+        </div>
+        <div
+          onClick={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
+          style={{
+            padding: '6px 8px',
+            cursor: 'pointer',
+            borderRadius: 4,
+            fontSize: 12,
+            fontFamily: 'monospace',
+            color: '#e0e0e0',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#16213e')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          {'\u25CB'} Stashes{state.stashes.length > 0 ? ` (${state.stashes.length})` : ''}
+        </div>
+      </div>
     </div>
   );
 }

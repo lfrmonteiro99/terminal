@@ -257,452 +257,9 @@ impl Dispatcher {
                 session_id,
                 prompt,
                 mode,
+                skip_dirty_check,
             } => {
-                // Check session exists and has no active run
-                let mut sessions = self.sessions.lock().await;
-                let session = match sessions.get_mut(&session_id) {
-                    Some(s) => s,
-                    None => {
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "SESSION_NOT_FOUND".into(),
-                                message: format!("Session {} not found", session_id),
-                            })
-                            .await;
-                        return;
-                    }
-                };
-
-                if session.active_run.is_some() {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "RUN_ALREADY_ACTIVE".into(),
-                            message: "Session already has an active run".into(),
-                        })
-                        .await;
-                    return;
-                }
-
-                let run_id = Uuid::new_v4();
-                let output_path = output_file_path(&self.config.data_dir, &run_id);
-
-                // Create output directory
-                if let Some(parent) = output_path.parent() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "IO_ERROR".into(),
-                                message: format!("Failed to create output dir: {}", e),
-                            })
-                            .await;
-                        return;
-                    }
-                }
-
-                let project_root = session.project_root.clone();
-                let is_git = crate::git_engine::is_git_repo(&project_root).await;
-
-                // Git worktree setup
-                let mut branch_name = String::new();
-                let mut worktree_path: Option<PathBuf> = None;
-                let mut base_head = String::new();
-                let mut actual_working_dir = project_root.clone();
-
-                if is_git {
-                    // Check concurrency: lock -> check -> insert -> unlock (no await gap)
-                    {
-                        let mut conc = self.concurrency.lock().await;
-                        if let Some(existing_run_id) = conc.get(&project_root) {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "REPO_BUSY".into(),
-                                    message: format!(
-                                        "Repository {} already has active run {}",
-                                        project_root.display(),
-                                        existing_run_id
-                                    ),
-                                })
-                                .await;
-                            return;
-                        }
-                        conc.insert(project_root.clone(), run_id);
-                    }
-
-                    // Guard repo state
-                    if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
-                        // Cleanup concurrency
-                        self.concurrency.lock().await.remove(&project_root);
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "GIT_STATE_ERROR".into(),
-                                message: format!("Repository not in clean state: {}", e),
-                            })
-                            .await;
-                        return;
-                    }
-
-                    // Get base HEAD
-                    match crate::git_engine::head_oid(&project_root).await {
-                        Ok(oid) => base_head = oid,
-                        Err(e) => {
-                            self.concurrency.lock().await.remove(&project_root);
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "GIT_ERROR".into(),
-                                    message: format!("Failed to read HEAD: {}", e),
-                                })
-                                .await;
-                            return;
-                        }
-                    }
-
-                    // Generate branch name and worktree path
-                    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-                    let short_uuid = &run_id.to_string()[..8];
-                    branch_name = format!("llm/{}-{}", timestamp, short_uuid);
-                    let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
-
-                    // Create .terminal-worktrees/ dir
-                    if let Err(e) = tokio::fs::create_dir_all(wt_path.parent().unwrap()).await {
-                        self.concurrency.lock().await.remove(&project_root);
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "IO_ERROR".into(),
-                                message: format!("Failed to create worktrees dir: {}", e),
-                            })
-                            .await;
-                        return;
-                    }
-
-                    // Create worktree
-                    if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
-                        self.concurrency.lock().await.remove(&project_root);
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "GIT_ERROR".into(),
-                                message: format!("Failed to create worktree: {}", e),
-                            })
-                            .await;
-                        return;
-                    }
-
-                    // Save worktree metadata
-                    let meta = WorktreeMeta {
-                        worktree_path: wt_path.clone(),
-                        branch_name: branch_name.clone(),
-                        base_head: base_head.clone(),
-                        merge_base: base_head.clone(),
-                        last_modified: chrono::Utc::now(),
-                    };
-                    if let Err(e) = self.persistence.save_worktree_meta(run_id, &meta) {
-                        warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
-                    }
-
-                    actual_working_dir = wt_path.clone();
-                    worktree_path = Some(wt_path);
-                }
-
-                let run = Run {
-                    id: run_id,
-                    session_id,
-                    branch: branch_name.clone(),
-                    mode: mode.clone(),
-                    state: RunState::Preparing,
-                    prompt: prompt.clone(),
-                    provided_files: vec![],
-                    modified_files: vec![],
-                    expanded_files: vec![],
-                    output_path: output_path.clone(),
-                    output_line_count: 0,
-                    output_byte_count: 0,
-                    started_at: chrono::Utc::now(),
-                    ended_at: None,
-                    last_modified: chrono::Utc::now(),
-                };
-
-                // Persist run (state: Preparing)
-                if let Err(e) = self.persistence.save_run(&run) {
-                    warn!("Failed to persist run {}: {}", run_id, e);
-                }
-
-                session.active_run = Some(run_id);
-                session.runs.push(run_id);
-
-                // Broadcast state change
-                self.broadcast(&AppEvent::RunStateChanged {
-                    run_id,
-                    new_state: RunState::Preparing,
-                });
-
-                drop(sessions); // Release lock before spawning
-
-                // Spawn claude process in actual_working_dir (worktree if git)
-                match self.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
-                    Ok((mut event_rx, stdin_tx, mut child)) => {
-                        let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
-
-                        let active_run = ActiveRun {
-                            run: run.clone(),
-                            cancel_tx,
-                            stdin_tx: stdin_tx.clone(),
-                        };
-                        self.active_runs.lock().await.insert(run_id, active_run);
-
-                        // Transition to Running
-                        self.broadcast(&AppEvent::RunStateChanged {
-                            run_id,
-                            new_state: RunState::Running,
-                        });
-
-                        // Supervisor task
-                        let event_tx = self.event_tx.clone();
-                        let active_runs = self.active_runs.clone();
-                        let sessions = self.sessions.clone();
-                        let timeout_secs = self.config.run_timeout_secs;
-                        let persistence = self.persistence.clone();
-                        let concurrency = self.concurrency.clone();
-                        let project_root_clone = project_root.clone();
-                        let base_head_clone = base_head.clone();
-                        let branch_name_clone = branch_name.clone();
-                        let worktree_path_clone = worktree_path.clone();
-                        let is_git_run = is_git;
-                        let run_started_at = run.started_at;
-
-                        tokio::spawn(async move {
-                            let mut line_number: usize = 0;
-                            let mut output_file = tokio::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&output_path)
-                                .await
-                                .ok();
-
-                            let timeout =
-                                tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
-                            tokio::pin!(timeout);
-
-                            loop {
-                                tokio::select! {
-                                    event = event_rx.recv() => {
-                                        match event {
-                                            Some(RunnerEvent::StdoutLine(line)) => {
-                                                line_number += 1;
-                                                // Write to disk
-                                                if let Some(ref mut f) = output_file {
-                                                    let _ = tokio::io::AsyncWriteExt::write_all(
-                                                        f,
-                                                        format!("{}\n", line).as_bytes(),
-                                                    ).await;
-                                                }
-                                                // Broadcast to clients
-                                                let evt = AppEvent::RunOutput {
-                                                    run_id,
-                                                    line,
-                                                    line_number,
-                                                };
-                                                let json = serde_json::to_string(&evt).unwrap();
-                                                let _ = event_tx.send(json);
-                                            }
-                                            Some(RunnerEvent::StderrLine(line)) => {
-                                                line_number += 1;
-                                                if let Some(ref mut f) = output_file {
-                                                    let _ = tokio::io::AsyncWriteExt::write_all(
-                                                        f,
-                                                        format!("[stderr] {}\n", line).as_bytes(),
-                                                    ).await;
-                                                }
-                                                let evt = AppEvent::RunOutput {
-                                                    run_id,
-                                                    line: format!("[stderr] {}", line),
-                                                    line_number,
-                                                };
-                                                let json = serde_json::to_string(&evt).unwrap();
-                                                let _ = event_tx.send(json);
-                                            }
-                                            Some(RunnerEvent::BlockingDetected(question)) => {
-                                                let evt = AppEvent::RunBlocking {
-                                                    run_id,
-                                                    question: question.clone(),
-                                                    context: vec![],
-                                                };
-                                                let json = serde_json::to_string(&evt).unwrap();
-                                                let _ = event_tx.send(json);
-                                                let state_evt = AppEvent::RunStateChanged {
-                                                    run_id,
-                                                    new_state: RunState::WaitingInput {
-                                                        question,
-                                                        context: vec![],
-                                                    },
-                                                };
-                                                let json = serde_json::to_string(&state_evt).unwrap();
-                                                let _ = event_tx.send(json);
-                                            }
-                                            Some(RunnerEvent::MalformedOutput { partial }) => {
-                                                warn!("Malformed output for run {}: {}", run_id, partial);
-                                            }
-                                            Some(RunnerEvent::SpawnError(e)) => {
-                                                let evt = AppEvent::RunFailed {
-                                                    run_id,
-                                                    error: e,
-                                                    phase: FailPhase::Execution,
-                                                };
-                                                let json = serde_json::to_string(&evt).unwrap();
-                                                let _ = event_tx.send(json);
-                                                break;
-                                            }
-                                            Some(RunnerEvent::ProcessExited { .. }) => {
-                                                // Handled via channel close (None) below
-                                            }
-                                            None => {
-                                                // Channel closed -- process exited
-                                                let exit_code = child.wait().await
-                                                    .map(|s| s.code().unwrap_or(-1))
-                                                    .unwrap_or(-1);
-
-                                                // Compute git diff info if this was a git run
-                                                let mut modified_files_list = vec![];
-                                                let mut run_diff_stat = None;
-
-                                                if is_git_run {
-                                                    if let Some(ref wt_path) = worktree_path_clone {
-                                                        // Get current HEAD in worktree
-                                                        match crate::git_engine::head_oid(wt_path).await {
-                                                            Ok(wt_head) => {
-                                                                if let Ok(changes) = crate::git_engine::changed_files(
-                                                                    wt_path, &base_head_clone, &wt_head
-                                                                ).await {
-                                                                    modified_files_list = changes
-                                                                        .iter()
-                                                                        .map(|c| c.path.clone())
-                                                                        .collect();
-                                                                }
-                                                                if let Ok(stat) = crate::git_engine::diff_stat(
-                                                                    wt_path, &base_head_clone, &wt_head
-                                                                ).await {
-                                                                    run_diff_stat = Some(stat);
-                                                                }
-                                                            }
-                                                            Err(e) => {
-                                                                warn!("Failed to read worktree HEAD for run {}: {}", run_id, e);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let summary = RunSummary {
-                                                    id: run_id,
-                                                    state: RunState::Completed { exit_code },
-                                                    prompt_preview: String::new(),
-                                                    modified_file_count: modified_files_list.len(),
-                                                    diff_stat: run_diff_stat.clone(),
-                                                    started_at: run_started_at,
-                                                    ended_at: Some(chrono::Utc::now()),
-                                                };
-                                                let evt = AppEvent::RunCompleted {
-                                                    run_id,
-                                                    summary,
-                                                    diff_stat: run_diff_stat.clone(),
-                                                };
-                                                let json = serde_json::to_string(&evt).unwrap();
-                                                let _ = event_tx.send(json);
-
-                                                // Persist completed run
-                                                let completed_run = Run {
-                                                    id: run_id,
-                                                    session_id,
-                                                    branch: branch_name_clone.clone(),
-                                                    mode,
-                                                    state: RunState::Completed { exit_code },
-                                                    prompt,
-                                                    provided_files: vec![],
-                                                    modified_files: modified_files_list,
-                                                    expanded_files: vec![],
-                                                    output_path,
-                                                    output_line_count: line_number,
-                                                    output_byte_count: 0,
-                                                    started_at: run_started_at,
-                                                    ended_at: Some(chrono::Utc::now()),
-                                                    last_modified: chrono::Utc::now(),
-                                                };
-                                                if let Err(e) = persistence.save_run(&completed_run) {
-                                                    warn!("Failed to persist completed run {}: {}", run_id, e);
-                                                }
-
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    reason = cancel_rx.recv() => {
-                                        if let Some(reason) = reason {
-                                            info!("Cancelling run {}: {}", run_id, reason);
-                                            let _ = child.kill().await;
-                                            let evt = AppEvent::RunCancelled { run_id };
-                                            let json = serde_json::to_string(&evt).unwrap();
-                                            let _ = event_tx.send(json);
-                                            break;
-                                        }
-                                    }
-                                    _ = &mut timeout => {
-                                        warn!("Run {} timed out", run_id);
-                                        let _ = child.kill().await;
-                                        let evt = AppEvent::RunFailed {
-                                            run_id,
-                                            error: "Run timed out".into(),
-                                            phase: FailPhase::Execution,
-                                        };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // Cleanup
-                            active_runs.lock().await.remove(&run_id);
-                            if let Some(session) = sessions.lock().await.get_mut(&session_id) {
-                                session.active_run = None;
-                            }
-                            // Remove from concurrency registry
-                            if is_git_run {
-                                concurrency.lock().await.remove(&project_root_clone);
-                            }
-                            info!("Run {} finished", run_id);
-                        });
-
-                        let _ = reply_tx
-                            .send(AppEvent::RunStateChanged {
-                                run_id,
-                                new_state: RunState::Running,
-                            })
-                            .await;
-                    }
-                    Err(e) => {
-                        // Cleanup session
-                        let mut sessions = self.sessions.lock().await;
-                        if let Some(session) = sessions.get_mut(&session_id) {
-                            session.active_run = None;
-                        }
-                        // Cleanup concurrency and worktree on spawn failure
-                        if is_git {
-                            self.concurrency.lock().await.remove(&project_root);
-                            if let Some(ref wt_path) = worktree_path {
-                                if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
-                                    warn!("Failed to cleanup worktree on spawn failure: {}", e);
-                                }
-                                if let Err(e) = crate::git_engine::branch_delete(&project_root, &branch_name, true).await {
-                                    warn!("Failed to cleanup branch on spawn failure: {}", e);
-                                }
-                            }
-                        }
-                        let _ = reply_tx
-                            .send(AppEvent::RunFailed {
-                                run_id,
-                                error: e,
-                                phase: FailPhase::Preparation,
-                            })
-                            .await;
-                    }
-                }
+                self.do_start_run(session_id, prompt, mode, skip_dirty_check, reply_tx).await;
             }
 
             AppCommand::CancelRun { run_id, reason } => {
@@ -986,6 +543,664 @@ impl Dispatcher {
                 }
             }
 
+            // --- Stash operations (Phase 2.1) ---
+
+            AppCommand::StashAndRun {
+                session_id,
+                prompt,
+                mode,
+                stash_message,
+            } => {
+                // Look up project_root from session
+                let project_root = {
+                    let sessions = self.sessions.lock().await;
+                    match sessions.get(&session_id) {
+                        Some(s) => s.project_root.clone(),
+                        None => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "SESSION_NOT_FOUND".into(),
+                                    message: format!("Session {} not found", session_id),
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+                };
+
+                // Attempt to stash
+                if let Err(e) = crate::git_engine::stash_push(&project_root, &stash_message).await {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "GIT_ERROR".into(),
+                            message: format!("Failed to stash changes: {}", e),
+                        })
+                        .await;
+                    return;
+                }
+
+                // Stash succeeded -- proceed with start run, skipping dirty check
+                self.do_start_run(session_id, prompt, mode, true, reply_tx).await;
+            }
+
+            AppCommand::ListStashes => {
+                let project_root = match self.find_active_project_root().await {
+                    Some(pr) => pr,
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "NO_ACTIVE_SESSION".into(),
+                                message: "No active session to resolve project root".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                match crate::git_engine::stash_list(&project_root).await {
+                    Ok(stashes) => {
+                        let _ = reply_tx
+                            .send(AppEvent::StashList { stashes })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "GIT_ERROR".into(),
+                                message: format!("Failed to list stashes: {}", e),
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            AppCommand::GetStashFiles { stash_index } => {
+                let project_root = match self.find_active_project_root().await {
+                    Some(pr) => pr,
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "NO_ACTIVE_SESSION".into(),
+                                message: "No active session to resolve project root".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                match crate::git_engine::stash_show_files(&project_root, stash_index).await {
+                    Ok(files) => {
+                        let _ = reply_tx
+                            .send(AppEvent::StashFiles { stash_index, files })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "GIT_ERROR".into(),
+                                message: format!("Failed to get stash files: {}", e),
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            AppCommand::GetStashDiff { stash_index, file_path } => {
+                let project_root = match self.find_active_project_root().await {
+                    Some(pr) => pr,
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "NO_ACTIVE_SESSION".into(),
+                                message: "No active session to resolve project root".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                let diff = if let Some(ref fp) = file_path {
+                    crate::git_engine::stash_show_file_diff(&project_root, stash_index, fp).await
+                } else {
+                    crate::git_engine::stash_show_diff(&project_root, stash_index).await
+                };
+
+                match diff {
+                    Ok(diff_text) => {
+                        let stat = crate::git_engine::stash_show_stat(&project_root, stash_index)
+                            .await
+                            .ok();
+                        let _ = reply_tx
+                            .send(AppEvent::StashDiff {
+                                stash_index,
+                                diff: diff_text,
+                                stat,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "GIT_ERROR".into(),
+                                message: format!("Failed to get stash diff: {}", e),
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            AppCommand::CheckDirtyState => {
+                let project_root = match self.find_active_project_root().await {
+                    Some(pr) => pr,
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "NO_ACTIVE_SESSION".into(),
+                                message: "No active session to resolve project root".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                match crate::git_engine::working_dir_status(&project_root).await {
+                    Ok(status) => {
+                        let _ = reply_tx
+                            .send(AppEvent::DirtyState { status })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "GIT_ERROR".into(),
+                                message: format!("Failed to check dirty state: {}", e),
+                            })
+                            .await;
+                    }
+                }
+            }
+
+        }
+    }
+
+    /// Core StartRun logic, shared by both `StartRun` and `StashAndRun` commands.
+    async fn do_start_run(
+        &self,
+        session_id: Uuid,
+        prompt: String,
+        mode: RunMode,
+        skip_dirty_check: bool,
+        reply_tx: mpsc::Sender<AppEvent>,
+    ) {
+        // Check session exists and has no active run
+        let mut sessions = self.sessions.lock().await;
+        let session = match sessions.get_mut(&session_id) {
+            Some(s) => s,
+            None => {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "SESSION_NOT_FOUND".into(),
+                        message: format!("Session {} not found", session_id),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        if session.active_run.is_some() {
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "RUN_ALREADY_ACTIVE".into(),
+                    message: "Session already has an active run".into(),
+                })
+                .await;
+            return;
+        }
+
+        let run_id = Uuid::new_v4();
+        let output_path = output_file_path(&self.config.data_dir, &run_id);
+
+        // Create output directory
+        if let Some(parent) = output_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "IO_ERROR".into(),
+                        message: format!("Failed to create output dir: {}", e),
+                    })
+                    .await;
+                return;
+            }
+        }
+
+        let project_root = session.project_root.clone();
+        let is_git = crate::git_engine::is_git_repo(&project_root).await;
+
+        // Git worktree setup
+        let mut branch_name = String::new();
+        let mut worktree_path: Option<PathBuf> = None;
+        let mut base_head = String::new();
+        let mut actual_working_dir = project_root.clone();
+
+        if is_git {
+            // Check concurrency: lock -> check -> insert -> unlock (no await gap)
+            {
+                let mut conc = self.concurrency.lock().await;
+                if let Some(existing_run_id) = conc.get(&project_root) {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "REPO_BUSY".into(),
+                            message: format!(
+                                "Repository {} already has active run {}",
+                                project_root.display(),
+                                existing_run_id
+                            ),
+                        })
+                        .await;
+                    return;
+                }
+                conc.insert(project_root.clone(), run_id);
+            }
+
+            // Guard repo state
+            if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
+                // Cleanup concurrency
+                self.concurrency.lock().await.remove(&project_root);
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "GIT_STATE_ERROR".into(),
+                        message: format!("Repository not in clean state: {}", e),
+                    })
+                    .await;
+                return;
+            }
+
+            // Dirty working directory check (unless explicitly skipped)
+            if !skip_dirty_check {
+                let dirty = crate::git_engine::working_dir_status(&project_root)
+                    .await
+                    .unwrap_or_else(|_| DirtyStatus {
+                        staged: vec![],
+                        unstaged: vec![],
+                    });
+
+                if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
+                    // Release concurrency lock before returning
+                    self.concurrency.lock().await.remove(&project_root);
+                    // Send DirtyWarning event -- frontend will show modal
+                    let _ = reply_tx
+                        .send(AppEvent::DirtyWarning {
+                            status: dirty,
+                            session_id,
+                            prompt: prompt.clone(),
+                            mode: mode.clone(),
+                        })
+                        .await;
+                    return;
+                }
+            }
+
+            // Get base HEAD
+            match crate::git_engine::head_oid(&project_root).await {
+                Ok(oid) => base_head = oid,
+                Err(e) => {
+                    self.concurrency.lock().await.remove(&project_root);
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "GIT_ERROR".into(),
+                            message: format!("Failed to read HEAD: {}", e),
+                        })
+                        .await;
+                    return;
+                }
+            }
+
+            // Generate branch name and worktree path
+            let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            let short_uuid = &run_id.to_string()[..8];
+            branch_name = format!("llm/{}-{}", timestamp, short_uuid);
+            let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
+
+            // Create .terminal-worktrees/ dir
+            if let Err(e) = tokio::fs::create_dir_all(wt_path.parent().unwrap()).await {
+                self.concurrency.lock().await.remove(&project_root);
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "IO_ERROR".into(),
+                        message: format!("Failed to create worktrees dir: {}", e),
+                    })
+                    .await;
+                return;
+            }
+
+            // Create worktree
+            if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
+                self.concurrency.lock().await.remove(&project_root);
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "GIT_ERROR".into(),
+                        message: format!("Failed to create worktree: {}", e),
+                    })
+                    .await;
+                return;
+            }
+
+            // Save worktree metadata
+            let meta = WorktreeMeta {
+                worktree_path: wt_path.clone(),
+                branch_name: branch_name.clone(),
+                base_head: base_head.clone(),
+                merge_base: base_head.clone(),
+                last_modified: chrono::Utc::now(),
+            };
+            if let Err(e) = self.persistence.save_worktree_meta(run_id, &meta) {
+                warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
+            }
+
+            actual_working_dir = wt_path.clone();
+            worktree_path = Some(wt_path);
+        }
+
+        let run = Run {
+            id: run_id,
+            session_id,
+            branch: branch_name.clone(),
+            mode: mode.clone(),
+            state: RunState::Preparing,
+            prompt: prompt.clone(),
+            provided_files: vec![],
+            modified_files: vec![],
+            expanded_files: vec![],
+            output_path: output_path.clone(),
+            output_line_count: 0,
+            output_byte_count: 0,
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            last_modified: chrono::Utc::now(),
+        };
+
+        // Persist run (state: Preparing)
+        if let Err(e) = self.persistence.save_run(&run) {
+            warn!("Failed to persist run {}: {}", run_id, e);
+        }
+
+        session.active_run = Some(run_id);
+        session.runs.push(run_id);
+
+        // Broadcast state change
+        self.broadcast(&AppEvent::RunStateChanged {
+            run_id,
+            new_state: RunState::Preparing,
+        });
+
+        drop(sessions); // Release lock before spawning
+
+        // Spawn claude process in actual_working_dir (worktree if git)
+        match self.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
+            Ok((mut event_rx, stdin_tx, mut child)) => {
+                let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
+
+                let active_run = ActiveRun {
+                    run: run.clone(),
+                    cancel_tx,
+                    stdin_tx: stdin_tx.clone(),
+                };
+                self.active_runs.lock().await.insert(run_id, active_run);
+
+                // Transition to Running
+                self.broadcast(&AppEvent::RunStateChanged {
+                    run_id,
+                    new_state: RunState::Running,
+                });
+
+                // Supervisor task
+                let event_tx = self.event_tx.clone();
+                let active_runs = self.active_runs.clone();
+                let sessions = self.sessions.clone();
+                let timeout_secs = self.config.run_timeout_secs;
+                let persistence = self.persistence.clone();
+                let concurrency = self.concurrency.clone();
+                let project_root_clone = project_root.clone();
+                let base_head_clone = base_head.clone();
+                let branch_name_clone = branch_name.clone();
+                let worktree_path_clone = worktree_path.clone();
+                let is_git_run = is_git;
+                let run_started_at = run.started_at;
+
+                tokio::spawn(async move {
+                    let mut line_number: usize = 0;
+                    let mut output_file = tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&output_path)
+                        .await
+                        .ok();
+
+                    let timeout =
+                        tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
+                    tokio::pin!(timeout);
+
+                    loop {
+                        tokio::select! {
+                            event = event_rx.recv() => {
+                                match event {
+                                    Some(RunnerEvent::StdoutLine(line)) => {
+                                        line_number += 1;
+                                        // Write to disk
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                format!("{}\n", line).as_bytes(),
+                                            ).await;
+                                        }
+                                        // Broadcast to clients
+                                        let evt = AppEvent::RunOutput {
+                                            run_id,
+                                            line,
+                                            line_number,
+                                        };
+                                        let json = serde_json::to_string(&evt).unwrap();
+                                        let _ = event_tx.send(json);
+                                    }
+                                    Some(RunnerEvent::StderrLine(line)) => {
+                                        line_number += 1;
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                format!("[stderr] {}\n", line).as_bytes(),
+                                            ).await;
+                                        }
+                                        let evt = AppEvent::RunOutput {
+                                            run_id,
+                                            line: format!("[stderr] {}", line),
+                                            line_number,
+                                        };
+                                        let json = serde_json::to_string(&evt).unwrap();
+                                        let _ = event_tx.send(json);
+                                    }
+                                    Some(RunnerEvent::BlockingDetected(question)) => {
+                                        let evt = AppEvent::RunBlocking {
+                                            run_id,
+                                            question: question.clone(),
+                                            context: vec![],
+                                        };
+                                        let json = serde_json::to_string(&evt).unwrap();
+                                        let _ = event_tx.send(json);
+                                        let state_evt = AppEvent::RunStateChanged {
+                                            run_id,
+                                            new_state: RunState::WaitingInput {
+                                                question,
+                                                context: vec![],
+                                            },
+                                        };
+                                        let json = serde_json::to_string(&state_evt).unwrap();
+                                        let _ = event_tx.send(json);
+                                    }
+                                    Some(RunnerEvent::MalformedOutput { partial }) => {
+                                        warn!("Malformed output for run {}: {}", run_id, partial);
+                                    }
+                                    Some(RunnerEvent::SpawnError(e)) => {
+                                        let evt = AppEvent::RunFailed {
+                                            run_id,
+                                            error: e,
+                                            phase: FailPhase::Execution,
+                                        };
+                                        let json = serde_json::to_string(&evt).unwrap();
+                                        let _ = event_tx.send(json);
+                                        break;
+                                    }
+                                    Some(RunnerEvent::ProcessExited { .. }) => {
+                                        // Handled via channel close (None) below
+                                    }
+                                    None => {
+                                        // Channel closed -- process exited
+                                        let exit_code = child.wait().await
+                                            .map(|s| s.code().unwrap_or(-1))
+                                            .unwrap_or(-1);
+
+                                        // Compute git diff info if this was a git run
+                                        let mut modified_files_list = vec![];
+                                        let mut run_diff_stat = None;
+
+                                        if is_git_run {
+                                            if let Some(ref wt_path) = worktree_path_clone {
+                                                // Get current HEAD in worktree
+                                                match crate::git_engine::head_oid(wt_path).await {
+                                                    Ok(wt_head) => {
+                                                        if let Ok(changes) = crate::git_engine::changed_files(
+                                                            wt_path, &base_head_clone, &wt_head
+                                                        ).await {
+                                                            modified_files_list = changes
+                                                                .iter()
+                                                                .map(|c| c.path.clone())
+                                                                .collect();
+                                                        }
+                                                        if let Ok(stat) = crate::git_engine::diff_stat(
+                                                            wt_path, &base_head_clone, &wt_head
+                                                        ).await {
+                                                            run_diff_stat = Some(stat);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        warn!("Failed to read worktree HEAD for run {}: {}", run_id, e);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        let summary = RunSummary {
+                                            id: run_id,
+                                            state: RunState::Completed { exit_code },
+                                            prompt_preview: String::new(),
+                                            modified_file_count: modified_files_list.len(),
+                                            diff_stat: run_diff_stat.clone(),
+                                            started_at: run_started_at,
+                                            ended_at: Some(chrono::Utc::now()),
+                                        };
+                                        let evt = AppEvent::RunCompleted {
+                                            run_id,
+                                            summary,
+                                            diff_stat: run_diff_stat.clone(),
+                                        };
+                                        let json = serde_json::to_string(&evt).unwrap();
+                                        let _ = event_tx.send(json);
+
+                                        // Persist completed run
+                                        let completed_run = Run {
+                                            id: run_id,
+                                            session_id,
+                                            branch: branch_name_clone.clone(),
+                                            mode,
+                                            state: RunState::Completed { exit_code },
+                                            prompt,
+                                            provided_files: vec![],
+                                            modified_files: modified_files_list,
+                                            expanded_files: vec![],
+                                            output_path,
+                                            output_line_count: line_number,
+                                            output_byte_count: 0,
+                                            started_at: run_started_at,
+                                            ended_at: Some(chrono::Utc::now()),
+                                            last_modified: chrono::Utc::now(),
+                                        };
+                                        if let Err(e) = persistence.save_run(&completed_run) {
+                                            warn!("Failed to persist completed run {}: {}", run_id, e);
+                                        }
+
+                                        break;
+                                    }
+                                }
+                            }
+                            reason = cancel_rx.recv() => {
+                                if let Some(reason) = reason {
+                                    info!("Cancelling run {}: {}", run_id, reason);
+                                    let _ = child.kill().await;
+                                    let evt = AppEvent::RunCancelled { run_id };
+                                    let json = serde_json::to_string(&evt).unwrap();
+                                    let _ = event_tx.send(json);
+                                    break;
+                                }
+                            }
+                            _ = &mut timeout => {
+                                warn!("Run {} timed out", run_id);
+                                let _ = child.kill().await;
+                                let evt = AppEvent::RunFailed {
+                                    run_id,
+                                    error: "Run timed out".into(),
+                                    phase: FailPhase::Execution,
+                                };
+                                let json = serde_json::to_string(&evt).unwrap();
+                                let _ = event_tx.send(json);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Cleanup
+                    active_runs.lock().await.remove(&run_id);
+                    if let Some(session) = sessions.lock().await.get_mut(&session_id) {
+                        session.active_run = None;
+                    }
+                    // Remove from concurrency registry
+                    if is_git_run {
+                        concurrency.lock().await.remove(&project_root_clone);
+                    }
+                    info!("Run {} finished", run_id);
+                });
+
+                let _ = reply_tx
+                    .send(AppEvent::RunStateChanged {
+                        run_id,
+                        new_state: RunState::Running,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                // Cleanup session
+                let mut sessions = self.sessions.lock().await;
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    session.active_run = None;
+                }
+                // Cleanup concurrency and worktree on spawn failure
+                if is_git {
+                    self.concurrency.lock().await.remove(&project_root);
+                    if let Some(ref wt_path) = worktree_path {
+                        if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
+                            warn!("Failed to cleanup worktree on spawn failure: {}", e);
+                        }
+                        if let Err(e) = crate::git_engine::branch_delete(&project_root, &branch_name, true).await {
+                            warn!("Failed to cleanup branch on spawn failure: {}", e);
+                        }
+                    }
+                }
+                let _ = reply_tx
+                    .send(AppEvent::RunFailed {
+                        run_id,
+                        error: e,
+                        phase: FailPhase::Preparation,
+                    })
+                    .await;
+            }
         }
     }
 
@@ -1013,5 +1228,22 @@ impl Dispatcher {
         }
 
         None
+    }
+
+    /// Find the project root from any active in-memory session.
+    /// Used by sessionless commands (ListStashes, CheckDirtyState, etc.)
+    /// that need a project root but don't carry a session_id.
+    ///
+    /// Returns the project_root from the most recently started session,
+    /// or None if there are no sessions.
+    async fn find_active_project_root(&self) -> Option<PathBuf> {
+        let sessions = self.sessions.lock().await;
+        // Prefer the most recently started session
+        sessions
+            .values()
+            .filter(|s| s.ended_at.is_none())
+            .max_by_key(|s| s.started_at)
+            .or_else(|| sessions.values().max_by_key(|s| s.started_at))
+            .map(|s| s.project_root.clone())
     }
 }

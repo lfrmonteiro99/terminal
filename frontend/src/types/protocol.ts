@@ -43,6 +43,32 @@ export type MergeResult =
   | 'Merged'
   | { Conflict: string[] };
 
+// --- Stash Types (Phase 2.1) ---
+
+export interface StashEntry {
+  index: number;
+  message: string;
+  branch: string | null;
+  date: string;
+}
+
+export interface DirtyFile {
+  path: string;
+  status: FileStatus;
+}
+
+export type FileStatus = 'Added' | 'Modified' | 'Deleted' | { Renamed: string };
+
+export interface DirtyStatus {
+  staged: DirtyFile[];
+  unstaged: DirtyFile[];
+}
+
+export interface FileChange {
+  path: string;
+  status: FileStatus;
+}
+
 export interface SessionSummary {
   id: string;
   project_root: string;
@@ -58,7 +84,7 @@ export type AppCommand =
   | { type: 'StartSession'; project_root: string }
   | { type: 'EndSession'; session_id: string }
   | { type: 'ListSessions' }
-  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode }
+  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean }
   | { type: 'CancelRun'; run_id: string; reason: string }
   | { type: 'RespondToBlocking'; run_id: string; response: string }
   | { type: 'GetRunStatus'; run_id: string }
@@ -68,7 +94,12 @@ export type AppCommand =
   | { type: 'RevertRun'; run_id: string }
   | { type: 'MergeRun'; run_id: string }
   | { type: 'GetStatus' }
-  | { type: 'Ping' };
+  | { type: 'Ping' }
+  | { type: 'ListStashes' }
+  | { type: 'GetStashFiles'; stash_index: number }
+  | { type: 'GetStashDiff'; stash_index: number; file_path: string | null }
+  | { type: 'CheckDirtyState' }
+  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string };
 
 // --- Events (Daemon -> Client) ---
 
@@ -92,4 +123,9 @@ export type AppEvent =
   | { type: 'RunOutputPage'; run_id: string; offset: number; lines: string[]; has_more: boolean }
   | { type: 'StatusUpdate'; active_runs: number; session_count: number }
   | { type: 'Pong' }
-  | { type: 'Error'; code: string; message: string };
+  | { type: 'Error'; code: string; message: string }
+  | { type: 'StashList'; stashes: StashEntry[] }
+  | { type: 'StashFiles'; stash_index: number; files: FileChange[] }
+  | { type: 'StashDiff'; stash_index: number; diff: string; stat: DiffStat | null }
+  | { type: 'DirtyState'; status: DirtyStatus }
+  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode };
