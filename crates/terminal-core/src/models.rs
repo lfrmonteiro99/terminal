@@ -75,6 +75,7 @@ pub struct Run {
     pub output_byte_count: u64,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub last_modified: DateTime<Utc>,
 }
 
 // --- Session ---
@@ -96,6 +97,7 @@ pub struct Session {
     pub commands: Vec<CommandRecord>,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub last_modified: DateTime<Utc>,
 }
 
 // --- Summaries (for wire protocol) ---
@@ -106,6 +108,7 @@ pub struct RunSummary {
     pub state: RunState,
     pub prompt_preview: String,
     pub modified_file_count: usize,
+    pub diff_stat: Option<DiffStat>,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
 }
@@ -117,6 +120,61 @@ pub struct SessionSummary {
     pub active_run: Option<Uuid>,
     pub run_count: usize,
     pub started_at: DateTime<Utc>,
+}
+
+// --- Git Types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RepoState {
+    Clean,
+    Merge,
+    Rebase,
+    Other(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed(PathBuf),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: PathBuf,
+    pub status: FileStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiffStat {
+    pub path: PathBuf,
+    pub insertions: usize,
+    pub deletions: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffStat {
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    pub file_stats: Vec<FileDiffStat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MergeResult {
+    FastForward,
+    Merged,
+    Conflict(Vec<PathBuf>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeMeta {
+    pub worktree_path: PathBuf,
+    pub branch_name: String,
+    pub base_head: String,
+    pub merge_base: String,
+    pub last_modified: DateTime<Utc>,
 }
 
 impl RunState {
@@ -183,5 +241,44 @@ mod tests {
         let mode = RunMode::Guided;
         let json = serde_json::to_string(&mode).unwrap();
         assert_eq!(json, "\"Guided\"");
+    }
+
+    #[test]
+    fn diff_stat_serialization() {
+        let stat = DiffStat {
+            files_changed: 3,
+            insertions: 42,
+            deletions: 7,
+            file_stats: vec![FileDiffStat {
+                path: PathBuf::from("src/main.rs"),
+                insertions: 42,
+                deletions: 7,
+            }],
+        };
+        let json = serde_json::to_string(&stat).unwrap();
+        let deserialized: DiffStat = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.files_changed, 3);
+    }
+
+    #[test]
+    fn merge_result_serialization() {
+        let conflict = MergeResult::Conflict(vec![PathBuf::from("src/lib.rs")]);
+        let json = serde_json::to_string(&conflict).unwrap();
+        let deserialized: MergeResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, conflict);
+    }
+
+    #[test]
+    fn worktree_meta_serialization() {
+        let meta = WorktreeMeta {
+            worktree_path: PathBuf::from("/tmp/wt"),
+            branch_name: "llm/test".into(),
+            base_head: "abc123".into(),
+            merge_base: "abc123".into(),
+            last_modified: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: WorktreeMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.branch_name, "llm/test");
     }
 }

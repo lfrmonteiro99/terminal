@@ -1,8 +1,11 @@
 mod claude_runner;
 mod dispatcher;
+mod git_engine;
 mod parser;
+mod persistence;
 mod server;
 
+use crate::persistence::Persistence;
 use dispatcher::Dispatcher;
 use rand::Rng;
 use server::{build_router, DaemonState};
@@ -67,8 +70,29 @@ async fn main() {
         .await
         .expect("Failed to write port file");
 
+    // Initialize persistence
+    let persistence = Arc::new(
+        Persistence::new(config.data_dir.clone())
+            .expect("Failed to initialize persistence"),
+    );
+
+    // Recovery on startup
+    match persistence.recover() {
+        Ok(report) => {
+            if report.orphaned_runs > 0 || report.orphaned_worktrees > 0 {
+                tracing::warn!(
+                    "Recovery: {} orphaned runs, {} orphaned worktrees, {} cleaned metadata",
+                    report.orphaned_runs,
+                    report.orphaned_worktrees,
+                    report.cleaned_metadata
+                );
+            }
+        }
+        Err(e) => tracing::error!("Recovery failed: {}", e),
+    }
+
     // Command dispatcher
-    let dispatcher = Arc::new(Dispatcher::new(config.clone(), event_tx.clone()));
+    let dispatcher = Arc::new(Dispatcher::new(config.clone(), event_tx.clone(), persistence.clone()));
     tokio::spawn(async move {
         while let Some((cmd, reply_tx)) = command_rx.recv().await {
             dispatcher.handle(cmd, reply_tx).await;

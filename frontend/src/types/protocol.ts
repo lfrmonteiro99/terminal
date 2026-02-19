@@ -20,7 +20,28 @@ export interface RunSummary {
   modified_file_count: number;
   started_at: string;
   ended_at: string | null;
+  diff_stat: DiffStat | null;
 }
+
+// --- Git Types (Phase 2) ---
+
+export interface FileDiffStat {
+  path: string;
+  insertions: number;
+  deletions: number;
+}
+
+export interface DiffStat {
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  file_stats: FileDiffStat[];
+}
+
+export type MergeResult =
+  | 'FastForward'
+  | 'Merged'
+  | { Conflict: string[] };
 
 export interface SessionSummary {
   id: string;
@@ -43,6 +64,9 @@ export type AppCommand =
   | { type: 'GetRunStatus'; run_id: string }
   | { type: 'ListRuns'; session_id: string }
   | { type: 'GetRunOutput'; run_id: string; offset: number; limit: number }
+  | { type: 'GetDiff'; run_id: string }
+  | { type: 'RevertRun'; run_id: string }
+  | { type: 'MergeRun'; run_id: string }
   | { type: 'GetStatus' }
   | { type: 'Ping' };
 
@@ -54,7 +78,11 @@ export type AppEvent =
   | { type: 'RunStateChanged'; run_id: string; new_state: RunState }
   | { type: 'RunOutput'; run_id: string; line: string; line_number: number }
   | { type: 'RunBlocking'; run_id: string; question: string; context: string[] }
-  | { type: 'RunCompleted'; run_id: string; summary: RunSummary }
+  | { type: 'RunCompleted'; run_id: string; summary: RunSummary; diff_stat: DiffStat | null }
+  | { type: 'RunDiff'; run_id: string; stat: DiffStat; diff: string }
+  | { type: 'RunReverted'; run_id: string }
+  | { type: 'RunMerged'; run_id: string; merge_result: MergeResult }
+  | { type: 'RunMergeConflict'; run_id: string; conflict_paths: string[] }
   | { type: 'RunFailed'; run_id: string; error: string; phase: FailPhase }
   | { type: 'RunCancelled'; run_id: string }
   | { type: 'SessionStarted'; session: SessionSummary }

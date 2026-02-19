@@ -44,6 +44,11 @@ pub enum AppCommand {
         limit: u64,
     },
 
+    // Git operations (Phase 2)
+    GetDiff { run_id: Uuid },
+    RevertRun { run_id: Uuid },
+    MergeRun { run_id: Uuid },
+
     // System
     GetStatus,
     Ping,
@@ -75,6 +80,7 @@ pub enum AppEvent {
     RunCompleted {
         run_id: Uuid,
         summary: RunSummary,
+        diff_stat: Option<DiffStat>,
     },
     RunFailed {
         run_id: Uuid,
@@ -83,6 +89,24 @@ pub enum AppEvent {
     },
     RunCancelled {
         run_id: Uuid,
+    },
+
+    // Git results (Phase 2)
+    RunDiff {
+        run_id: Uuid,
+        stat: DiffStat,
+        diff: String,
+    },
+    RunReverted {
+        run_id: Uuid,
+    },
+    RunMerged {
+        run_id: Uuid,
+        merge_result: MergeResult,
+    },
+    RunMergeConflict {
+        run_id: Uuid,
+        conflict_paths: Vec<PathBuf>,
     },
 
     // Session
@@ -197,6 +221,59 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn get_diff_command_roundtrip() {
+        let cmd = AppCommand::GetDiff { run_id: Uuid::new_v4() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"GetDiff\""));
+        let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn run_merged_event_roundtrip() {
+        let evt = AppEvent::RunMerged {
+            run_id: Uuid::new_v4(),
+            merge_result: MergeResult::FastForward,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::RunMerged { merge_result, .. } => {
+                assert_eq!(merge_result, MergeResult::FastForward);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn run_completed_with_diff_stat() {
+        let evt = AppEvent::RunCompleted {
+            run_id: Uuid::new_v4(),
+            summary: RunSummary {
+                id: Uuid::new_v4(),
+                state: RunState::Completed { exit_code: 0 },
+                prompt_preview: "test".into(),
+                modified_file_count: 2,
+                diff_stat: Some(DiffStat {
+                    files_changed: 2,
+                    insertions: 10,
+                    deletions: 3,
+                    file_stats: vec![],
+                }),
+                started_at: chrono::Utc::now(),
+                ended_at: Some(chrono::Utc::now()),
+            },
+            diff_stat: Some(DiffStat {
+                files_changed: 2,
+                insertions: 10,
+                deletions: 3,
+                file_stats: vec![],
+            }),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
     }
 
     #[test]

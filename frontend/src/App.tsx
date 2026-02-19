@@ -1,9 +1,11 @@
-import { useCallback, useState } from 'react';
-import { AppProvider, useAppState, useAppDispatch } from './context/AppContext';
-import { useWebSocket } from './hooks/useWebSocket';
-import { RunPanel } from './components/RunPanel';
-import { DecisionPanel } from './components/DecisionPanel';
-import type { AppEvent, RunMode } from './types/protocol';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
+import { useWebSocket } from './hooks/useWebSocket.ts';
+import { RunPanel } from './components/RunPanel.tsx';
+import { DecisionPanel } from './components/DecisionPanel.tsx';
+import { SessionSidebar } from './components/SessionSidebar.tsx';
+import { PostRunSummary } from './components/PostRunSummary.tsx';
+import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
 
 const inputStyle: React.CSSProperties = {
   padding: 8,
@@ -72,6 +74,36 @@ function AppContent() {
   const handleCancel = (runId: string) => {
     send({ type: 'CancelRun', run_id: runId, reason: 'User cancelled' });
   };
+
+  const handleGetDiff = (runId: string) => {
+    send({ type: 'GetDiff', run_id: runId });
+  };
+
+  const handleRevert = (runId: string) => {
+    send({ type: 'RevertRun', run_id: runId });
+  };
+
+  const handleMerge = (runId: string) => {
+    send({ type: 'MergeRun', run_id: runId });
+  };
+
+  // Track previous activeSession to detect transitions from null -> value
+  const prevSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.activeSession && prevSessionRef.current !== state.activeSession) {
+      send({ type: 'ListRuns', session_id: state.activeSession });
+    }
+    prevSessionRef.current = state.activeSession;
+  }, [state.activeSession, send]);
+
+  // Determine if selectedRun is in a terminal state
+  const selectedRunObj = state.selectedRun ? state.runs.get(state.selectedRun) : undefined;
+  const isTerminalState = (rs: RunState): boolean =>
+    rs.type === 'Completed' || rs.type === 'Failed' || rs.type === 'Cancelled';
+  const showPostRunSummary =
+    !state.activeRun &&
+    selectedRunObj !== undefined &&
+    isTerminalState(selectedRunObj.state);
 
   return (
     <div
@@ -153,43 +185,62 @@ function AppContent() {
         </div>
       )}
 
-      {/* Main content */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <RunPanel />
+      {/* Body: sidebar + main content */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* Sidebar (when session active) */}
+        {state.activeSession && <SessionSidebar />}
 
-        {state.blocking && state.activeRun && (
-          <DecisionPanel
-            runId={state.activeRun}
-            question={state.blocking.question}
-            context={state.blocking.context}
-            onRespond={handleRespond}
-            onCancel={handleCancel}
-          />
-        )}
-      </div>
-
-      {/* Prompt input (show when session active and no run in progress) */}
-      {status === 'connected' && state.activeSession && !state.activeRun && (
-        <div
-          style={{
-            padding: '8px 16px',
-            borderTop: '1px solid #333',
-            display: 'flex',
-            gap: 8,
-          }}
-        >
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleStartRun()}
-            placeholder="Enter prompt for Claude..."
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <button onClick={handleStartRun} style={buttonStyle}>
-            Run
-          </button>
+        {/* Main panel */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {state.activeRun ? (
+            <>
+              <RunPanel />
+              {state.blocking && (
+                <DecisionPanel
+                  runId={state.activeRun}
+                  question={state.blocking.question}
+                  context={state.blocking.context}
+                  onRespond={handleRespond}
+                  onCancel={handleCancel}
+                />
+              )}
+            </>
+          ) : showPostRunSummary && state.selectedRun ? (
+            <PostRunSummary
+              runId={state.selectedRun}
+              onGetDiff={handleGetDiff}
+              onMerge={handleMerge}
+              onRevert={handleRevert}
+            />
+          ) : (
+            <>
+              <RunPanel />
+              {/* Prompt input (show when session active and no run in progress) */}
+              {status === 'connected' && state.activeSession && (
+                <div
+                  style={{
+                    padding: '8px 16px',
+                    borderTop: '1px solid #333',
+                    display: 'flex',
+                    gap: 8,
+                  }}
+                >
+                  <input
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleStartRun()}
+                    placeholder="Enter prompt for Claude..."
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button onClick={handleStartRun} style={buttonStyle}>
+                    Run
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Footer */}
       <div
@@ -202,7 +253,7 @@ function AppContent() {
           gap: 16,
         }}
       >
-        <span>Phase 1 — Blocking Detection</span>
+        <span>Phase 2 — Multi-Run + Git</span>
         {state.runState && (
           <span>State: {state.runState.type}</span>
         )}
