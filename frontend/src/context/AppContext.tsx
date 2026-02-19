@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, RunState, SessionSummary } from '../types/protocol';
+import type { AppEvent, DiffStat, RunState, RunSummary, SessionSummary } from '../types/protocol';
 
 // --- State ---
 
@@ -16,6 +16,10 @@ export interface AppState {
   outputLines: string[];
   blocking: { question: string; context: string[] } | null;
   error: string | null;
+  runs: Map<string, RunSummary>;
+  selectedRun: string | null;
+  diffCache: Map<string, { stat: DiffStat; diff: string }>;
+  mergeConflict: { runId: string; paths: string[] } | null;
 }
 
 const initialState: AppState = {
@@ -27,6 +31,10 @@ const initialState: AppState = {
   outputLines: [],
   blocking: null,
   error: null,
+  runs: new Map(),
+  selectedRun: null,
+  diffCache: new Map(),
+  mergeConflict: null,
 };
 
 // --- Actions ---
@@ -35,6 +43,7 @@ type Action =
   | { type: 'SET_CONNECTION_STATUS'; status: AppState['connection']['status'] }
   | { type: 'HANDLE_EVENT'; event: AppEvent }
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string }
+  | { type: 'SELECT_RUN'; runId: string | null }
   | { type: 'CLEAR_ERROR' };
 
 const MAX_OUTPUT_LINES = 2000;
@@ -49,6 +58,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_ACTIVE_SESSION':
       return { ...state, activeSession: action.sessionId };
+
+    case 'SELECT_RUN':
+      return { ...state, selectedRun: action.runId };
 
     case 'HANDLE_EVENT': {
       const event = action.event;
@@ -115,13 +127,17 @@ function reducer(state: AppState, action: Action): AppState {
             blocking: { question: event.question, context: event.context },
           };
 
-        case 'RunCompleted':
+        case 'RunCompleted': {
+          const runs = new Map(state.runs);
+          runs.set(event.run_id, event.summary);
           return {
             ...state,
             activeRun: null,
             runState: { type: 'Completed', exit_code: event.summary.state.type === 'Completed' ? event.summary.state.exit_code : 0 },
             blocking: null,
+            runs,
           };
+        }
 
         case 'RunFailed':
           return {
@@ -138,6 +154,38 @@ function reducer(state: AppState, action: Action): AppState {
             runState: { type: 'Cancelled', reason: 'User cancelled' },
             blocking: null,
           };
+
+        case 'RunList': {
+          const runs = new Map(state.runs);
+          for (const r of event.runs) {
+            runs.set(r.id, r);
+          }
+          return { ...state, runs };
+        }
+
+        case 'RunDiff': {
+          const diffCache = new Map(state.diffCache);
+          diffCache.set(event.run_id, { stat: event.stat, diff: event.diff });
+          return { ...state, diffCache };
+        }
+
+        case 'RunReverted': {
+          return {
+            ...state,
+            selectedRun: state.selectedRun === event.run_id ? null : state.selectedRun,
+          };
+        }
+
+        case 'RunMerged': {
+          return { ...state, mergeConflict: null };
+        }
+
+        case 'RunMergeConflict': {
+          return {
+            ...state,
+            mergeConflict: { runId: event.run_id, paths: event.conflict_paths },
+          };
+        }
 
         case 'StatusUpdate':
           return state;
