@@ -40,53 +40,21 @@ A desktop application for managing AI coding sessions with git-integrated sandbo
 - **JSON persistence**: Sessions, runs, and worktree metadata stored as atomic JSON files (`write .tmp` → `rename`). Daemon recovers gracefully from crashes.
 - **Dirty working directory detection**: Before starting a run, the daemon checks for uncommitted changes and warns the user — since the worktree is created from HEAD, uncommitted work would be invisible to the AI.
 
-## Prerequisites
+## Quick Start (Docker)
 
-- **Rust** 1.85+ (`rustup install stable`)
-- **Node.js** 18+ with npm
-- **Git** 2.20+
-- **Docker** and **Docker Compose** (for running tests in isolated environment)
-
-## Installation
+The only prerequisite is **Docker** with **Docker Compose**.
 
 ```bash
-# Clone
 git clone https://github.com/lfrmonteiro99/terminal.git
 cd terminal
-
-# Build the daemon
-cargo build -p terminal-daemon
-
-# Install frontend dependencies
-cd frontend
-npm install
-cd ..
+docker compose up
 ```
 
-## Running
+That's it. This starts:
+- **Daemon** at `http://localhost:3000` (Rust binary + git)
+- **Frontend** at `http://localhost:5173` (Vite dev server, proxies WebSocket to daemon)
 
-### Start the daemon
-
-```bash
-cargo run -p terminal-daemon
-```
-
-The daemon:
-1. Creates `~/.terminal-daemon/` for data (sessions, runs, worktree metadata)
-2. Generates an auth token at `~/.terminal-daemon/auth_token`
-3. Writes its port to `~/.terminal-daemon/port`
-4. Listens on `127.0.0.1:3000` (default) for WebSocket connections
-
-### Start the frontend dev server
-
-```bash
-cd frontend
-npm run dev
-```
-
-Opens at `http://localhost:5173`. Connect to the daemon by entering:
-- **WebSocket URL**: `ws://127.0.0.1:3000/ws`
-- **Auth token**: contents of `~/.terminal-daemon/auth_token`
+Open `http://localhost:5173` in your browser. The frontend auto-connects to the daemon via the `/ws` proxy — no manual URL or token entry needed when using Docker.
 
 ### Using the app
 
@@ -97,37 +65,71 @@ Opens at `http://localhost:5173`. Connect to the daemon by entering:
 5. **Merge** the changes into your main branch or **Revert** to discard them
 6. Browse git stashes from the sidebar's **Git > Stashes** section
 
+### Stop
+
+```bash
+docker compose down
+```
+
+### Reset data
+
+```bash
+docker compose down -v
+```
+
 ## Running Tests
 
-### Rust tests (via Docker — recommended)
-
 ```bash
-docker compose run --rm dev cargo test -p terminal-core -p terminal-daemon
+docker compose run --rm --profile test test
 ```
 
-This uses `Dockerfile.dev` (Rust 1.85 + git) to ensure git is available for integration tests.
+Runs 63 Rust tests (32 core + 31 daemon) in an isolated container with git.
 
-### Rust tests (local)
+### Frontend checks (inside container)
 
 ```bash
-cargo test -p terminal-core -p terminal-daemon
+docker compose run --rm frontend npx tsc --noEmit --skipLibCheck
+docker compose run --rm frontend npm run build
 ```
 
-Requires `git` on PATH.
+## Local Development (without Docker)
 
-### Frontend checks
+If you prefer running natively:
+
+### Prerequisites
+
+- **Rust** 1.85+ (`rustup install stable`)
+- **Node.js** 18+ with npm
+- **Git** 2.20+
+
+### Installation
 
 ```bash
-cd frontend
+cargo build -p terminal-daemon
+cd frontend && npm install && cd ..
+```
 
-# Type check
-npx tsc --noEmit --skipLibCheck
+### Running
 
-# Production build
-npm run build
+```bash
+# Terminal 1: daemon
+cargo run -p terminal-daemon
 
-# Lint
-npm run lint
+# Terminal 2: frontend
+cd frontend && npm run dev
+```
+
+The daemon creates `~/.terminal-daemon/` for data, generates an auth token at `~/.terminal-daemon/auth_token`, and listens on a random port (written to `~/.terminal-daemon/port`).
+
+Open `http://localhost:5173` and enter:
+- **WebSocket URL**: `ws://127.0.0.1:<port>/ws` (check `~/.terminal-daemon/port`)
+- **Auth token**: contents of `~/.terminal-daemon/auth_token`
+
+### Local tests
+
+```bash
+cargo test -p terminal-core -p terminal-daemon  # requires git on PATH
+cd frontend && npx tsc --noEmit --skipLibCheck && npm run build
 ```
 
 ## Project Structure
@@ -135,9 +137,10 @@ npm run lint
 ```
 terminal/
 ├── Cargo.toml                  # Workspace root
-├── Dockerfile                  # Production build
-├── Dockerfile.dev              # Dev/test image (with git)
-├── docker-compose.yml          # Test runner
+├── Dockerfile                  # Daemon: multi-stage build → slim runtime with git
+├── Dockerfile.dev              # Dev/test image (Rust + git, for running tests)
+├── docker-compose.yml          # Full stack: daemon + frontend + test runner
+├── .dockerignore               # Excludes target/, node_modules/, .git/
 ├── crates/
 │   ├── terminal-core/          # Shared types + protocol
 │   │   └── src/

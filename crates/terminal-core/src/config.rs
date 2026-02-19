@@ -25,13 +25,18 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("."));
         Self {
-            host: "127.0.0.1".into(),
-            port: 0,
+            host: std::env::var("TERMINAL_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
+            port: std::env::var("TERMINAL_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(0),
             heartbeat_interval_secs: 30,
             heartbeat_timeout_secs: 60,
             orphan_grace_secs: 60,
             run_timeout_secs: 600,
-            data_dir: home.join(".terminal-daemon"),
+            data_dir: std::env::var("TERMINAL_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".terminal-daemon")),
             claude_binary: "claude".into(),
         }
     }
