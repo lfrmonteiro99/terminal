@@ -1,0 +1,17 @@
+services:
+  dev:
+    image: rust:1.85-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/app/target
+    command: cargo test --workspace
+    ports:
+      - "0:8080"
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  target-cache:
