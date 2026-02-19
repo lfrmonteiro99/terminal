@@ -23,6 +23,8 @@ pub enum AppCommand {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
+        #[serde(default)]
+        skip_dirty_check: bool,
     },
     CancelRun {
         run_id: Uuid,
@@ -48,6 +50,23 @@ pub enum AppCommand {
     GetDiff { run_id: Uuid },
     RevertRun { run_id: Uuid },
     MergeRun { run_id: Uuid },
+
+    // Stash operations (Phase 2.1)
+    ListStashes,
+    GetStashFiles {
+        stash_index: usize,
+    },
+    GetStashDiff {
+        stash_index: usize,
+        file_path: Option<PathBuf>,
+    },
+    CheckDirtyState,
+    StashAndRun {
+        session_id: Uuid,
+        prompt: String,
+        mode: RunMode,
+        stash_message: String,
+    },
 
     // System
     GetStatus,
@@ -107,6 +126,29 @@ pub enum AppEvent {
     RunMergeConflict {
         run_id: Uuid,
         conflict_paths: Vec<PathBuf>,
+    },
+
+    // Stash results (Phase 2.1)
+    StashList {
+        stashes: Vec<StashEntry>,
+    },
+    StashFiles {
+        stash_index: usize,
+        files: Vec<FileChange>,
+    },
+    StashDiff {
+        stash_index: usize,
+        diff: String,
+        stat: Option<DiffStat>,
+    },
+    DirtyState {
+        status: DirtyStatus,
+    },
+    DirtyWarning {
+        status: DirtyStatus,
+        session_id: Uuid,
+        prompt: String,
+        mode: RunMode,
     },
 
     // Session
@@ -185,9 +227,22 @@ mod tests {
         let json = r#"{"type":"StartRun","session_id":"550e8400-e29b-41d4-a716-446655440000","prompt":"hello","mode":"Free"}"#;
         let cmd: AppCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            AppCommand::StartRun { prompt, mode, .. } => {
+            AppCommand::StartRun { prompt, mode, skip_dirty_check, .. } => {
                 assert_eq!(prompt, "hello");
                 assert_eq!(mode, RunMode::Free);
+                assert!(!skip_dirty_check, "skip_dirty_check should default to false");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn start_run_with_skip_dirty_check() {
+        let json = r#"{"type":"StartRun","session_id":"550e8400-e29b-41d4-a716-446655440000","prompt":"hello","mode":"Free","skip_dirty_check":true}"#;
+        let cmd: AppCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            AppCommand::StartRun { skip_dirty_check, .. } => {
+                assert!(skip_dirty_check, "skip_dirty_check should be true when explicitly set");
             }
             _ => panic!("wrong variant"),
         }
@@ -274,6 +329,168 @@ mod tests {
         };
         let json = serde_json::to_string(&evt).unwrap();
         let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn list_stashes_command_roundtrip() {
+        let cmd = AppCommand::ListStashes;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"ListStashes\""));
+        let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn get_stash_files_command_roundtrip() {
+        let cmd = AppCommand::GetStashFiles { stash_index: 2 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::GetStashFiles { stash_index } => assert_eq!(stash_index, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn get_stash_diff_command_roundtrip() {
+        let cmd = AppCommand::GetStashDiff {
+            stash_index: 0,
+            file_path: Some(PathBuf::from("src/main.rs")),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::GetStashDiff { stash_index, file_path } => {
+                assert_eq!(stash_index, 0);
+                assert_eq!(file_path, Some(PathBuf::from("src/main.rs")));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn check_dirty_state_command_roundtrip() {
+        let cmd = AppCommand::CheckDirtyState;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"CheckDirtyState\""));
+        let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn stash_and_run_command_roundtrip() {
+        let cmd = AppCommand::StashAndRun {
+            session_id: Uuid::new_v4(),
+            prompt: "fix bug".into(),
+            mode: RunMode::Free,
+            stash_message: "pre-run stash".into(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::StashAndRun { prompt, mode, stash_message, .. } => {
+                assert_eq!(prompt, "fix bug");
+                assert_eq!(mode, RunMode::Free);
+                assert_eq!(stash_message, "pre-run stash");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn stash_list_event_roundtrip() {
+        let evt = AppEvent::StashList {
+            stashes: vec![StashEntry {
+                index: 0,
+                message: "WIP on main".into(),
+                branch: Some("main".into()),
+                date: "2026-02-19".into(),
+            }],
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::StashList { stashes } => {
+                assert_eq!(stashes.len(), 1);
+                assert_eq!(stashes[0].index, 0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn stash_files_event_roundtrip() {
+        let evt = AppEvent::StashFiles {
+            stash_index: 1,
+            files: vec![FileChange {
+                path: PathBuf::from("src/lib.rs"),
+                status: FileStatus::Modified,
+            }],
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::StashFiles { stash_index, files } => {
+                assert_eq!(stash_index, 1);
+                assert_eq!(files.len(), 1);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn stash_diff_event_roundtrip() {
+        let evt = AppEvent::StashDiff {
+            stash_index: 0,
+            diff: "--- a/file\n+++ b/file\n".into(),
+            stat: Some(DiffStat {
+                files_changed: 1,
+                insertions: 5,
+                deletions: 2,
+                file_stats: vec![],
+            }),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn dirty_state_event_roundtrip() {
+        let evt = AppEvent::DirtyState {
+            status: DirtyStatus {
+                staged: vec![DirtyFile {
+                    path: PathBuf::from("src/main.rs"),
+                    status: FileStatus::Modified,
+                }],
+                unstaged: vec![],
+            },
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn dirty_warning_event_roundtrip() {
+        let evt = AppEvent::DirtyWarning {
+            status: DirtyStatus {
+                staged: vec![],
+                unstaged: vec![DirtyFile {
+                    path: PathBuf::from("Cargo.toml"),
+                    status: FileStatus::Modified,
+                }],
+            },
+            session_id: Uuid::new_v4(),
+            prompt: "run tests".into(),
+            mode: RunMode::Guided,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::DirtyWarning { status, prompt, mode, .. } => {
+                assert_eq!(status.unstaged.len(), 1);
+                assert_eq!(prompt, "run tests");
+                assert_eq!(mode, RunMode::Guided);
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

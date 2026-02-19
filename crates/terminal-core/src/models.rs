@@ -140,7 +140,7 @@ pub enum FileStatus {
     Renamed(PathBuf),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileChange {
     pub path: PathBuf,
     pub status: FileStatus,
@@ -175,6 +175,30 @@ pub struct WorktreeMeta {
     pub base_head: String,
     pub merge_base: String,
     pub last_modified: DateTime<Utc>,
+}
+
+// --- Stash / Dirty State Types ---
+
+/// Git stash entry
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StashEntry {
+    pub index: usize,
+    pub message: String,
+    pub branch: Option<String>,
+    pub date: String,
+}
+
+/// Dirty working directory status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DirtyStatus {
+    pub staged: Vec<DirtyFile>,
+    pub unstaged: Vec<DirtyFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DirtyFile {
+    pub path: PathBuf,
+    pub status: FileStatus,
 }
 
 impl RunState {
@@ -266,6 +290,48 @@ mod tests {
         let json = serde_json::to_string(&conflict).unwrap();
         let deserialized: MergeResult = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, conflict);
+    }
+
+    #[test]
+    fn stash_entry_serialization_roundtrip() {
+        let entry = StashEntry {
+            index: 0,
+            message: "WIP on main: abc1234 some work".into(),
+            branch: Some("main".into()),
+            date: "2026-02-19 12:00:00 +0000".into(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: StashEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn dirty_status_serialization_roundtrip() {
+        let status = DirtyStatus {
+            staged: vec![DirtyFile {
+                path: PathBuf::from("src/main.rs"),
+                status: FileStatus::Modified,
+            }],
+            unstaged: vec![DirtyFile {
+                path: PathBuf::from("README.md"),
+                status: FileStatus::Added,
+            }],
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: DirtyStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn dirty_status_empty_is_clean() {
+        let status = DirtyStatus {
+            staged: vec![],
+            unstaged: vec![],
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: DirtyStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.staged.len(), 0);
+        assert_eq!(deserialized.unstaged.len(), 0);
     }
 
     #[test]

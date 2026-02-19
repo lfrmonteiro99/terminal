@@ -1,5 +1,5 @@
 import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, DiffStat, RunState, RunSummary, SessionSummary } from '../types/protocol';
+import type { AppEvent, DiffStat, DirtyStatus, FileChange, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
 
 // --- State ---
 
@@ -20,6 +20,11 @@ export interface AppState {
   selectedRun: string | null;
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
   mergeConflict: { runId: string; paths: string[] } | null;
+  stashes: StashEntry[];
+  stashFiles: Map<number, FileChange[]>;
+  stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
+  dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
+  stashDrawerOpen: boolean;
 }
 
 const initialState: AppState = {
@@ -35,6 +40,11 @@ const initialState: AppState = {
   selectedRun: null,
   diffCache: new Map(),
   mergeConflict: null,
+  stashes: [],
+  stashFiles: new Map(),
+  stashDiffs: new Map(),
+  dirtyWarning: null,
+  stashDrawerOpen: false,
 };
 
 // --- Actions ---
@@ -44,7 +54,9 @@ type Action =
   | { type: 'HANDLE_EVENT'; event: AppEvent }
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string }
   | { type: 'SELECT_RUN'; runId: string | null }
-  | { type: 'CLEAR_ERROR' };
+  | { type: 'CLEAR_ERROR' }
+  | { type: 'TOGGLE_STASH_DRAWER' }
+  | { type: 'DISMISS_DIRTY_WARNING' };
 
 const MAX_OUTPUT_LINES = 2000;
 
@@ -61,6 +73,12 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SELECT_RUN':
       return { ...state, selectedRun: action.runId };
+
+    case 'TOGGLE_STASH_DRAWER':
+      return { ...state, stashDrawerOpen: !state.stashDrawerOpen };
+
+    case 'DISMISS_DIRTY_WARNING':
+      return { ...state, dirtyWarning: null };
 
     case 'HANDLE_EVENT': {
       const event = action.event;
@@ -192,6 +210,36 @@ function reducer(state: AppState, action: Action): AppState {
 
         case 'Error':
           return { ...state, error: `${event.code}: ${event.message}` };
+
+        case 'StashList':
+          return { ...state, stashes: event.stashes };
+
+        case 'StashFiles': {
+          const stashFiles = new Map(state.stashFiles);
+          stashFiles.set(event.stash_index, event.files);
+          return { ...state, stashFiles };
+        }
+
+        case 'StashDiff': {
+          const stashDiffs = new Map(state.stashDiffs);
+          const key = event.stash_index.toString();
+          stashDiffs.set(key, { diff: event.diff, stat: event.stat });
+          return { ...state, stashDiffs };
+        }
+
+        case 'DirtyState':
+          return state;
+
+        case 'DirtyWarning':
+          return {
+            ...state,
+            dirtyWarning: {
+              status: event.status,
+              session_id: event.session_id,
+              prompt: event.prompt,
+              mode: event.mode,
+            },
+          };
 
         default:
           return state;

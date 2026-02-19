@@ -5,6 +5,8 @@ import { RunPanel } from './components/RunPanel.tsx';
 import { DecisionPanel } from './components/DecisionPanel.tsx';
 import { SessionSidebar } from './components/SessionSidebar.tsx';
 import { PostRunSummary } from './components/PostRunSummary.tsx';
+import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
+import { StashDrawer } from './components/StashDrawer.tsx';
 import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
 
 const inputStyle: React.CSSProperties = {
@@ -92,6 +94,7 @@ function AppContent() {
   useEffect(() => {
     if (state.activeSession && prevSessionRef.current !== state.activeSession) {
       send({ type: 'ListRuns', session_id: state.activeSession });
+      send({ type: 'ListStashes' });
     }
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
@@ -251,13 +254,71 @@ function AppContent() {
           color: '#666',
           display: 'flex',
           gap: 16,
+          alignItems: 'center',
         }}
       >
         <span>Phase 2 — Multi-Run + Git</span>
         {state.runState && (
           <span>State: {state.runState.type}</span>
         )}
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
+          style={{
+            marginLeft: 'auto',
+            backgroundColor: 'transparent',
+            border: 'none',
+            color: '#888',
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+            fontSize: 11,
+            padding: '2px 8px',
+          }}
+        >
+          Stashes{state.stashes.length > 0 ? ` (${state.stashes.length})` : ''}
+        </button>
       </div>
+
+      {/* Dirty Warning Modal */}
+      {state.dirtyWarning && (
+        <DirtyWarningModal
+          status={state.dirtyWarning.status}
+          onStashAndRun={() => {
+            const dw = state.dirtyWarning!;
+            send({
+              type: 'StashAndRun',
+              session_id: dw.session_id,
+              prompt: dw.prompt,
+              mode: dw.mode,
+              stash_message: 'auto-stash before AI run',
+            });
+            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+          }}
+          onRunAnyway={() => {
+            const dw = state.dirtyWarning!;
+            send({
+              type: 'StartRun',
+              session_id: dw.session_id,
+              prompt: dw.prompt,
+              mode: dw.mode,
+              skip_dirty_check: true,
+            });
+            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+          }}
+          onCancel={() => {
+            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+          }}
+        />
+      )}
+
+      {/* Stash Drawer */}
+      {state.stashDrawerOpen && (
+        <StashDrawer
+          onClose={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
+          onFetchStashes={() => send({ type: 'ListStashes' })}
+          onFetchFiles={(index) => send({ type: 'GetStashFiles', stash_index: index })}
+          onFetchDiff={(index, filePath) => send({ type: 'GetStashDiff', stash_index: index, file_path: filePath })}
+        />
+      )}
     </div>
   );
 }
