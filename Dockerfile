@@ -27,6 +27,15 @@ RUN cargo build --release -p terminal-daemon 2>/dev/null || true
 # Now copy real source
 COPY crates/ crates/
 
+# Remove dummy-compiled crate artifacts so Cargo recompiles from real sources
+RUN rm -rf target/release/.fingerprint/terminal-core-* \
+           target/release/.fingerprint/terminal-daemon-* \
+           target/release/deps/terminal_core-* \
+           target/release/deps/terminal_daemon-* \
+           target/release/deps/libterminal_core-* \
+           target/release/deps/libterminal_daemon-* \
+           target/release/terminal-daemon
+
 # Build release binary
 RUN cargo build --release -p terminal-daemon
 
