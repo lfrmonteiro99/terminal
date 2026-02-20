@@ -84,16 +84,48 @@ const selectStyle: React.CSSProperties = {
   outline: 'none',
 };
 
+const stageBtnBase: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 2,
+  border: 'none',
+  fontSize: 12,
+  fontFamily: 'monospace',
+  cursor: 'pointer',
+  flexShrink: 0,
+  padding: 0,
+  lineHeight: 1,
+};
+
+const stageAddBtnStyle: React.CSSProperties = {
+  ...stageBtnBase,
+  backgroundColor: 'rgba(78,205,196,0.12)',
+  color: '#4ecdc4',
+};
+
+const stageRemoveBtnStyle: React.CSSProperties = {
+  ...stageBtnBase,
+  backgroundColor: 'rgba(255,107,107,0.12)',
+  color: '#ff6b6b',
+};
+
 // --- Sub-components ---
 
 function FileRow({
   file,
   selected,
   onClick,
+  showStageButton,
+  onStageAction,
 }: {
   file: FileChange;
   selected: boolean;
   onClick: () => void;
+  showStageButton?: '+' | '-';
+  onStageAction?: () => void;
 }) {
   const [hover, setHover] = useState(false);
 
@@ -117,6 +149,18 @@ function FileRow({
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: '#e0e0e0' }}>
         {file.path}
       </span>
+      {showStageButton && onStageAction && (
+        <button
+          style={showStageButton === '+' ? stageAddBtnStyle : stageRemoveBtnStyle}
+          onClick={(e) => {
+            e.stopPropagation();
+            onStageAction();
+          }}
+          title={showStageButton === '+' ? 'Stage file' : 'Unstage file'}
+        >
+          {showStageButton === '+' ? '+' : '\u2212'}
+        </button>
+      )}
     </div>
   );
 }
@@ -166,6 +210,19 @@ export function ChangesView() {
       mode: changesContext.mode,
       run_id: changesContext.runId,
     });
+  };
+
+  // Handle staging/unstaging
+  const handleStage = (path: string) => {
+    send({ type: 'StageFile', path });
+    send({ type: 'GetChangedFiles', mode: 'working' });
+    send({ type: 'GetRepoStatus' });
+  };
+
+  const handleUnstage = (path: string) => {
+    send({ type: 'UnstageFile', path });
+    send({ type: 'GetChangedFiles', mode: 'working' });
+    send({ type: 'GetRepoStatus' });
   };
 
   // Context banner text
@@ -241,6 +298,8 @@ export function ChangesView() {
                     file={file}
                     selected={diffPanel.file === file.path}
                     onClick={() => handleFileClick(file)}
+                    showStageButton="-"
+                    onStageAction={() => handleUnstage(file.path)}
                   />
                 ))}
               </>
@@ -253,6 +312,8 @@ export function ChangesView() {
                 file={file}
                 selected={diffPanel.file === file.path}
                 onClick={() => handleFileClick(file)}
+                showStageButton="+"
+                onStageAction={() => handleStage(file.path)}
               />
             ))}
           </>
