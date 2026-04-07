@@ -9,7 +9,11 @@ export type SendFn = (cmd: AppCommand) => void;
  * Services use this instead of calling send() directly.
  */
 export class CommandBus {
-  constructor(private readonly send: SendFn) {}
+  private readonly send: SendFn;
+
+  constructor(send: SendFn) {
+    this.send = send;
+  }
 
   dispatch(cmd: AppCommand): void {
     this.send(cmd);

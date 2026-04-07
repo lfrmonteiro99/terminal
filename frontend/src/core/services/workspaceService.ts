@@ -4,7 +4,11 @@ import type { WorkspaceMode } from '../../domain/workspace/types';
 import type { CommandBus } from '../commands/commandBus';
 
 export class WorkspaceService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   listWorkspaces(): void {
     this.bus.dispatch({ type: 'ListWorkspaces' });

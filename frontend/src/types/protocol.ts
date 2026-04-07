@@ -1,6 +1,7 @@
 // --- Workspace / Pane types (M1-01) ---
 
 export type { WorkspaceSummary, Workspace, WorkspaceMode } from '../domain/workspace/types';
+import type { WorkspaceSummary, WorkspaceMode } from '../domain/workspace/types';
 export type { PaneLayout, PaneDefinition, PaneKind, SplitDirection } from '../domain/pane/types';
 
 // --- Terminal Session types (M4-01) ---

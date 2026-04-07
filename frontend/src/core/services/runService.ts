@@ -4,7 +4,11 @@ import type { RunMode } from '../../types/protocol';
 import type { CommandBus } from '../commands/commandBus';
 
 export class RunService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   startRun(params: { sessionId: string; prompt: string; mode: RunMode; skipDirtyCheck?: boolean }): void {
     this.bus.dispatch({

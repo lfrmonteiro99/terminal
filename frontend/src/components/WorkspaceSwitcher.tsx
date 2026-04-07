@@ -1,7 +1,7 @@
 // WorkspaceSwitcher + ModePicker (M3-02)
 
 import { useState } from 'react';
-import { useAppState, useAppDispatch } from '../context/AppContext';
+import { useAppState } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
 import { listModes } from '../modes/registry';
 import type { WorkspaceMode } from '../domain/workspace/types';

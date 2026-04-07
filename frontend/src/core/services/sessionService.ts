@@ -3,7 +3,11 @@
 import type { CommandBus } from '../commands/commandBus';
 
 export class SessionService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   startSession(projectRoot: string): void {
     this.bus.dispatch({ type: 'StartSession', project_root: projectRoot });

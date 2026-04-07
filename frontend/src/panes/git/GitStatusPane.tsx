@@ -1,6 +1,6 @@
 // GitStatusPane — repository status with stage/unstage/commit actions (M5-01, M5-03)
 
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useSend } from '../../context/SendContext';
 import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
@@ -125,7 +125,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
 }
 
 function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
-  const [msg, setMsg] = (require('react') as typeof import('react')).useState('');
+  const [msg, setMsg] = React.useState('');
 
   return (
     <div style={{ padding: '8px 12px', borderTop: '1px solid #333', display: 'flex', gap: 8 }}>

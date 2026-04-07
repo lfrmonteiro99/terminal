@@ -1,5 +1,7 @@
 // Workspace domain types — mirrors terminal-core/src/models.rs (M1-01)
 
+import type { PaneLayout } from '../pane/types';
+
 export type WorkspaceMode = 'AiSession' | 'Terminal' | 'Git' | 'Browser';
 
 export interface WorkspaceSummary {
