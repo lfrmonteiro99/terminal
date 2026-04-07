@@ -273,7 +273,7 @@ function AppContent() {
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               <ActivityBar />
               <SidebarContainer />
-              <div style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-surface)' }}>
+              <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
                 <PaneRenderer
                   layout={layout}
                   workspaceId={state.activeSession ?? ''}

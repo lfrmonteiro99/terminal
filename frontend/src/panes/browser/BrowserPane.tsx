@@ -89,13 +89,30 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
       </div>
 
       {/* Iframe */}
-      <iframe
-        ref={iframeRef}
-        src={url}
-        style={{ flex: 1, border: 'none', backgroundColor: '#fff' }}
-        title="Browser Pane"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-      />
+      {url === 'about:blank' ? (
+        <div style={{
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', gap: 8, color: 'var(--text-muted)', fontSize: 13,
+          fontFamily: 'var(--font-mono)', backgroundColor: 'var(--bg-surface)',
+        }}>
+          <span style={{ fontSize: 24 }}>🌐</span>
+          <span>Enter a URL above to browse</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Note: some sites block iframe embedding (e.g. Google)
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Try: localhost URLs, docs, or sites that allow embedding
+          </span>
+        </div>
+      ) : (
+        <iframe
+          ref={iframeRef}
+          src={url}
+          style={{ flex: 1, border: 'none', backgroundColor: '#fff' }}
+          title="Browser Pane"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        />
+      )}
     </div>
   );
 }
