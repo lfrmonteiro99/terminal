@@ -54,7 +54,10 @@ impl PtyManager {
         });
 
         let mut cmd = Command::new(&shell_path);
-        cmd.current_dir(&work_dir)
+        cmd.arg("-i") // Force interactive mode (shows prompt even with piped stdin)
+            .current_dir(&work_dir)
+            .env("TERM", "xterm-256color")
+            .env("PS1", "\\w $ ")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
