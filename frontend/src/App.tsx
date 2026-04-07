@@ -10,7 +10,8 @@ import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
 import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
-import type { PaneLayout } from './domain/pane/types';
+import type { PaneLayout, SplitDirection } from './domain/pane/types';
+import { splitPane, closePane, collectPanes } from './domain/pane/types';
 import type { AppEvent } from './types/protocol.ts';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
 
@@ -83,6 +84,28 @@ function AppContent() {
       }
     }
   }, [state.activeSession]);
+
+  // Layout mutation handlers
+  const handleSplitPane = useCallback((direction: SplitDirection) => {
+    if (!focusedPaneId) return;
+    const result = splitPane(layout, focusedPaneId, direction);
+    if (result) {
+      setLayout(result.layout);
+      setFocusedPaneId(result.newPaneId);
+    }
+  }, [layout, focusedPaneId]);
+
+  const handleClosePane = useCallback((paneId: string) => {
+    const result = closePane(layout, paneId);
+    if (result) {
+      setLayout(result);
+      // If we closed the focused pane, focus the first available pane
+      if (paneId === focusedPaneId) {
+        const panes = collectPanes(result);
+        setFocusedPaneId(panes.length > 0 ? panes[0].id : null);
+      }
+    }
+  }, [layout, focusedPaneId]);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -280,6 +303,14 @@ function AppContent() {
                   focusedPaneId={focusedPaneId}
                   onFocusPane={setFocusedPaneId}
                   onLayoutChange={setLayout}
+                  onSplitPane={(paneId, direction) => {
+                    const result = splitPane(layout, paneId, direction);
+                    if (result) {
+                      setLayout(result.layout);
+                      setFocusedPaneId(result.newPaneId);
+                    }
+                  }}
+                  onClosePane={handleClosePane}
                 />
               </div>
             </div>
@@ -334,6 +365,8 @@ function AppContent() {
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
         onLayoutChange={(newLayout) => { setLayout(newLayout); setCommandPaletteOpen(false); }}
+        onSplitH={() => { handleSplitPane('Horizontal'); setCommandPaletteOpen(false); }}
+        onSplitV={() => { handleSplitPane('Vertical'); setCommandPaletteOpen(false); }}
       />
     </SendProvider>
   );

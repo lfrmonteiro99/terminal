@@ -58,6 +58,8 @@ impl PtyManager {
             .current_dir(&work_dir)
             .env("TERM", "xterm-256color")
             .env("PS1", "\\w $ ")
+            .env("COLUMNS", "120")
+            .env("LINES", "40")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

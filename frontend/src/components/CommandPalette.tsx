@@ -17,6 +17,8 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onLayoutChange?: (layout: PaneLayout) => void;
+  onSplitH?: () => void;
+  onSplitV?: () => void;
 }
 
 const PRESETS: Record<string, PaneLayout> = {
@@ -44,7 +46,7 @@ const PRESETS: Record<string, PaneLayout> = {
   },
 };
 
-export function CommandPalette({ open, onClose, onLayoutChange }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -58,13 +60,13 @@ export function CommandPalette({ open, onClose, onLayoutChange }: CommandPalette
         id: 'pane:split-right',
         label: 'Split Pane Right',
         description: 'Split the focused pane horizontally',
-        action: () => { onClose(); },
+        action: () => { onSplitH?.(); },
       },
       {
         id: 'pane:split-down',
         label: 'Split Pane Down',
         description: 'Split the focused pane vertically',
-        action: () => { onClose(); },
+        action: () => { onSplitV?.(); },
       },
       {
         id: 'layout:terminal',

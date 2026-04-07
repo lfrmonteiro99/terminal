@@ -125,6 +125,8 @@ interface PaneRendererProps {
   focusedPaneId: string | null;
   onFocusPane: (id: string) => void;
   onLayoutChange?: (layout: PaneLayout) => void;
+  onSplitPane?: (paneId: string, direction: 'Horizontal' | 'Vertical') => void;
+  onClosePane?: (paneId: string) => void;
   depth?: number;
 }
 
@@ -136,6 +138,8 @@ export function PaneRenderer({
   focusedPaneId,
   onFocusPane,
   onLayoutChange,
+  onSplitPane,
+  onClosePane,
   depth = 0,
 }: PaneRendererProps) {
   if (isSingle(layout)) {
@@ -143,10 +147,9 @@ export function PaneRenderer({
     const Component = getPane(pane.kind);
     const focused = focusedPaneId === pane.id;
 
-    // No-op callbacks for Task 9/10 wiring
-    const handleSplitH = () => {};
-    const handleSplitV = () => {};
-    const handleClose = () => {};
+    const handleSplitH = () => onSplitPane?.(pane.id, 'Horizontal');
+    const handleSplitV = () => onSplitPane?.(pane.id, 'Vertical');
+    const handleClose = () => onClosePane?.(pane.id);
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden' }}>
@@ -199,6 +202,8 @@ export function PaneRenderer({
             focusedPaneId={focusedPaneId}
             onFocusPane={onFocusPane}
             onLayoutChange={onLayoutChange}
+            onSplitPane={onSplitPane}
+            onClosePane={onClosePane}
             depth={depth + 1}
           />
         }
@@ -209,6 +214,8 @@ export function PaneRenderer({
             focusedPaneId={focusedPaneId}
             onFocusPane={onFocusPane}
             onLayoutChange={onLayoutChange}
+            onSplitPane={onSplitPane}
+            onClosePane={onClosePane}
             depth={depth + 1}
           />
         }
