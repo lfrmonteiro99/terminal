@@ -55,26 +55,24 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
           }
         });
 
-        // Resize observer — use ref to avoid stale closure
+        // Resize observer — debounced to avoid spamming stty on drag
+        let resizeTimer: ReturnType<typeof setTimeout>;
         const ro = new ResizeObserver(() => {
           fitAddon.fit();
-          if (sessionIdRef.current) {
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-              send({
-                type: 'ResizeTerminal',
-                session_id: sessionIdRef.current,
-                cols: dims.cols,
-                rows: dims.rows,
-              });
-              // Pipe-based PTY workaround: tell bash the new dimensions
-              send({
-                type: 'WriteTerminalInput',
-                session_id: sessionIdRef.current,
-                data: `stty cols ${dims.cols} rows ${dims.rows} 2>/dev/null\n`,
-              });
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            if (sessionIdRef.current) {
+              const dims = fitAddon.proposeDimensions();
+              if (dims) {
+                send({
+                  type: 'ResizeTerminal',
+                  session_id: sessionIdRef.current,
+                  cols: dims.cols,
+                  rows: dims.rows,
+                });
+              }
             }
-          }
+          }, 150);
         });
         if (termRef.current) ro.observe(termRef.current);
 
@@ -125,17 +123,17 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
   // Send initial terminal dimensions once session is active and xterm is loaded
   useEffect(() => {
     if (sessionId && xtermLoaded && termRef.current) {
-      // Small delay to let xterm finish fitting
       const timer = setTimeout(() => {
         const term = xtermRef.current as any;
         if (term?.cols && term?.rows) {
+          // Set COLUMNS/LINES silently (clear the command from view after)
           send({
             type: 'WriteTerminalInput',
             session_id: sessionId,
-            data: `stty cols ${term.cols} rows ${term.rows} 2>/dev/null; export COLUMNS=${term.cols} LINES=${term.rows}\n`,
+            data: `export COLUMNS=${term.cols} LINES=${term.rows} 2>/dev/null\nclear\n`,
           });
         }
-      }, 500);
+      }, 800);
       return () => clearTimeout(timer);
     }
   }, [sessionId, xtermLoaded, send]);
