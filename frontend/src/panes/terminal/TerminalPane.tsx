@@ -16,6 +16,10 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
 
+  // Ref to hold current sessionId for use inside closures that can't track state
+  const sessionIdRef = useRef<string | null>(null);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
     let disposed = false;
@@ -42,22 +46,22 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
 
         xtermRef.current = terminal;
 
-        // Send user input to daemon PTY
+        // Send user input to daemon PTY — use ref to avoid stale closure
         terminal.onData((data: string) => {
-          if (sessionId) {
-            send({ type: 'WriteTerminalInput', session_id: sessionId, data });
+          if (sessionIdRef.current) {
+            send({ type: 'WriteTerminalInput', session_id: sessionIdRef.current, data });
           }
         });
 
-        // Resize observer
+        // Resize observer — use ref to avoid stale closure
         const ro = new ResizeObserver(() => {
           fitAddon.fit();
-          if (sessionId) {
+          if (sessionIdRef.current) {
             const dims = fitAddon.proposeDimensions();
             if (dims) {
               send({
                 type: 'ResizeTerminal',
-                session_id: sessionId,
+                session_id: sessionIdRef.current,
                 cols: dims.cols,
                 rows: dims.rows,
               });
@@ -86,6 +90,29 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
     setSessionState('creating');
     send({ type: 'CreateTerminalSession', workspace_id: workspaceId });
   }, [workspaceId, sessionState, send]);
+
+  // Listen for terminal events routed from App.tsx via CustomEvent bus
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const event = (e as CustomEvent).detail;
+
+      if (event.type === 'TerminalSessionCreated' && event.workspace_id === workspaceId && sessionState === 'creating') {
+        setSessionId(event.session_id);
+        setSessionState('active');
+      }
+
+      if (event.type === 'TerminalOutput' && event.session_id === sessionId) {
+        xtermRef.current?.write(event.data);
+      }
+
+      if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
+        setSessionState('lost');
+      }
+    };
+
+    window.addEventListener('terminal-event', handler);
+    return () => window.removeEventListener('terminal-event', handler);
+  }, [workspaceId, sessionId, sessionState]);
 
   const handleReconnect = () => {
     setSessionState('idle');

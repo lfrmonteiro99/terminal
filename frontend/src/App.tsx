@@ -130,6 +130,13 @@ function AppContent() {
   const handleEvent = useCallback(
     (event: AppEvent) => {
       dispatch({ type: 'HANDLE_EVENT', event });
+
+      // Route terminal events via CustomEvent (high-frequency, shouldn't go through React state)
+      if (event.type === 'TerminalSessionCreated' ||
+          event.type === 'TerminalOutput' ||
+          event.type === 'TerminalSessionClosed') {
+        window.dispatchEvent(new CustomEvent('terminal-event', { detail: event }));
+      }
     },
     [dispatch],
   );
