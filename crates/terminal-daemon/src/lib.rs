@@ -1,8 +1,11 @@
 pub mod claude_runner;
+pub mod daemon_context;
 pub mod dispatcher;
+pub mod dispatchers;
 pub mod git_engine;
 pub mod parser;
 pub mod persistence;
+pub mod pty;
 pub mod server;
 
 use crate::persistence::Persistence;

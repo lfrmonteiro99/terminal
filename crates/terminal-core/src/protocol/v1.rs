@@ -1,4 +1,9 @@
-use crate::models::*;
+use crate::models::{
+    CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
+    FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
+    RunMode, RunState, RunSummary, SessionSummary, StashEntry, TerminalSessionSummary,
+    WorkspaceMode, WorkspaceSummary,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -90,9 +95,81 @@ pub enum AppCommand {
         from: Option<String>,
     },
 
+    // Workspace (M1-01)
+    ListWorkspaces,
+    CreateWorkspace {
+        name: String,
+        root_path: PathBuf,
+        mode: WorkspaceMode,
+    },
+    CloseWorkspace {
+        workspace_id: Uuid,
+    },
+    ActivateWorkspace {
+        workspace_id: Uuid,
+    },
+
+    // PTY / Terminal (M4-01)
+    CreateTerminalSession {
+        workspace_id: Uuid,
+        shell: Option<String>,
+        cwd: Option<PathBuf>,
+        env: Option<Vec<(String, String)>>,
+    },
+    CloseTerminalSession {
+        session_id: Uuid,
+    },
+    WriteTerminalInput {
+        session_id: Uuid,
+        data: String,
+    },
+    ResizeTerminal {
+        session_id: Uuid,
+        cols: u16,
+        rows: u16,
+    },
+    ListTerminalSessions {
+        workspace_id: Uuid,
+    },
+
+    // PTY persistence (M4-06)
+    RestoreTerminalSession {
+        previous_session_id: Uuid,
+        workspace_id: Uuid,
+    },
+    ListRestoredTerminalSessions {
+        workspace_id: Uuid,
+    },
+
+    // Git extended (M5-03, M5-04)
+    PushBranch {
+        remote: Option<String>,
+        branch: Option<String>,
+    },
+    PullBranch {
+        remote: Option<String>,
+        branch: Option<String>,
+    },
+    FetchRemote {
+        remote: Option<String>,
+    },
+    GetMergeConflicts,
+    ResolveConflict {
+        file_path: PathBuf,
+        resolution: ConflictResolution,
+    },
+
     // System
     GetStatus,
     Ping,
+}
+
+/// How to resolve a merge conflict for a file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConflictResolution {
+    TakeOurs,
+    TakeTheirs,
+    Manual { content: String },
 }
 
 /// Events sent from daemon to client(s).
@@ -222,6 +299,78 @@ pub enum AppEvent {
         offset: u64,
         lines: Vec<String>,
         has_more: bool,
+    },
+
+    // Workspace events (M1-01)
+    WorkspaceList {
+        workspaces: Vec<WorkspaceSummary>,
+    },
+    WorkspaceCreated {
+        workspace: WorkspaceSummary,
+    },
+    WorkspaceClosed {
+        workspace_id: Uuid,
+    },
+    WorkspaceActivated {
+        workspace_id: Uuid,
+    },
+
+    // PTY events (M4-01)
+    TerminalSessionCreated {
+        session_id: Uuid,
+        workspace_id: Uuid,
+        shell: String,
+        cwd: PathBuf,
+    },
+    TerminalSessionClosed {
+        session_id: Uuid,
+    },
+    TerminalOutput {
+        session_id: Uuid,
+        data: String,
+    },
+    TerminalSessionList {
+        workspace_id: Uuid,
+        sessions: Vec<TerminalSessionSummary>,
+    },
+
+    // PTY persistence (M4-06)
+    TerminalSessionRestored {
+        previous_session_id: Uuid,
+        new_session_id: Uuid,
+        cwd: PathBuf,
+        workspace_id: Uuid,
+    },
+    TerminalSessionRestoreFailed {
+        previous_session_id: Uuid,
+        reason: String,
+    },
+    RestorableTerminalSessions {
+        workspace_id: Uuid,
+        sessions: Vec<RestorableTerminalSession>,
+    },
+
+    // Git extended (M5-04)
+    PushCompleted {
+        branch: String,
+        remote: String,
+    },
+    PullCompleted {
+        branch: String,
+        commits_applied: usize,
+    },
+    FetchCompleted {
+        remote: String,
+    },
+    GitOperationFailed {
+        operation: String,
+        reason: String,
+    },
+    MergeConflicts {
+        files: Vec<MergeConflictFile>,
+    },
+    ConflictResolved {
+        file_path: PathBuf,
     },
 
     // System
@@ -559,5 +708,78 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    // --- New protocol variant tests (M1-01) ---
+
+    #[test]
+    fn create_workspace_command_roundtrip() {
+        let cmd = AppCommand::CreateWorkspace {
+            name: "My Project".into(),
+            root_path: PathBuf::from("/home/user/project"),
+            mode: WorkspaceMode::AiSession,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::CreateWorkspace { name, mode, .. } => {
+                assert_eq!(name, "My Project");
+                assert_eq!(mode, WorkspaceMode::AiSession);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn workspace_created_event_roundtrip() {
+        let evt = AppEvent::WorkspaceCreated {
+            workspace: WorkspaceSummary {
+                id: Uuid::new_v4(),
+                name: "test".into(),
+                root_path: PathBuf::from("/tmp/test"),
+                mode: WorkspaceMode::Terminal,
+                linked_session_id: None,
+                last_active_at: chrono::Utc::now(),
+            },
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"WorkspaceCreated\""));
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn terminal_session_commands_roundtrip() {
+        let cmd = AppCommand::CreateTerminalSession {
+            workspace_id: Uuid::new_v4(),
+            shell: Some("/bin/zsh".into()),
+            cwd: Some(PathBuf::from("/home/user")),
+            env: None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"CreateTerminalSession\""));
+        let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn conflict_resolution_roundtrip() {
+        let take_ours = ConflictResolution::TakeOurs;
+        let json = serde_json::to_string(&take_ours).unwrap();
+        let _: ConflictResolution = serde_json::from_str(&json).unwrap();
+
+        let manual = ConflictResolution::Manual { content: "resolved content".into() };
+        let json2 = serde_json::to_string(&manual).unwrap();
+        let deser: ConflictResolution = serde_json::from_str(&json2).unwrap();
+        match deser {
+            ConflictResolution::Manual { content } => assert_eq!(content, "resolved content"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn push_branch_command_roundtrip() {
+        let cmd = AppCommand::PushBranch { remote: Some("origin".into()), branch: None };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"PushBranch\""));
+        let _: AppCommand = serde_json::from_str(&json).unwrap();
     }
 }

@@ -3,6 +3,129 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+// --- Workspace / Mode / Pane Domain Models (M1-01) ---
+
+/// The mode a workspace is operating in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum WorkspaceMode {
+    AiSession,
+    Terminal,
+    Git,
+    Browser,
+}
+
+/// A persistent workspace — root directory + active mode + pane layout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: Uuid,
+    pub name: String,
+    pub root_path: PathBuf,
+    pub mode: WorkspaceMode,
+    pub layout: PaneLayout,
+    pub linked_session_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub last_active_at: DateTime<Utc>,
+}
+
+/// Wire-safe summary of a workspace (no full layout).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub root_path: PathBuf,
+    pub mode: WorkspaceMode,
+    pub linked_session_id: Option<Uuid>,
+    pub last_active_at: DateTime<Utc>,
+}
+
+impl From<&Workspace> for WorkspaceSummary {
+    fn from(ws: &Workspace) -> Self {
+        WorkspaceSummary {
+            id: ws.id,
+            name: ws.name.clone(),
+            root_path: ws.root_path.clone(),
+            mode: ws.mode.clone(),
+            linked_session_id: ws.linked_session_id,
+            last_active_at: ws.last_active_at,
+        }
+    }
+}
+
+/// The type of content a pane renders.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PaneKind {
+    AiRun,
+    Terminal,
+    GitStatus,
+    GitHistory,
+    FileExplorer,
+    Browser,
+    Diff,
+}
+
+/// A single pane in the layout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneDefinition {
+    pub id: String,
+    pub kind: PaneKind,
+    /// Optional link to a resource (run_id, session_id, terminal_session_id, etc.)
+    pub resource_id: Option<Uuid>,
+}
+
+/// Split direction for a layout node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+/// Recursive pane layout tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PaneLayout {
+    Single(PaneDefinition),
+    Split {
+        direction: SplitDirection,
+        ratio: f32,
+        first: Box<PaneLayout>,
+        second: Box<PaneLayout>,
+    },
+}
+
+impl PaneLayout {
+    pub fn default_ai_session() -> Self {
+        PaneLayout::Single(PaneDefinition {
+            id: "ai-run".into(),
+            kind: PaneKind::AiRun,
+            resource_id: None,
+        })
+    }
+
+    pub fn default_terminal() -> Self {
+        PaneLayout::Single(PaneDefinition {
+            id: "terminal-0".into(),
+            kind: PaneKind::Terminal,
+            resource_id: None,
+        })
+    }
+
+    pub fn default_git() -> Self {
+        PaneLayout::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.4,
+            first: Box::new(PaneLayout::Single(PaneDefinition {
+                id: "git-status".into(),
+                kind: PaneKind::GitStatus,
+                resource_id: None,
+            })),
+            second: Box::new(PaneLayout::Single(PaneDefinition {
+                id: "git-history".into(),
+                kind: PaneKind::GitHistory,
+                resource_id: None,
+            })),
+        }
+    }
+}
+
 // --- Run State Machine ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -204,6 +327,48 @@ pub struct RepoStatusSnapshot {
     pub unstaged_count: usize,
 }
 
+// --- Terminal Session Types (M4-01, M4-06) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalSessionMeta {
+    pub session_id: Uuid,
+    pub workspace_id: Uuid,
+    pub pane_id: String,
+    pub shell_path: PathBuf,
+    pub cwd: PathBuf,
+    pub env_snapshot: Vec<(String, String)>,
+    pub created_at: DateTime<Utc>,
+    pub last_active_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalSessionSummary {
+    pub session_id: Uuid,
+    pub workspace_id: Uuid,
+    pub shell: String,
+    pub cwd: PathBuf,
+    pub created_at: DateTime<Utc>,
+    pub last_active_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestorableTerminalSession {
+    pub session_id: Uuid,
+    pub pane_id: String,
+    pub cwd: PathBuf,
+    pub last_active_at: DateTime<Utc>,
+}
+
+// --- Merge Conflict Types (M5-05) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeConflictFile {
+    pub path: PathBuf,
+    pub ours: String,
+    pub theirs: String,
+    pub base: Option<String>,
+}
+
 // --- Stash / Dirty State Types ---
 
 /// Git stash entry
@@ -373,5 +538,86 @@ mod tests {
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorktreeMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.branch_name, "llm/test");
+    }
+
+    #[test]
+    fn workspace_serialization_roundtrip() {
+        let ws = Workspace {
+            id: Uuid::new_v4(),
+            name: "My Project".into(),
+            root_path: PathBuf::from("/home/user/project"),
+            mode: WorkspaceMode::AiSession,
+            layout: PaneLayout::default_ai_session(),
+            linked_session_id: None,
+            created_at: chrono::Utc::now(),
+            last_active_at: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&ws).unwrap();
+        let deserialized: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "My Project");
+        assert_eq!(deserialized.mode, WorkspaceMode::AiSession);
+    }
+
+    #[test]
+    fn workspace_summary_from_workspace() {
+        let ws = Workspace {
+            id: Uuid::new_v4(),
+            name: "Test".into(),
+            root_path: PathBuf::from("/tmp/test"),
+            mode: WorkspaceMode::Terminal,
+            layout: PaneLayout::default_terminal(),
+            linked_session_id: None,
+            created_at: chrono::Utc::now(),
+            last_active_at: chrono::Utc::now(),
+        };
+        let summary = WorkspaceSummary::from(&ws);
+        assert_eq!(summary.name, ws.name);
+        assert_eq!(summary.mode, WorkspaceMode::Terminal);
+    }
+
+    #[test]
+    fn pane_layout_default_git() {
+        let layout = PaneLayout::default_git();
+        let json = serde_json::to_string(&layout).unwrap();
+        let deserialized: PaneLayout = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            PaneLayout::Split { direction, .. } => {
+                assert_eq!(direction, SplitDirection::Horizontal);
+            }
+            _ => panic!("expected Split layout"),
+        }
+    }
+
+    #[test]
+    fn terminal_session_meta_roundtrip() {
+        let meta = TerminalSessionMeta {
+            session_id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            pane_id: "terminal-0".into(),
+            shell_path: PathBuf::from("/bin/bash"),
+            cwd: PathBuf::from("/home/user"),
+            env_snapshot: vec![("TERM".into(), "xterm-256color".into())],
+            created_at: chrono::Utc::now(),
+            last_active_at: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: TerminalSessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.pane_id, "terminal-0");
+        assert_eq!(deserialized.env_snapshot.len(), 1);
+    }
+
+    #[test]
+    fn workspace_mode_all_variants_serialize() {
+        let modes = [
+            WorkspaceMode::AiSession,
+            WorkspaceMode::Terminal,
+            WorkspaceMode::Git,
+            WorkspaceMode::Browser,
+        ];
+        for mode in modes {
+            let json = serde_json::to_string(&mode).unwrap();
+            let deserialized: WorkspaceMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, mode);
+        }
     }
 }

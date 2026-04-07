@@ -2,7 +2,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use terminal_core::models::*;
+use terminal_core::models::{
+    FailPhase, Run, RunState, Session, TerminalSessionMeta, WorktreeMeta,
+};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -35,6 +37,7 @@ impl Persistence {
         fs::create_dir_all(base_dir.join("sessions"))?;
         fs::create_dir_all(base_dir.join("runs"))?;
         fs::create_dir_all(base_dir.join("worktrees"))?;
+        fs::create_dir_all(base_dir.join("terminals"))?;
         Ok(Self { base_dir })
     }
 
@@ -326,6 +329,95 @@ impl Persistence {
         );
 
         Ok(report)
+    }
+
+    // -----------------------------------------------------------------------
+    // Terminal Session Persistence (M4-06)
+    // -----------------------------------------------------------------------
+
+    pub fn save_terminal_meta(&self, meta: &TerminalSessionMeta) -> Result<()> {
+        let path = self
+            .base_dir
+            .join("terminals")
+            .join(format!("{}.json", meta.session_id));
+        let data = serde_json::to_string_pretty(meta)?;
+        Self::atomic_write(&path, data.as_bytes())
+    }
+
+    pub fn load_terminal_meta(&self, session_id: Uuid) -> Result<TerminalSessionMeta> {
+        let path = self
+            .base_dir
+            .join("terminals")
+            .join(format!("{}.json", session_id));
+        if !path.exists() {
+            return Err(PersistenceError::NotFound(format!(
+                "Terminal session {}",
+                session_id
+            )));
+        }
+        let data = fs::read_to_string(&path)?;
+        Ok(serde_json::from_str(&data)?)
+    }
+
+    pub fn list_terminal_metas(&self) -> Result<Vec<TerminalSessionMeta>> {
+        let dir = self.base_dir.join("terminals");
+        if !dir.exists() {
+            return Ok(vec![]);
+        }
+        let mut metas = Vec::new();
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<TerminalSessionMeta>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(meta) => metas.push(meta),
+                Err(e) => warn!("Failed to parse terminal meta {:?}: {}", path, e),
+            }
+        }
+        Ok(metas)
+    }
+
+    pub fn delete_terminal_meta(&self, session_id: Uuid) -> Result<()> {
+        let path = self
+            .base_dir
+            .join("terminals")
+            .join(format!("{}.json", session_id));
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Remove terminal metas older than `max_age_hours` hours.
+    pub fn cleanup_stale_terminal_metas(&self, max_age_hours: i64) -> Result<usize> {
+        let dir = self.base_dir.join("terminals");
+        if !dir.exists() {
+            return Ok(0);
+        }
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::hours(max_age_hours);
+        let mut cleaned = 0;
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(data) = fs::read_to_string(&path) {
+                if let Ok(meta) = serde_json::from_str::<TerminalSessionMeta>(&data) {
+                    if meta.last_active_at < cutoff {
+                        fs::remove_file(&path)?;
+                        cleaned += 1;
+                    }
+                }
+            }
+        }
+        Ok(cleaned)
     }
 }
 

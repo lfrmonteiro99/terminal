@@ -1,0 +1,52 @@
+// Run service — abstracts AI run protocol commands (M1-03)
+
+import type { RunMode } from '../../types/protocol';
+import type { CommandBus } from '../commands/commandBus';
+
+export class RunService {
+  constructor(private readonly bus: CommandBus) {}
+
+  startRun(params: { sessionId: string; prompt: string; mode: RunMode; skipDirtyCheck?: boolean }): void {
+    this.bus.dispatch({
+      type: 'StartRun',
+      session_id: params.sessionId,
+      prompt: params.prompt,
+      mode: params.mode,
+      skip_dirty_check: params.skipDirtyCheck,
+    });
+  }
+
+  cancelRun(runId: string, reason = 'User cancelled'): void {
+    this.bus.dispatch({ type: 'CancelRun', run_id: runId, reason });
+  }
+
+  respondToBlocking(runId: string, response: string): void {
+    this.bus.dispatch({ type: 'RespondToBlocking', run_id: runId, response });
+  }
+
+  getDiff(runId: string): void {
+    this.bus.dispatch({ type: 'GetDiff', run_id: runId });
+  }
+
+  revertRun(runId: string): void {
+    this.bus.dispatch({ type: 'RevertRun', run_id: runId });
+  }
+
+  mergeRun(runId: string): void {
+    this.bus.dispatch({ type: 'MergeRun', run_id: runId });
+  }
+
+  listRuns(sessionId: string): void {
+    this.bus.dispatch({ type: 'ListRuns', session_id: sessionId });
+  }
+
+  stashAndRun(params: { sessionId: string; prompt: string; mode: RunMode; stashMessage: string }): void {
+    this.bus.dispatch({
+      type: 'StashAndRun',
+      session_id: params.sessionId,
+      prompt: params.prompt,
+      mode: params.mode,
+      stash_message: params.stashMessage,
+    });
+  }
+}
