@@ -1,23 +1,12 @@
+import { FolderTree, GitCompareArrows, GitBranch } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
-
-const barStyle: React.CSSProperties = {
-  width: 40,
-  flexShrink: 0,
-  backgroundColor: '#0d1117',
-  borderRight: '1px solid #333',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  paddingTop: 8,
-  gap: 4,
-};
 
 type SidebarView = 'explorer' | 'changes' | 'git';
 
-const icons: { view: SidebarView; label: string; symbol: string }[] = [
-  { view: 'explorer', label: 'Explorer', symbol: '\u{1F4C1}' },
-  { view: 'changes', label: 'Changes', symbol: '\u{1F504}' },
-  { view: 'git', label: 'Git', symbol: '\u{2442}' },
+const icons: { view: SidebarView; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
+  { view: 'explorer', label: 'Explorer', Icon: FolderTree },
+  { view: 'changes', label: 'Changes', Icon: GitCompareArrows },
+  { view: 'git', label: 'Git', Icon: GitBranch },
 ];
 
 export function ActivityBar() {
@@ -26,8 +15,18 @@ export function ActivityBar() {
   const active = state.activeSidebarView;
 
   return (
-    <div style={barStyle}>
-      {icons.map(({ view, label, symbol }) => {
+    <div style={{
+      width: 'var(--activitybar-width)',
+      flexShrink: 0,
+      backgroundColor: 'var(--bg-base)',
+      borderRight: '1px solid var(--border-default)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      paddingTop: 8,
+      gap: 4,
+    }}>
+      {icons.map(({ view, label, Icon }) => {
         const isActive = active === view && !state.sidebarCollapsed;
         return (
           <div
@@ -47,15 +46,14 @@ export function ActivityBar() {
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              borderLeft: isActive ? '2px solid #4ecdc4' : '2px solid transparent',
-              color: isActive ? '#e0e0e0' : '#666',
-              fontSize: 16,
-              borderRadius: 2,
+              borderLeft: isActive ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+              transition: 'color 120ms ease',
             }}
-            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = '#aaa'; }}
-            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = '#666'; }}
+            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = '#8b8fa3'; }}
+            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = '#555a6e'; }}
           >
-            {symbol}
+            <Icon size={18} strokeWidth={1.5} />
           </div>
         );
       })}

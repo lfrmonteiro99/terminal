@@ -10,6 +10,7 @@ import { PostRunSummary } from './components/PostRunSummary.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import { DiffPanel } from './components/DiffPanel.tsx';
+import { StatusBar } from './components/StatusBar.tsx';
 import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
 
 const inputStyle: React.CSSProperties = {
@@ -47,8 +48,15 @@ function AppContent() {
     let cancelled = false;
 
     const detectAndConnect = async () => {
+      // Check for Tauri runtime (injected by the native shell, not present in browsers)
+      if (!(window as any).__TAURI_INTERNALS__) {
+        console.log('[Browser] Tauri runtime not detected, using standalone mode');
+        setDaemonUrl('ws://127.0.0.1:3000/ws');
+        setTauriMode(false);
+        return;
+      }
+
       try {
-        // Probe: if @tauri-apps/api/core resolves and invoke works, we're in Tauri
         const { invoke } = await import('@tauri-apps/api/core');
         console.log('[Tauri] API module resolved, polling for daemon...');
 
@@ -69,8 +77,7 @@ function AppContent() {
         console.error('[Tauri] Daemon did not become ready after 15 attempts');
         setTauriMode(true);
       } catch {
-        // Import failed or invoke bridge absent → browser mode
-        console.log('[Browser] Tauri API not available, using manual connection');
+        console.log('[Browser] Tauri API import failed, using standalone mode');
         setDaemonUrl('ws://127.0.0.1:3000/ws');
         setTauriMode(false);
       }
@@ -337,23 +344,8 @@ function AppContent() {
         </div>
       </div>
 
-      {/* Footer */}
-      <div
-        style={{
-          padding: '4px 16px',
-          borderTop: '1px solid #333',
-          fontSize: 11,
-          color: '#666',
-          display: 'flex',
-          gap: 16,
-          alignItems: 'center',
-        }}
-      >
-        <span>Phase 2 — Multi-Run + Git</span>
-        {state.runState && (
-          <span>State: {state.runState.type}</span>
-        )}
-      </div>
+      {/* Status Bar */}
+      <StatusBar />
 
       {/* Dirty Warning Modal */}
       {state.dirtyWarning && (
