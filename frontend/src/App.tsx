@@ -87,8 +87,10 @@ function AppContent() {
 
   // Layout mutation handlers
   const handleSplitPane = useCallback((direction: SplitDirection) => {
-    if (!focusedPaneId) return;
-    const result = splitPane(layout, focusedPaneId, direction);
+    // Use focused pane, or fall back to first pane in layout
+    const targetId = focusedPaneId ?? collectPanes(layout)[0]?.id;
+    if (!targetId) return;
+    const result = splitPane(layout, targetId, direction);
     if (result) {
       setLayout(result.layout);
       setFocusedPaneId(result.newPaneId);
@@ -364,7 +366,11 @@ function AppContent() {
       <CommandPalette
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
-        onLayoutChange={(newLayout) => { setLayout(newLayout); setCommandPaletteOpen(false); }}
+        onLayoutChange={(newLayout) => {
+          setLayout(newLayout);
+          setFocusedPaneId(collectPanes(newLayout)[0]?.id ?? null);
+          setCommandPaletteOpen(false);
+        }}
         onSplitH={() => { handleSplitPane('Horizontal'); setCommandPaletteOpen(false); }}
         onSplitV={() => { handleSplitPane('Vertical'); setCommandPaletteOpen(false); }}
       />
