@@ -13,6 +13,7 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
   const send = useSend();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>('idle');
+  const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
 
@@ -45,6 +46,7 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
         fitAddon.fit();
 
         xtermRef.current = terminal;
+        setXtermLoaded(true);
 
         // Send user input to daemon PTY — use ref to avoid stale closure
         terminal.onData((data: string) => {
@@ -157,7 +159,7 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
       )}
       {/* xterm.js mount point */}
       <div ref={termRef} style={{ flex: 1, overflow: 'hidden' }} />
-      {!xtermRef.current && sessionState !== 'lost' && (
+      {!xtermLoaded && sessionState !== 'lost' && (
         <div
           style={{
             flex: 1,
