@@ -1,6 +1,7 @@
 // TerminalPane — xterm.js terminal bound to a daemon PTY session (M4-02)
 // Registers itself in the pane registry.
 
+import 'xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
 import { useSend } from '../../context/SendContext';
 import { registerPane } from '../registry';
@@ -92,7 +93,7 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#0d1117' }}>
+    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#0d1117' }}>
       {sessionState === 'lost' && (
         <div
           style={{

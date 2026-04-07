@@ -8,6 +8,7 @@ import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
+import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout } from './domain/pane/types';
 import type { AppEvent } from './types/protocol.ts';
@@ -51,6 +52,9 @@ function AppContent() {
     Single: { id: 'terminal-0', kind: 'Terminal' as const, resource_id: null },
   }));
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
+
+  // Command palette state
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   // On mount: detect Tauri via dynamic import probe, then auto-connect or fall back
   useEffect(() => {
@@ -133,9 +137,14 @@ function AppContent() {
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
 
-  // Keyboard shortcuts for sidebar
+  // Keyboard shortcuts for sidebar and command palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen(prev => !prev);
+        return;
+      }
       if (e.ctrlKey && e.key === 'b') {
         e.preventDefault();
         dispatch({ type: 'TOGGLE_SIDEBAR' });
@@ -282,6 +291,12 @@ function AppContent() {
           />
         )}
       </div>
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        onLayoutChange={(newLayout) => { setLayout(newLayout); setCommandPaletteOpen(false); }}
+      />
     </SendProvider>
   );
 }

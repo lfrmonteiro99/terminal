@@ -1,6 +1,6 @@
 // AiRunPane — wraps the existing RunPanel + DecisionPanel as a pane (M2-04)
 
-import { useCallback, useRef, useState } from 'react';
+import { useState } from 'react';
 import { RunPanel } from '../../components/RunPanel';
 import { DecisionPanel } from '../../components/DecisionPanel';
 import { PostRunSummary } from '../../components/PostRunSummary';
