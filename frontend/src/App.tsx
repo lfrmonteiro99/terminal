@@ -12,6 +12,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout } from './domain/pane/types';
 import type { AppEvent } from './types/protocol.ts';
+import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -52,6 +53,32 @@ function AppContent() {
     Single: { id: 'terminal-0', kind: 'Terminal' as const, resource_id: null },
   }));
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
+
+  // Persist layout on every change
+  useEffect(() => {
+    if (state.activeSession) {
+      saveWorkspaceLayout({
+        id: state.activeSession,
+        name: 'default',
+        rootPath: projectRoot,
+        mode: 'Terminal',
+        layout,
+        focusedPaneId,
+        savedAt: new Date().toISOString(),
+      });
+    }
+  }, [layout, focusedPaneId, state.activeSession, projectRoot]);
+
+  // Restore layout when a session becomes active
+  useEffect(() => {
+    if (state.activeSession) {
+      const saved = loadWorkspaceLayout(state.activeSession);
+      if (saved) {
+        setLayout(saved.layout);
+        if (saved.focusedPaneId) setFocusedPaneId(saved.focusedPaneId);
+      }
+    }
+  }, [state.activeSession]);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
