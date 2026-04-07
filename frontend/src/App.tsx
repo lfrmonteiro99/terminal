@@ -17,6 +17,10 @@ import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persist
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
 import './panes/ai-run/AiRunPane';
+import './panes/git/GitStatusPane';
+import './panes/git/GitHistoryPane';
+import './panes/git/MergeConflictPane';
+import './panes/browser/BrowserPane';
 import './modes/definitions';
 
 const inputStyle: React.CSSProperties = {
