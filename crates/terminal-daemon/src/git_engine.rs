@@ -616,6 +616,92 @@ pub async fn working_dir_file_diff(cwd: &Path, file_path: &Path) -> Result<Strin
 }
 
 // ---------------------------------------------------------------------------
+// Extended git operations (M5-03, M5-04, M5-05)
+// ---------------------------------------------------------------------------
+
+/// Push a branch to a remote. Returns the branch name that was pushed.
+pub async fn push_branch(cwd: &Path, remote: &str, branch: &str) -> Result<String> {
+    let output = run_git(cwd, &["push", remote, branch]).await?;
+    let actual_branch = current_branch(cwd).await?.unwrap_or_else(|| branch.to_string());
+    Ok(actual_branch)
+}
+
+/// Pull from a remote (git pull remote branch). Returns approximate commit count applied.
+pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Result<usize> {
+    let before_head = head_oid(cwd).await.unwrap_or_default();
+    if let Some(b) = branch {
+        run_git(cwd, &["pull", remote, b]).await?;
+    } else {
+        run_git(cwd, &["pull", remote]).await?;
+    }
+    let after_head = head_oid(cwd).await.unwrap_or_default();
+    if before_head == after_head {
+        return Ok(0);
+    }
+    let count_str = run_git(cwd, &["rev-list", "--count", &format!("{}..{}", before_head, after_head)])
+        .await
+        .unwrap_or_else(|_| "0".into());
+    Ok(count_str.trim().parse().unwrap_or(0))
+}
+
+/// Fetch a remote.
+pub async fn fetch_remote(cwd: &Path, remote: &str) -> Result<()> {
+    run_git(cwd, &["fetch", remote]).await?;
+    Ok(())
+}
+
+/// List files currently in a merge conflict state.
+pub async fn list_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictFile>> {
+    let output = run_git(cwd, &["diff", "--name-only", "--diff-filter=U"]).await?;
+    let mut conflicts = Vec::new();
+    for line in output.lines() {
+        let path = std::path::PathBuf::from(line.trim());
+        let content = std::fs::read_to_string(cwd.join(&path)).unwrap_or_default();
+        // Parse ours / theirs from conflict markers
+        let (ours, theirs) = parse_conflict_sections(&content);
+        conflicts.push(MergeConflictFile { path, ours, theirs, base: None });
+    }
+    Ok(conflicts)
+}
+
+fn parse_conflict_sections(content: &str) -> (String, String) {
+    let mut ours = Vec::new();
+    let mut theirs = Vec::new();
+    let mut in_ours = false;
+    let mut in_theirs = false;
+    for line in content.lines() {
+        if line.starts_with("<<<<<<<") { in_ours = true; continue; }
+        if line.starts_with("=======") { in_ours = false; in_theirs = true; continue; }
+        if line.starts_with(">>>>>>>") { in_theirs = false; continue; }
+        if in_ours { ours.push(line); }
+        else if in_theirs { theirs.push(line); }
+    }
+    (ours.join("\n"), theirs.join("\n"))
+}
+
+/// Resolve a conflict for a file and stage it.
+pub async fn resolve_conflict(
+    cwd: &Path,
+    file_path: &std::path::Path,
+    resolution: &terminal_core::protocol::v1::ConflictResolution,
+) -> Result<()> {
+    let full_path = cwd.join(file_path);
+    match resolution {
+        terminal_core::protocol::v1::ConflictResolution::TakeOurs => {
+            run_git(cwd, &["checkout", "--ours", &file_path.to_string_lossy()]).await?;
+        }
+        terminal_core::protocol::v1::ConflictResolution::TakeTheirs => {
+            run_git(cwd, &["checkout", "--theirs", &file_path.to_string_lossy()]).await?;
+        }
+        terminal_core::protocol::v1::ConflictResolution::Manual { content } => {
+            std::fs::write(&full_path, content).map_err(|e| GitError::CommandFailed(e.to_string()))?;
+        }
+    }
+    run_git(cwd, &["add", &file_path.to_string_lossy()]).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

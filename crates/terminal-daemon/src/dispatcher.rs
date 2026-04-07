@@ -1,32 +1,20 @@
-use crate::claude_runner::{output_file_path, ClaudeRunner, RunnerEvent};
+use crate::claude_runner::{output_file_path, RunnerEvent};
+use crate::daemon_context::{ActiveRun, DaemonContext};
 use crate::persistence::Persistence;
+use crate::pty::PtyManager;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use terminal_core::config::DaemonConfig;
 use terminal_core::models::*;
 use terminal_core::protocol::v1::*;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Internal state for tracking active runs.
-struct ActiveRun {
-    #[allow(dead_code)]
-    run: Run,
-    cancel_tx: mpsc::Sender<String>,
-    stdin_tx: mpsc::Sender<String>,
-}
-
 pub struct Dispatcher {
-    config: DaemonConfig,
-    event_tx: broadcast::Sender<String>,
-    runner: ClaudeRunner,
-    active_runs: Arc<Mutex<HashMap<Uuid, ActiveRun>>>,
-    sessions: Arc<Mutex<HashMap<Uuid, Session>>>,
-    persistence: Arc<Persistence>,
-    /// Tracks which project roots have an active run (project_root -> run_id).
-    concurrency: Arc<Mutex<HashMap<PathBuf, Uuid>>>,
+    context: Arc<DaemonContext>,
+    pty_manager: Arc<PtyManager>,
 }
 
 impl Dispatcher {
@@ -35,22 +23,14 @@ impl Dispatcher {
         event_tx: broadcast::Sender<String>,
         persistence: Arc<Persistence>,
     ) -> Self {
-        let runner = ClaudeRunner::new(config.clone());
-        Self {
-            config,
-            event_tx,
-            runner,
-            active_runs: Arc::new(Mutex::new(HashMap::new())),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
-            persistence,
-            concurrency: Arc::new(Mutex::new(HashMap::new())),
-        }
+        let context = Arc::new(DaemonContext::new(config, event_tx.clone(), persistence));
+        let pty_manager = Arc::new(PtyManager::new(event_tx));
+        Self { context, pty_manager }
     }
 
     /// Broadcast an event to all connected clients.
     fn broadcast(&self, event: &AppEvent) {
-        let json = serde_json::to_string(event).unwrap();
-        let _ = self.event_tx.send(json);
+        self.context.broadcast(event);
     }
 
     /// Handle a command and send response to the requesting client.
@@ -61,8 +41,8 @@ impl Dispatcher {
             }
 
             AppCommand::GetStatus => {
-                let runs = self.active_runs.lock().await;
-                let sessions = self.sessions.lock().await;
+                let runs = self.context.active_runs.lock().await;
+                let sessions = self.context.sessions.lock().await;
                 let _ = reply_tx
                     .send(AppEvent::StatusUpdate {
                         active_runs: runs.len(),
@@ -104,7 +84,7 @@ impl Dispatcher {
                 };
 
                 // Persist session
-                if let Err(e) = self.persistence.save_session(&session) {
+                if let Err(e) = self.context.persistence.save_session(&session) {
                     warn!("Failed to persist session {}: {}", session_id, e);
                 }
 
@@ -116,20 +96,20 @@ impl Dispatcher {
                     started_at: session.started_at,
                 };
 
-                self.sessions.lock().await.insert(session_id, session);
+                self.context.sessions.lock().await.insert(session_id, session);
                 let _ = reply_tx
                     .send(AppEvent::SessionStarted { session: summary })
                     .await;
             }
 
             AppCommand::EndSession { session_id } => {
-                let mut sessions = self.sessions.lock().await;
+                let mut sessions = self.context.sessions.lock().await;
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.ended_at = Some(chrono::Utc::now());
                     session.last_modified = chrono::Utc::now();
 
                     // Persist updated session
-                    if let Err(e) = self.persistence.save_session(session) {
+                    if let Err(e) = self.context.persistence.save_session(session) {
                         warn!("Failed to persist ended session {}: {}", session_id, e);
                     }
 
@@ -147,7 +127,7 @@ impl Dispatcher {
             }
 
             AppCommand::ListSessions => {
-                let sessions = self.sessions.lock().await;
+                let sessions = self.context.sessions.lock().await;
                 let summaries: Vec<SessionSummary> = sessions
                     .values()
                     .map(|s| SessionSummary {
@@ -166,18 +146,18 @@ impl Dispatcher {
             }
 
             AppCommand::ListRuns { session_id } => {
-                let sessions = self.sessions.lock().await;
+                let sessions = self.context.sessions.lock().await;
                 match sessions.get(&session_id) {
                     Some(_session) => {
                         // Load persisted runs
-                        let persisted_runs = self.persistence.list_runs_for_session(session_id)
+                        let persisted_runs = self.context.persistence.list_runs_for_session(session_id)
                             .unwrap_or_else(|e| {
                                 warn!("Failed to load persisted runs for session {}: {}", session_id, e);
                                 vec![]
                             });
 
                         // Get active runs (these have more current state)
-                        let active_runs = self.active_runs.lock().await;
+                        let active_runs = self.context.active_runs.lock().await;
 
                         // Build summaries: active runs override persisted ones
                         let mut summaries_map: HashMap<Uuid, RunSummary> = HashMap::new();
@@ -232,7 +212,7 @@ impl Dispatcher {
             }
 
             AppCommand::GetRunStatus { run_id } => {
-                let runs = self.active_runs.lock().await;
+                let runs = self.context.active_runs.lock().await;
                 match runs.get(&run_id) {
                     Some(active) => {
                         let _ = reply_tx
@@ -263,7 +243,7 @@ impl Dispatcher {
             }
 
             AppCommand::CancelRun { run_id, reason } => {
-                let runs = self.active_runs.lock().await;
+                let runs = self.context.active_runs.lock().await;
                 if let Some(active) = runs.get(&run_id) {
                     let _ = active.cancel_tx.send(reason).await;
                 } else {
@@ -277,7 +257,7 @@ impl Dispatcher {
             }
 
             AppCommand::RespondToBlocking { run_id, response } => {
-                let runs = self.active_runs.lock().await;
+                let runs = self.context.active_runs.lock().await;
                 if let Some(active) = runs.get(&run_id) {
                     let _ = active.stdin_tx.send(response).await;
                     self.broadcast(&AppEvent::RunStateChanged {
@@ -299,7 +279,7 @@ impl Dispatcher {
                 offset,
                 limit,
             } => {
-                let output_path = output_file_path(&self.config.data_dir, &run_id);
+                let output_path = output_file_path(&self.context.config.data_dir, &run_id);
                 match tokio::fs::read_to_string(&output_path).await {
                     Ok(content) => {
                         let all_lines: Vec<String> =
@@ -337,7 +317,7 @@ impl Dispatcher {
 
             AppCommand::GetDiff { run_id } => {
                 // Load worktree metadata for this run
-                match self.persistence.load_worktree_meta(run_id) {
+                match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(meta) => {
                         // Compute diff_stat and diff_full from worktree
                         let wt_head = match crate::git_engine::head_oid(&meta.worktree_path).await {
@@ -404,7 +384,7 @@ impl Dispatcher {
 
             AppCommand::RevertRun { run_id } => {
                 // Load worktree metadata
-                let meta = match self.persistence.load_worktree_meta(run_id) {
+                let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
                         let _ = reply_tx
@@ -445,7 +425,7 @@ impl Dispatcher {
                 }
 
                 // Delete worktree metadata
-                if let Err(e) = self.persistence.delete_worktree_meta(run_id) {
+                if let Err(e) = self.context.persistence.delete_worktree_meta(run_id) {
                     warn!("Failed to delete worktree metadata for run {}: {}", run_id, e);
                 }
 
@@ -458,7 +438,7 @@ impl Dispatcher {
 
             AppCommand::MergeRun { run_id } => {
                 // Load worktree metadata
-                let meta = match self.persistence.load_worktree_meta(run_id) {
+                let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
                         let _ = reply_tx
@@ -517,7 +497,7 @@ impl Dispatcher {
                         if let Err(e) = crate::git_engine::branch_delete(&project_root, &meta.branch_name, true).await {
                             warn!("Failed to delete branch after merge for run {}: {}", run_id, e);
                         }
-                        if let Err(e) = self.persistence.delete_worktree_meta(run_id) {
+                        if let Err(e) = self.context.persistence.delete_worktree_meta(run_id) {
                             warn!("Failed to delete worktree metadata after merge for run {}: {}", run_id, e);
                         }
 
@@ -553,7 +533,7 @@ impl Dispatcher {
             } => {
                 // Look up project_root from session
                 let project_root = {
-                    let sessions = self.sessions.lock().await;
+                    let sessions = self.context.sessions.lock().await;
                     match sessions.get(&session_id) {
                         Some(s) => s.project_root.clone(),
                         None => {
@@ -765,7 +745,7 @@ impl Dispatcher {
                             Err(e) => Err(e.to_string()),
                         }
                     } else if let Some(rid) = run_id {
-                        match self.persistence.load_worktree_meta(rid) {
+                        match self.context.persistence.load_worktree_meta(rid) {
                             Ok(meta) => {
                                 crate::git_engine::changed_files(&root, &meta.base_head, "HEAD")
                                     .await
@@ -810,7 +790,7 @@ impl Dispatcher {
                             .await
                             .map_err(|e| e.to_string())
                     } else if let Some(rid) = run_id {
-                        match self.persistence.load_worktree_meta(rid) {
+                        match self.context.persistence.load_worktree_meta(rid) {
                             Ok(meta) => crate::git_engine::diff_full(&root, &meta.base_head, "HEAD")
                                 .await
                                 .map_err(|e| e.to_string()),
@@ -968,6 +948,100 @@ impl Dispatcher {
                 }
             }
 
+            // --- Workspace commands (M1-01, M1-04) ---
+            AppCommand::ListWorkspaces
+            | AppCommand::CreateWorkspace { .. }
+            | AppCommand::CloseWorkspace { .. }
+            | AppCommand::ActivateWorkspace { .. } => {
+                let dispatcher = crate::dispatchers::workspace_dispatcher::WorkspaceDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
+            }
+
+            // --- PTY commands (M4-01) ---
+            AppCommand::CreateTerminalSession { workspace_id, shell, cwd, env } => {
+                let pane_id = format!("terminal-{}", workspace_id);
+                let result = self.pty_manager
+                    .create_session(workspace_id, pane_id, shell, cwd, env)
+                    .await;
+                match result {
+                    Ok(_session_id) => {}
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "PTY_CREATE_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            AppCommand::CloseTerminalSession { session_id } => {
+                if let Err(e) = self.pty_manager.close_session(session_id).await {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "PTY_CLOSE_FAILED".into(),
+                            message: e,
+                        })
+                        .await;
+                }
+            }
+
+            AppCommand::WriteTerminalInput { session_id, data } => {
+                if let Err(e) = self.pty_manager.write_input(session_id, &data).await {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "PTY_WRITE_FAILED".into(),
+                            message: e,
+                        })
+                        .await;
+                }
+            }
+
+            AppCommand::ResizeTerminal { session_id, cols, rows } => {
+                self.pty_manager.resize(session_id, cols, rows).await;
+            }
+
+            AppCommand::ListTerminalSessions { workspace_id } => {
+                let sessions = self.pty_manager.list_sessions(workspace_id).await;
+                let _ = reply_tx
+                    .send(AppEvent::TerminalSessionList { workspace_id, sessions })
+                    .await;
+            }
+
+            AppCommand::RestoreTerminalSession { previous_session_id, workspace_id } => {
+                // Placeholder: PTY sessions can't persist across daemon restarts in pipe mode.
+                // Full persistence handled in M4-06.
+                let _ = reply_tx
+                    .send(AppEvent::TerminalSessionRestoreFailed {
+                        previous_session_id,
+                        reason: "Session restoration not yet supported in pipe mode".into(),
+                    })
+                    .await;
+            }
+
+            AppCommand::ListRestoredTerminalSessions { workspace_id } => {
+                let _ = reply_tx
+                    .send(AppEvent::RestorableTerminalSessions {
+                        workspace_id,
+                        sessions: vec![],
+                    })
+                    .await;
+            }
+
+            // --- Extended git commands (M5-03, M5-04, M5-05) ---
+            AppCommand::PushBranch { .. }
+            | AppCommand::PullBranch { .. }
+            | AppCommand::FetchRemote { .. }
+            | AppCommand::GetMergeConflicts
+            | AppCommand::ResolveConflict { .. } => {
+                let dispatcher = crate::dispatchers::git_dispatcher::GitDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
+            }
         }
     }
 
@@ -981,7 +1055,7 @@ impl Dispatcher {
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
         // Check session exists and has no active run
-        let mut sessions = self.sessions.lock().await;
+        let mut sessions = self.context.sessions.lock().await;
         let session = match sessions.get_mut(&session_id) {
             Some(s) => s,
             None => {
@@ -1006,7 +1080,7 @@ impl Dispatcher {
         }
 
         let run_id = Uuid::new_v4();
-        let output_path = output_file_path(&self.config.data_dir, &run_id);
+        let output_path = output_file_path(&self.context.config.data_dir, &run_id);
 
         // Create output directory
         if let Some(parent) = output_path.parent() {
@@ -1033,7 +1107,7 @@ impl Dispatcher {
         if is_git {
             // Check concurrency: lock -> check -> insert -> unlock (no await gap)
             {
-                let mut conc = self.concurrency.lock().await;
+                let mut conc = self.context.concurrency.lock().await;
                 if let Some(existing_run_id) = conc.get(&project_root) {
                     let _ = reply_tx
                         .send(AppEvent::Error {
@@ -1053,7 +1127,7 @@ impl Dispatcher {
             // Guard repo state
             if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
                 // Cleanup concurrency
-                self.concurrency.lock().await.remove(&project_root);
+                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "GIT_STATE_ERROR".into(),
@@ -1074,7 +1148,7 @@ impl Dispatcher {
 
                 if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
                     // Release concurrency lock before returning
-                    self.concurrency.lock().await.remove(&project_root);
+                    self.context.concurrency.lock().await.remove(&project_root);
                     // Send DirtyWarning event -- frontend will show modal
                     let _ = reply_tx
                         .send(AppEvent::DirtyWarning {
@@ -1092,7 +1166,7 @@ impl Dispatcher {
             match crate::git_engine::head_oid(&project_root).await {
                 Ok(oid) => base_head = oid,
                 Err(e) => {
-                    self.concurrency.lock().await.remove(&project_root);
+                    self.context.concurrency.lock().await.remove(&project_root);
                     let _ = reply_tx
                         .send(AppEvent::Error {
                             code: "GIT_ERROR".into(),
@@ -1111,7 +1185,7 @@ impl Dispatcher {
 
             // Create .terminal-worktrees/ dir
             if let Err(e) = tokio::fs::create_dir_all(wt_path.parent().unwrap()).await {
-                self.concurrency.lock().await.remove(&project_root);
+                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "IO_ERROR".into(),
@@ -1123,7 +1197,7 @@ impl Dispatcher {
 
             // Create worktree
             if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
-                self.concurrency.lock().await.remove(&project_root);
+                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "GIT_ERROR".into(),
@@ -1141,7 +1215,7 @@ impl Dispatcher {
                 merge_base: base_head.clone(),
                 last_modified: chrono::Utc::now(),
             };
-            if let Err(e) = self.persistence.save_worktree_meta(run_id, &meta) {
+            if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
                 warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
             }
 
@@ -1168,7 +1242,7 @@ impl Dispatcher {
         };
 
         // Persist run (state: Preparing)
-        if let Err(e) = self.persistence.save_run(&run) {
+        if let Err(e) = self.context.persistence.save_run(&run) {
             warn!("Failed to persist run {}: {}", run_id, e);
         }
 
@@ -1184,7 +1258,7 @@ impl Dispatcher {
         drop(sessions); // Release lock before spawning
 
         // Spawn claude process in actual_working_dir (worktree if git)
-        match self.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
+        match self.context.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
             Ok((mut event_rx, stdin_tx, mut child)) => {
                 let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
 
@@ -1193,7 +1267,7 @@ impl Dispatcher {
                     cancel_tx,
                     stdin_tx: stdin_tx.clone(),
                 };
-                self.active_runs.lock().await.insert(run_id, active_run);
+                self.context.active_runs.lock().await.insert(run_id, active_run);
 
                 // Transition to Running
                 self.broadcast(&AppEvent::RunStateChanged {
@@ -1202,12 +1276,12 @@ impl Dispatcher {
                 });
 
                 // Supervisor task
-                let event_tx = self.event_tx.clone();
-                let active_runs = self.active_runs.clone();
-                let sessions = self.sessions.clone();
-                let timeout_secs = self.config.run_timeout_secs;
-                let persistence = self.persistence.clone();
-                let concurrency = self.concurrency.clone();
+                let event_tx = self.context.event_tx.clone();
+                let active_runs = self.context.active_runs.clone();
+                let sessions = self.context.sessions.clone();
+                let timeout_secs = self.context.config.run_timeout_secs;
+                let persistence = self.context.persistence.clone();
+                let concurrency = self.context.concurrency.clone();
                 let project_root_clone = project_root.clone();
                 let base_head_clone = base_head.clone();
                 let branch_name_clone = branch_name.clone();
@@ -1425,13 +1499,13 @@ impl Dispatcher {
             }
             Err(e) => {
                 // Cleanup session
-                let mut sessions = self.sessions.lock().await;
+                let mut sessions = self.context.sessions.lock().await;
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.active_run = None;
                 }
                 // Cleanup concurrency and worktree on spawn failure
                 if is_git {
-                    self.concurrency.lock().await.remove(&project_root);
+                    self.context.concurrency.lock().await.remove(&project_root);
                     if let Some(ref wt_path) = worktree_path {
                         if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
                             warn!("Failed to cleanup worktree on spawn failure: {}", e);
@@ -1456,19 +1530,19 @@ impl Dispatcher {
     /// Tries persistence first (load_run -> load_session), falls back to in-memory sessions.
     async fn find_project_root(&self, run_id: Uuid) -> Option<PathBuf> {
         // Try persistence: load run -> get session_id -> load session -> project_root
-        if let Ok(run) = self.persistence.load_run(run_id) {
-            if let Ok(session) = self.persistence.load_session(run.session_id) {
+        if let Ok(run) = self.context.persistence.load_run(run_id) {
+            if let Ok(session) = self.context.persistence.load_session(run.session_id) {
                 return Some(session.project_root);
             }
             // Fall back to in-memory sessions with the session_id from persisted run
-            let sessions = self.sessions.lock().await;
+            let sessions = self.context.sessions.lock().await;
             if let Some(session) = sessions.get(&run.session_id) {
                 return Some(session.project_root.clone());
             }
         }
 
         // Last resort: scan in-memory sessions for a run matching run_id
-        let sessions = self.sessions.lock().await;
+        let sessions = self.context.sessions.lock().await;
         for session in sessions.values() {
             if session.runs.contains(&run_id) {
                 return Some(session.project_root.clone());
@@ -1485,7 +1559,7 @@ impl Dispatcher {
     /// Returns the project_root from the most recently started session,
     /// or None if there are no sessions.
     async fn find_active_project_root(&self) -> Option<PathBuf> {
-        let sessions = self.sessions.lock().await;
+        let sessions = self.context.sessions.lock().await;
         // Prefer the most recently started session
         sessions
             .values()

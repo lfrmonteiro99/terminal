@@ -1,3 +1,40 @@
+// --- Workspace / Pane types (M1-01) ---
+
+export type { WorkspaceSummary, Workspace, WorkspaceMode } from '../domain/workspace/types';
+export type { PaneLayout, PaneDefinition, PaneKind, SplitDirection } from '../domain/pane/types';
+
+// --- Terminal Session types (M4-01) ---
+
+export interface TerminalSessionSummary {
+  session_id: string;
+  workspace_id: string;
+  shell: string;
+  cwd: string;
+  created_at: string;
+  last_active_at: string;
+}
+
+export interface RestorableTerminalSession {
+  session_id: string;
+  pane_id: string;
+  cwd: string;
+  last_active_at: string;
+}
+
+// --- Merge Conflict types (M5-05) ---
+
+export interface MergeConflictFile {
+  path: string;
+  ours: string;
+  theirs: string;
+  base: string | null;
+}
+
+export type ConflictResolution =
+  | { type: 'TakeOurs' }
+  | { type: 'TakeTheirs' }
+  | { type: 'Manual'; content: string };
+
 // --- Models ---
 
 export type RunState =
@@ -132,7 +169,26 @@ export type AppCommand =
   | { type: 'UnstageFile'; path: string }
   | { type: 'CreateCommit'; message: string }
   | { type: 'CheckoutBranch'; name: string }
-  | { type: 'CreateBranch'; name: string; from?: string };
+  | { type: 'CreateBranch'; name: string; from?: string }
+  // Workspace commands (M1-01)
+  | { type: 'ListWorkspaces' }
+  | { type: 'CreateWorkspace'; name: string; root_path: string; mode: WorkspaceMode }
+  | { type: 'CloseWorkspace'; workspace_id: string }
+  | { type: 'ActivateWorkspace'; workspace_id: string }
+  // PTY commands (M4-01)
+  | { type: 'CreateTerminalSession'; workspace_id: string; shell?: string; cwd?: string; env?: [string, string][] }
+  | { type: 'CloseTerminalSession'; session_id: string }
+  | { type: 'WriteTerminalInput'; session_id: string; data: string }
+  | { type: 'ResizeTerminal'; session_id: string; cols: number; rows: number }
+  | { type: 'ListTerminalSessions'; workspace_id: string }
+  | { type: 'RestoreTerminalSession'; previous_session_id: string; workspace_id: string }
+  | { type: 'ListRestoredTerminalSessions'; workspace_id: string }
+  // Git extended (M5-03, M5-04)
+  | { type: 'PushBranch'; remote?: string; branch?: string }
+  | { type: 'PullBranch'; remote?: string; branch?: string }
+  | { type: 'FetchRemote'; remote?: string }
+  | { type: 'GetMergeConflicts' }
+  | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution };
 
 // --- Events (Daemon -> Client) ---
 
@@ -169,4 +225,24 @@ export type AppEvent =
   | { type: 'RepoStatusResult'; status: RepoStatus }
   | { type: 'CommitHistoryResult'; commits: CommitEntry[] }
   | { type: 'CommitCreated'; hash: string }
-  | { type: 'BranchChanged'; name: string };
+  | { type: 'BranchChanged'; name: string }
+  // Workspace events (M1-01)
+  | { type: 'WorkspaceList'; workspaces: WorkspaceSummary[] }
+  | { type: 'WorkspaceCreated'; workspace: WorkspaceSummary }
+  | { type: 'WorkspaceClosed'; workspace_id: string }
+  | { type: 'WorkspaceActivated'; workspace_id: string }
+  // PTY events (M4-01)
+  | { type: 'TerminalSessionCreated'; session_id: string; workspace_id: string; shell: string; cwd: string }
+  | { type: 'TerminalSessionClosed'; session_id: string }
+  | { type: 'TerminalOutput'; session_id: string; data: string }
+  | { type: 'TerminalSessionList'; workspace_id: string; sessions: TerminalSessionSummary[] }
+  | { type: 'TerminalSessionRestored'; previous_session_id: string; new_session_id: string; cwd: string; workspace_id: string }
+  | { type: 'TerminalSessionRestoreFailed'; previous_session_id: string; reason: string }
+  | { type: 'RestorableTerminalSessions'; workspace_id: string; sessions: RestorableTerminalSession[] }
+  // Git extended (M5-04)
+  | { type: 'PushCompleted'; branch: string; remote: string }
+  | { type: 'PullCompleted'; branch: string; commits_applied: number }
+  | { type: 'FetchCompleted'; remote: string }
+  | { type: 'GitOperationFailed'; operation: string; reason: string }
+  | { type: 'MergeConflicts'; files: MergeConflictFile[] }
+  | { type: 'ConflictResolved'; file_path: string };
