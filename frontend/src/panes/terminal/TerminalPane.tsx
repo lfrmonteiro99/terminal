@@ -8,7 +8,7 @@ import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
-export function TerminalPane({ pane, workspaceId }: PaneProps) {
+export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
   const send = useSend();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -24,7 +24,7 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
         // @ts-ignore — xterm is a peer dep loaded at runtime
         const { Terminal } = await import('xterm');
         // @ts-ignore
-        const { FitAddon } = await import('xterm-addon-fit');
+        const { FitAddon } = await import('@xterm/addon-fit');
         if (disposed || !termRef.current) return;
 
         const terminal = new Terminal({
@@ -85,12 +85,6 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
     setSessionState('creating');
     send({ type: 'CreateTerminalSession', workspace_id: workspaceId });
   }, [workspaceId, sessionState, send]);
-
-  // Write terminal output coming from the daemon
-  // (TerminalOutput events are routed via the workspace event bus and written here)
-  const writeOutput = (data: string) => {
-    xtermRef.current?.write(data);
-  };
 
   const handleReconnect = () => {
     setSessionState('idle');

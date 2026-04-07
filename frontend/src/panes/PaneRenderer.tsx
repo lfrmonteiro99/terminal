@@ -1,16 +1,130 @@
 // PaneRenderer — recursively renders a PaneLayout tree (M2-02)
 
 import React, { useCallback, useRef, useState } from 'react';
+import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
 import { isSingle, isSplit } from '../domain/pane/types';
 import { getPane } from './registry';
-import type { PaneProps } from './registry';
+
+// --- PaneHeader ---
+
+interface PaneHeaderProps {
+  kind: string;
+  focused: boolean;
+  onSplitH?: () => void;
+  onSplitV?: () => void;
+  onClose?: () => void;
+}
+
+function PaneHeader({ kind, focused, onSplitH, onSplitV, onClose }: PaneHeaderProps) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        height: 'var(--pane-header-height, 28px)',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingLeft: 10,
+        paddingRight: 6,
+        userSelect: 'none',
+        backgroundColor: focused ? 'var(--bg-overlay)' : 'var(--bg-surface)',
+        borderBottom: focused
+          ? '2px solid var(--accent-primary)'
+          : '1px solid var(--border-default)',
+        boxSizing: 'border-box',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 'var(--font-size-chrome, 11px)',
+          color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)',
+          letterSpacing: '0.02em',
+          textTransform: 'uppercase',
+        }}
+      >
+        {kind}
+      </span>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          opacity: hovered ? 1 : 0,
+          transition: 'opacity 120ms',
+        }}
+      >
+        {onSplitH && (
+          <HeaderButton title="Split Right" onClick={onSplitH}>
+            <Columns2 size={12} />
+          </HeaderButton>
+        )}
+        {onSplitV && (
+          <HeaderButton title="Split Down" onClick={onSplitV}>
+            <Rows2 size={12} />
+          </HeaderButton>
+        )}
+        {onClose && (
+          <HeaderButton title="Close Pane" onClick={onClose}>
+            <X size={12} />
+          </HeaderButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface HeaderButtonProps {
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}
+
+function HeaderButton({ title, onClick, children }: HeaderButtonProps) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <button
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        border: 'none',
+        borderRadius: 3,
+        cursor: 'pointer',
+        backgroundColor: hovered ? 'var(--bg-elevated, rgba(255,255,255,0.08))' : 'transparent',
+        color: 'var(--text-muted, #888)',
+        padding: 0,
+        transition: 'background-color 100ms, color 100ms',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// --- PaneRenderer ---
 
 interface PaneRendererProps {
   layout: PaneLayout;
   workspaceId: string;
   focusedPaneId: string | null;
   onFocusPane: (id: string) => void;
+  onLayoutChange?: (layout: PaneLayout) => void;
   depth?: number;
 }
 
@@ -21,6 +135,7 @@ export function PaneRenderer({
   workspaceId,
   focusedPaneId,
   onFocusPane,
+  onLayoutChange,
   depth = 0,
 }: PaneRendererProps) {
   if (isSingle(layout)) {
@@ -28,35 +143,43 @@ export function PaneRenderer({
     const Component = getPane(pane.kind);
     const focused = focusedPaneId === pane.id;
 
+    // No-op callbacks for Task 9/10 wiring
+    const handleSplitH = () => {};
+    const handleSplitV = () => {};
+    const handleClose = () => {};
+
     return (
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          overflow: 'hidden',
-          outline: focused ? '2px solid #4ecdc4' : '2px solid transparent',
-          outlineOffset: '-2px',
-        }}
-        onClick={() => onFocusPane(pane.id)}
-      >
-        {Component ? (
-          <Component pane={pane} workspaceId={workspaceId} focused={focused} />
-        ) : (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#888',
-              fontFamily: 'monospace',
-              fontSize: 13,
-              backgroundColor: '#1a1a2e',
-            }}
-          >
-            Pane: {pane.kind}
-          </div>
-        )}
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden' }}>
+        <PaneHeader
+          kind={pane.kind}
+          focused={focused}
+          onSplitH={handleSplitH}
+          onSplitV={handleSplitV}
+          onClose={handleClose}
+        />
+        <div
+          style={{ flex: 1, overflow: 'hidden', display: 'flex' }}
+          onClick={() => onFocusPane(pane.id)}
+        >
+          {Component ? (
+            <Component pane={pane} workspaceId={workspaceId} focused={focused} />
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#888',
+                fontFamily: 'monospace',
+                fontSize: 13,
+                backgroundColor: '#1a1a2e',
+              }}
+            >
+              Pane: {pane.kind}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -75,6 +198,7 @@ export function PaneRenderer({
             workspaceId={workspaceId}
             focusedPaneId={focusedPaneId}
             onFocusPane={onFocusPane}
+            onLayoutChange={onLayoutChange}
             depth={depth + 1}
           />
         }
@@ -84,6 +208,7 @@ export function PaneRenderer({
             workspaceId={workspaceId}
             focusedPaneId={focusedPaneId}
             onFocusPane={onFocusPane}
+            onLayoutChange={onLayoutChange}
             depth={depth + 1}
           />
         }
@@ -105,6 +230,7 @@ interface SplitContainerProps {
 
 function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitContainerProps) {
   const [ratio, setRatio] = useState(initialRatio);
+  const [splitterState, setSplitterState] = useState<'idle' | 'hover' | 'dragging'>('idle');
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
@@ -112,6 +238,8 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
     (e: React.MouseEvent) => {
       e.preventDefault();
       dragging.current = true;
+      setSplitterState('dragging');
+      document.body.style.userSelect = 'none';
 
       const onMouseMove = (moveEvt: MouseEvent) => {
         if (!dragging.current || !containerRef.current) return;
@@ -128,6 +256,8 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
 
       const onMouseUp = () => {
         dragging.current = false;
+        setSplitterState('idle');
+        document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
       };
@@ -137,6 +267,13 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
     },
     [isHorizontal],
   );
+
+  const splitterBg =
+    splitterState === 'dragging'
+      ? 'var(--accent-primary, #4ecdc4)'
+      : splitterState === 'hover'
+        ? 'rgba(78, 205, 196, 0.4)'
+        : 'var(--border-default, #333)';
 
   return (
     <div
@@ -153,9 +290,16 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
         style={{
           width: isHorizontal ? SPLITTER_SIZE : '100%',
           height: isHorizontal ? '100%' : SPLITTER_SIZE,
-          backgroundColor: '#333',
+          backgroundColor: splitterBg,
           cursor: isHorizontal ? 'col-resize' : 'row-resize',
           flexShrink: 0,
+          transition: 'background-color 150ms',
+        }}
+        onMouseEnter={() => {
+          if (!dragging.current) setSplitterState('hover');
+        }}
+        onMouseLeave={() => {
+          if (!dragging.current) setSplitterState('idle');
         }}
         onMouseDown={handleMouseDown}
       />

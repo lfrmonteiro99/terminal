@@ -2,16 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
-import { RunPanel } from './components/RunPanel.tsx';
-import { DecisionPanel } from './components/DecisionPanel.tsx';
 import { ActivityBar } from './components/ActivityBar.tsx';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
-import { PostRunSummary } from './components/PostRunSummary.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
-import { DiffPanel } from './components/DiffPanel.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
-import type { AppEvent, RunMode, RunState } from './types/protocol.ts';
+import { AppChrome } from './components/AppChrome';
+import { PaneRenderer } from './panes/PaneRenderer';
+import type { PaneLayout } from './domain/pane/types';
+import type { AppEvent } from './types/protocol.ts';
+
+// Side-effect imports: register panes and modes
+import './panes/terminal/TerminalPane';
+import './panes/ai-run/AiRunPane';
+import './modes/definitions';
 
 const inputStyle: React.CSSProperties = {
   padding: 8,
@@ -37,11 +41,16 @@ const buttonStyle: React.CSSProperties = {
 function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
-  const [prompt, setPrompt] = useState('');
   const [daemonUrl, setDaemonUrl] = useState('');
   const [authToken, setAuthToken] = useState('');
   const [projectRoot, setProjectRoot] = useState('');
   const [tauriMode, setTauriMode] = useState<boolean | null>(null); // null = unknown yet
+
+  // Pane layout state
+  const [layout, setLayout] = useState<PaneLayout>(() => ({
+    Single: { id: 'terminal-0', kind: 'Terminal' as const, resource_id: null },
+  }));
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
 
   // On mount: detect Tauri via dynamic import probe, then auto-connect or fall back
   useEffect(() => {
@@ -114,38 +123,6 @@ function AppContent() {
     }
   };
 
-  const handleStartRun = () => {
-    if (state.activeSession && prompt.trim()) {
-      send({
-        type: 'StartRun',
-        session_id: state.activeSession,
-        prompt: prompt.trim(),
-        mode: 'Free' as RunMode,
-      });
-      setPrompt('');
-    }
-  };
-
-  const handleRespond = (runId: string, response: string) => {
-    send({ type: 'RespondToBlocking', run_id: runId, response });
-  };
-
-  const handleCancel = (runId: string) => {
-    send({ type: 'CancelRun', run_id: runId, reason: 'User cancelled' });
-  };
-
-  const handleGetDiff = (runId: string) => {
-    send({ type: 'GetDiff', run_id: runId });
-  };
-
-  const handleRevert = (runId: string) => {
-    send({ type: 'RevertRun', run_id: runId });
-  };
-
-  const handleMerge = (runId: string) => {
-    send({ type: 'MergeRun', run_id: runId });
-  };
-
   // Track previous activeSession to detect transitions from null -> value
   const prevSessionRef = useRef<string | null>(null);
   useEffect(() => {
@@ -183,215 +160,128 @@ function AppContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [dispatch]);
 
-  // Determine if selectedRun is in a terminal state
-  const selectedRunObj = state.selectedRun ? state.runs.get(state.selectedRun) : undefined;
-  const isTerminalState = (rs: RunState): boolean =>
-    rs.type === 'Completed' || rs.type === 'Failed' || rs.type === 'Cancelled';
-  const showPostRunSummary =
-    !state.activeRun &&
-    selectedRunObj !== undefined &&
-    isTerminalState(selectedRunObj.state);
-
   return (
     <SendProvider value={send}>
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        backgroundColor: '#16213e',
-        color: '#e0e0e0',
-      }}
-    >
-      {/* Header */}
       <div
         style={{
-          padding: '8px 16px',
-          borderBottom: '1px solid #333',
           display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          fontSize: 13,
+          flexDirection: 'column',
+          height: '100vh',
+          background: 'var(--bg-base)',
         }}
       >
-        <span style={{ fontWeight: 'bold' }}>Terminal Engine</span>
-        <span
-          style={{
-            color:
-              status === 'connected'
-                ? '#4ecdc4'
-                : status === 'connecting' || status === 'authenticating'
-                  ? '#f0a500'
-                  : '#ff6b6b',
-          }}
-        >
-          {status}
-        </span>
-        {state.activeSession && (
-          <span style={{ color: '#888' }}>
-            Session: {state.activeSession.slice(0, 8)}...
-          </span>
-        )}
-        {state.error && (
-          <span style={{ color: '#ff6b6b', marginLeft: 'auto' }}>
-            {state.error}
-          </span>
-        )}
-      </div>
-
-      {/* Connection setup (show when disconnected, browser mode only) */}
-      {!tauriMode && status === 'disconnected' && (
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>
-          <input
-            value={daemonUrl}
-            onChange={(e) => setDaemonUrl(e.target.value)}
-            placeholder="Daemon WebSocket URL"
-            style={inputStyle}
-          />
-          <input
-            value={authToken}
-            onChange={(e) => setAuthToken(e.target.value)}
-            placeholder="Auth token (from ~/.terminal-daemon/auth_token)"
-            style={inputStyle}
-          />
-        </div>
-      )}
-      {/* Tauri mode: show connecting status */}
-      {tauriMode && status !== 'connected' && (
-        <div style={{ padding: 16, color: '#f0a500', fontFamily: 'monospace', fontSize: 13 }}>
-          Connecting to embedded daemon...
-        </div>
-      )}
-
-      {/* Session setup (show when connected but no session) */}
-      {status === 'connected' && !state.activeSession && (
-        <div style={{ padding: 16, display: 'flex', gap: 8, maxWidth: 600 }}>
-          <input
-            value={projectRoot}
-            onChange={(e) => setProjectRoot(e.target.value)}
-            placeholder="Project root path (e.g. /home/user/myproject)"
-            style={{ ...inputStyle, flex: 1 }}
-            onKeyDown={(e) => e.key === 'Enter' && handleStartSession()}
-          />
-          {tauriMode && (
-            <button onClick={handleBrowse} style={buttonStyle}>
-              Browse
-            </button>
-          )}
-          <button onClick={handleStartSession} style={buttonStyle}>
-            Start Session
-          </button>
-        </div>
-      )}
-
-      {/* Body: sidebar + main content */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Sidebar (when session active) */}
-        {state.activeSession && <ActivityBar />}
-        {state.activeSession && <SidebarContainer />}
-
-        {/* Main panel */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {state.activeRun ? (
-            <>
-              <RunPanel />
-              {state.blocking && (
-                <DecisionPanel
-                  runId={state.activeRun}
-                  question={state.blocking.question}
-                  context={state.blocking.context}
-                  onRespond={handleRespond}
-                  onCancel={handleCancel}
-                />
-              )}
-            </>
-          ) : showPostRunSummary && state.selectedRun ? (
-            <PostRunSummary
-              runId={state.selectedRun}
-              onGetDiff={handleGetDiff}
-              onMerge={handleMerge}
-              onRevert={handleRevert}
+        {/* Connection setup (show when disconnected, browser mode only) */}
+        {!tauriMode && status === 'disconnected' && (
+          <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>
+            <input
+              value={daemonUrl}
+              onChange={(e) => setDaemonUrl(e.target.value)}
+              placeholder="Daemon WebSocket URL"
+              style={inputStyle}
             />
-          ) : (
-            <>
-              <RunPanel />
-              {/* Prompt input (show when session active and no run in progress) */}
-              {status === 'connected' && state.activeSession && (
-                <div
-                  style={{
-                    padding: '8px 16px',
-                    borderTop: '1px solid #333',
-                    display: 'flex',
-                    gap: 8,
-                  }}
-                >
-                  <input
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleStartRun()}
-                    placeholder="Enter prompt for Claude..."
-                    style={{ ...inputStyle, flex: 1 }}
-                  />
-                  <button onClick={handleStartRun} style={buttonStyle}>
-                    Run
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-          {/* DiffPanel — split mode */}
-          {state.diffPanel.open && state.diffPanel.mode === 'split' && <DiffPanel />}
-        </div>
+            <input
+              value={authToken}
+              onChange={(e) => setAuthToken(e.target.value)}
+              placeholder="Auth token (from ~/.terminal-daemon/auth_token)"
+              style={inputStyle}
+            />
+          </div>
+        )}
+
+        {/* Tauri mode: show connecting status */}
+        {tauriMode && status !== 'connected' && (
+          <div style={{ padding: 16, color: '#f0a500', fontFamily: 'monospace', fontSize: 13 }}>
+            Connecting to embedded daemon...
+          </div>
+        )}
+
+        {/* Session setup (show when connected but no session) */}
+        {status === 'connected' && !state.activeSession && (
+          <div style={{ padding: 16, display: 'flex', gap: 8, maxWidth: 600 }}>
+            <input
+              value={projectRoot}
+              onChange={(e) => setProjectRoot(e.target.value)}
+              placeholder="Project root path (e.g. /home/user/myproject)"
+              style={{ ...inputStyle, flex: 1 }}
+              onKeyDown={(e) => e.key === 'Enter' && handleStartSession()}
+            />
+            {tauriMode && (
+              <button onClick={handleBrowse} style={buttonStyle}>
+                Browse
+              </button>
+            )}
+            <button onClick={handleStartSession} style={buttonStyle}>
+              Start Session
+            </button>
+          </div>
+        )}
+
+        {/* Main layout (when session is active) */}
+        {state.activeSession && (
+          <>
+            {/* AppChrome header */}
+            <AppChrome />
+
+            {/* Main content: activity bar + sidebar + pane area */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              <ActivityBar />
+              <SidebarContainer />
+              <div style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-surface)' }}>
+                <PaneRenderer
+                  layout={layout}
+                  workspaceId={state.activeSession ?? ''}
+                  focusedPaneId={focusedPaneId}
+                  onFocusPane={setFocusedPaneId}
+                  onLayoutChange={setLayout}
+                />
+              </div>
+            </div>
+
+            <StatusBar />
+          </>
+        )}
+
+        {/* Modals */}
+        {state.dirtyWarning && (
+          <DirtyWarningModal
+            status={state.dirtyWarning.status}
+            onStashAndRun={() => {
+              const dw = state.dirtyWarning!;
+              send({
+                type: 'StashAndRun',
+                session_id: dw.session_id,
+                prompt: dw.prompt,
+                mode: dw.mode,
+                stash_message: 'auto-stash before AI run',
+              });
+              dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+            }}
+            onRunAnyway={() => {
+              const dw = state.dirtyWarning!;
+              send({
+                type: 'StartRun',
+                session_id: dw.session_id,
+                prompt: dw.prompt,
+                mode: dw.mode,
+                skip_dirty_check: true,
+              });
+              dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+            }}
+            onCancel={() => {
+              dispatch({ type: 'DISMISS_DIRTY_WARNING' });
+            }}
+          />
+        )}
+
+        {state.stashDrawerOpen && (
+          <StashDrawer
+            onClose={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
+            onFetchStashes={() => send({ type: 'ListStashes' })}
+            onFetchFiles={(index) => send({ type: 'GetStashFiles', stash_index: index })}
+            onFetchDiff={(index, filePath) => send({ type: 'GetStashDiff', stash_index: index, file_path: filePath })}
+          />
+        )}
       </div>
-
-      {/* Status Bar */}
-      <StatusBar />
-
-      {/* Dirty Warning Modal */}
-      {state.dirtyWarning && (
-        <DirtyWarningModal
-          status={state.dirtyWarning.status}
-          onStashAndRun={() => {
-            const dw = state.dirtyWarning!;
-            send({
-              type: 'StashAndRun',
-              session_id: dw.session_id,
-              prompt: dw.prompt,
-              mode: dw.mode,
-              stash_message: 'auto-stash before AI run',
-            });
-            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
-          }}
-          onRunAnyway={() => {
-            const dw = state.dirtyWarning!;
-            send({
-              type: 'StartRun',
-              session_id: dw.session_id,
-              prompt: dw.prompt,
-              mode: dw.mode,
-              skip_dirty_check: true,
-            });
-            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
-          }}
-          onCancel={() => {
-            dispatch({ type: 'DISMISS_DIRTY_WARNING' });
-          }}
-        />
-      )}
-
-      {/* DiffPanel — overlay mode */}
-      {state.diffPanel.open && state.diffPanel.mode === 'overlay' && <DiffPanel />}
-
-      {/* Stash Drawer */}
-      {state.stashDrawerOpen && (
-        <StashDrawer
-          onClose={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
-          onFetchStashes={() => send({ type: 'ListStashes' })}
-          onFetchFiles={(index) => send({ type: 'GetStashFiles', stash_index: index })}
-          onFetchDiff={(index, filePath) => send({ type: 'GetStashDiff', stash_index: index, file_path: filePath })}
-        />
-      )}
-    </div>
     </SendProvider>
   );
 }

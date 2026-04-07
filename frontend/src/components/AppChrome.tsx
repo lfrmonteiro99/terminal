@@ -1,127 +1,71 @@
-// AppChrome — consistent header: workspace title, mode badge, connection status (M7-01)
+// AppChrome — top chrome bar: title, session name, connection status
 
-import { useAppState, useAppDispatch } from '../context/AppContext';
-import { listModes } from '../modes/registry';
-import type { WorkspaceMode } from '../domain/workspace/types';
+import { useAppState } from '../context/AppContext';
 
-interface AppChromeProps {
-  connectionStatus: string;
-  onOpenCommandPalette: () => void;
-}
-
-function ModeBadge({ mode }: { mode?: WorkspaceMode }) {
-  const modes = listModes();
-  const def = modes.find((m) => m.id === mode);
-  if (!def) return null;
-
-  const colors: Record<WorkspaceMode, string> = {
-    AiSession: '#4ecdc4',
-    Terminal: '#f0a500',
-    Git: '#ff6b6b',
-    Browser: '#a29bfe',
-  };
-
-  return (
-    <span
-      style={{
-        fontSize: 10,
-        fontFamily: 'monospace',
-        padding: '2px 8px',
-        borderRadius: 10,
-        backgroundColor: colors[def.id] + '22',
-        color: colors[def.id],
-        border: `1px solid ${colors[def.id]}44`,
-        fontWeight: 'bold',
-      }}
-    >
-      {def.icon} {def.label}
-    </span>
-  );
-}
-
-export function AppChrome({ connectionStatus, onOpenCommandPalette }: AppChromeProps) {
+export function AppChrome() {
   const state = useAppState();
-  const dispatch = useAppDispatch();
 
-  const activeWorkspace = (state as any).workspaces?.get?.((state as any).activeWorkspaceId);
-  const workspaceName = activeWorkspace?.name ?? 'Terminal Engine';
-  const workspaceMode: WorkspaceMode | undefined = activeWorkspace?.mode;
+  const connectionStatus = state.connection.status;
 
   const statusColor =
     connectionStatus === 'connected'
-      ? '#4ecdc4'
-      : connectionStatus === 'connecting' || connectionStatus === 'authenticating'
-        ? '#f0a500'
-        : '#ff6b6b';
+      ? 'var(--accent-primary)'
+      : connectionStatus === 'connecting'
+        ? 'var(--accent-warn)'
+        : 'var(--accent-error)';
+
+  // Derive a human-readable session label from the active session
+  const sessionLabel = state.activeSession
+    ? state.activeSession.slice(0, 8) + '...'
+    : null;
 
   return (
     <div
       style={{
-        padding: '6px 16px',
-        borderBottom: '1px solid #333',
+        height: 'var(--chrome-height)',
+        backgroundColor: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border-default)',
         display: 'flex',
         alignItems: 'center',
+        paddingLeft: 16,
+        paddingRight: 16,
         gap: 12,
-        backgroundColor: '#16213e',
-        fontSize: 13,
-        fontFamily: 'monospace',
         flexShrink: 0,
-        minHeight: 36,
+        fontFamily: 'var(--font-mono)',
+        fontSize: 'var(--font-size-chrome)',
+        boxSizing: 'border-box',
       }}
     >
-      {/* Workspace title */}
-      <span style={{ fontWeight: 'bold', color: '#e0e0e0' }}>{workspaceName}</span>
+      {/* Left: title */}
+      <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>
+        Terminal Engine
+      </span>
 
-      {/* Mode badge */}
-      {workspaceMode && <ModeBadge mode={workspaceMode} />}
+      {/* Center: session name */}
+      <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+        {sessionLabel && (
+          <span style={{ color: 'var(--text-secondary)' }}>
+            {sessionLabel}
+          </span>
+        )}
+      </div>
 
-      {/* Session indicator */}
-      {state.activeSession && (
-        <span style={{ color: '#555', fontSize: 11 }}>
-          sess:{state.activeSession.slice(0, 6)}
+      {/* Right: connection status dot + Ctrl+K hint */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--text-muted)' }}>Ctrl+K</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: statusColor }}>
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              backgroundColor: statusColor,
+              display: 'inline-block',
+            }}
+          />
+          {connectionStatus}
         </span>
-      )}
-
-      {/* Run state indicator */}
-      {state.activeRun && (
-        <span style={{ color: '#f0a500', fontSize: 11 }}>
-          ● Running
-        </span>
-      )}
-
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
-
-      {/* Error */}
-      {state.error && (
-        <span
-          style={{ color: '#ff6b6b', fontSize: 11, cursor: 'pointer' }}
-          onClick={() => dispatch({ type: 'CLEAR_ERROR' })}
-          title="Click to dismiss"
-        >
-          ⚠ {state.error}
-        </span>
-      )}
-
-      {/* Command palette button */}
-      <button
-        onClick={onOpenCommandPalette}
-        title="Command Palette (Ctrl+P)"
-        style={{
-          background: 'none',
-          border: '1px solid #333',
-          color: '#888',
-          borderRadius: 4,
-          padding: '2px 8px',
-          cursor: 'pointer',
-          fontSize: 11,
-        }}
-      >
-        ⌘P
-      </button>
-
-      {/* Connection status dot */}
-      <span style={{ color: statusColor, fontSize: 11 }}>● {connectionStatus}</span>
+      </div>
     </div>
   );
 }
