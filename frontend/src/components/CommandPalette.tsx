@@ -35,6 +35,13 @@ const PRESETS: Record<string, PaneLayout> = {
       second: { Single: { id: 'git-history', kind: 'GitHistory', resource_id: null } },
     },
   },
+  browser: {
+    Split: {
+      direction: 'Horizontal', ratio: 0.5,
+      first: { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } },
+      second: { Single: { id: 'browser-0', kind: 'Browser', resource_id: null } },
+    },
+  },
 };
 
 export function CommandPalette({ open, onClose, onLayoutChange }: CommandPaletteProps) {
@@ -76,6 +83,12 @@ export function CommandPalette({ open, onClose, onLayoutChange }: CommandPalette
         label: 'Layout: Git Review',
         description: 'Git status + git history side by side',
         action: () => { onLayoutChange?.(PRESETS.git); onClose(); },
+      },
+      {
+        id: 'layout:browser',
+        label: 'Layout: Browser + Terminal',
+        description: 'Terminal + embedded browser side by side',
+        action: () => { onLayoutChange?.(PRESETS.browser); onClose(); },
       },
       // Sidebar commands
       {
