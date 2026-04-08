@@ -9,8 +9,40 @@ import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
-// Global set to prevent two panes from claiming the same PTY session
-const claimedSessions = new Set<string>();
+// FIFO queue: panes register when they send CreateTerminalSession,
+// and TerminalSessionCreated events are matched in order.
+type PendingClaim = { resolve: (sessionId: string) => void; workspaceId: string };
+const pendingQueue: PendingClaim[] = [];
+
+function waitForSession(workspaceId: string): Promise<string> {
+  return new Promise((resolve) => {
+    pendingQueue.push({ resolve, workspaceId });
+  });
+}
+
+// Called from the event handler — resolves the first matching pending claim
+function claimSession(workspaceId: string, sessionId: string): boolean {
+  const idx = pendingQueue.findIndex(p => p.workspaceId === workspaceId);
+  if (idx >= 0) {
+    const claim = pendingQueue.splice(idx, 1)[0];
+    claim.resolve(sessionId);
+    return true;
+  }
+  return false;
+}
+
+// Global listener for TerminalSessionCreated (registered once)
+let globalListenerInstalled = false;
+function installGlobalListener() {
+  if (globalListenerInstalled) return;
+  globalListenerInstalled = true;
+  window.addEventListener('terminal-event', (e: Event) => {
+    const event = (e as CustomEvent).detail;
+    if (event.type === 'TerminalSessionCreated') {
+      claimSession(event.workspace_id, event.session_id);
+    }
+  });
+}
 
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
@@ -125,39 +157,33 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
     }
   }, [focused]);
 
-  // Create a PTY session when component mounts (if no session yet)
+  // Create a PTY session when component mounts — uses FIFO queue for reliable matching
   useEffect(() => {
     if (sessionState !== 'idle') return;
+    installGlobalListener();
     setSessionState('creating');
     send({ type: 'CreateTerminalSession', workspace_id: workspaceId });
+    waitForSession(workspaceId).then((sid) => {
+      setSessionId(sid);
+      setSessionState('active');
+    });
   }, [workspaceId, sessionState, send]);
 
-  // Listen for terminal events routed from App.tsx via CustomEvent bus
+  // Listen for terminal output and close events (session-specific, not creation)
   useEffect(() => {
+    if (!sessionId) return;
     const handler = (e: Event) => {
       const event = (e as CustomEvent).detail;
-
-      if (event.type === 'TerminalSessionCreated' && event.workspace_id === workspaceId && sessionState === 'creating') {
-        // Prevent two panes from claiming the same session
-        if (claimedSessions.has(event.session_id)) return;
-        claimedSessions.add(event.session_id);
-        setSessionId(event.session_id);
-        setSessionState('active');
-      }
-
       if (event.type === 'TerminalOutput' && event.session_id === sessionId) {
         xtermRef.current?.write(event.data);
       }
-
       if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
-        claimedSessions.delete(event.session_id);
         setSessionState('lost');
       }
     };
-
     window.addEventListener('terminal-event', handler);
     return () => window.removeEventListener('terminal-event', handler);
-  }, [workspaceId, sessionId, sessionState]);
+  }, [sessionId]);
 
   // Send initial terminal dimensions once session is active and xterm is loaded
   useEffect(() => {
