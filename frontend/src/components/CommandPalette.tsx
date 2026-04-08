@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSend } from '../context/SendContext';
 import { useAppDispatch } from '../context/AppContext';
 import type { PaneLayout } from '../domain/pane/types';
+import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 
 interface Command {
   id: string;
@@ -147,6 +148,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         label: 'List Workspaces',
         action: () => { send({ type: 'ListWorkspaces' }); onClose(); },
       },
+      // Theme commands
+      ...themes.map(theme => ({
+        id: `theme:${theme.id}`,
+        label: `Theme: ${theme.name}`,
+        description: getCurrentThemeId() === theme.id ? '● Active' : undefined,
+        action: () => { applyTheme(theme.id); onClose(); },
+      })),
     ],
     [send, dispatch, onClose, onLayoutChange],
   );
