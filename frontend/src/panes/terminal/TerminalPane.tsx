@@ -9,7 +9,7 @@ import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
-export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
+export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   const send = useSend();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -89,6 +89,13 @@ export function TerminalPane({ pane: _pane, workspaceId }: PaneProps) {
       xtermRef.current = null;
     };
   }, []);
+
+  // Focus xterm when this pane becomes focused (for keyboard navigation)
+  useEffect(() => {
+    if (focused && xtermRef.current) {
+      (xtermRef.current as any).focus?.();
+    }
+  }, [focused]);
 
   // Create a PTY session when component mounts (if no session yet)
   useEffect(() => {

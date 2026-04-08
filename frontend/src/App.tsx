@@ -74,13 +74,18 @@ function AppContent() {
     }
   }, [layout, focusedPaneId, state.activeSession, projectRoot]);
 
-  // Restore layout when a session becomes active
+  // Restore layout when a session becomes active (or reset to default)
   useEffect(() => {
     if (state.activeSession) {
       const saved = loadWorkspaceLayout(state.activeSession);
       if (saved) {
         setLayout(saved.layout);
-        if (saved.focusedPaneId) setFocusedPaneId(saved.focusedPaneId);
+        setFocusedPaneId(saved.focusedPaneId ?? collectPanes(saved.layout)[0]?.id ?? null);
+      } else {
+        // New session — reset to default single terminal pane
+        const defaultLayout: PaneLayout = { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } };
+        setLayout(defaultLayout);
+        setFocusedPaneId('terminal-0');
       }
     }
   }, [state.activeSession]);
