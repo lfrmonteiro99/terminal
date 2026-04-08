@@ -207,11 +207,12 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     if (sessionId && xtermLoaded) {
       const timer = setTimeout(() => {
         const term = xtermRef.current as any;
-        if (term?.clear) {
-          term.clear();
-        } else if (term?.write) {
-          // Fallback: ANSI clear screen + cursor home (written to xterm, not PTY)
-          term.write('\x1b[2J\x1b[H');
+        if (term) {
+          // Clear xterm screen
+          if (term.clear) term.clear();
+          else if (term.write) term.write('\x1b[2J\x1b[H');
+          // Send Enter to PTY to trigger a fresh prompt
+          sendRef.current({ type: 'WriteTerminalInput', session_id: sessionId, data: '\n' });
         }
       }, 800);
       return () => clearTimeout(timer);
