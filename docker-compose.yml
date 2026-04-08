@@ -8,6 +8,7 @@ services:
       - "3000:3000"
     volumes:
       - daemon-data:/data
+      - ./scripts:/app/scripts:ro
     environment:
       - TERMINAL_HOST=0.0.0.0
       - TERMINAL_PORT=3000
