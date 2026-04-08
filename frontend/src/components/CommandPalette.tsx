@@ -5,6 +5,8 @@ import { useSend } from '../context/SendContext';
 import { useAppDispatch } from '../context/AppContext';
 import type { PaneLayout } from '../domain/pane/types';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
+import { getShortcut, resetShortcuts } from '../core/shortcutMap';
+import { LAYOUT_PRESETS } from '../core/layoutPresets';
 
 interface Command {
   id: string;
@@ -22,30 +24,10 @@ interface CommandPaletteProps {
   onSplitV?: () => void;
 }
 
-const PRESETS: Record<string, PaneLayout> = {
-  terminal: { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } },
-  ai: {
-    Split: {
-      direction: 'Horizontal', ratio: 0.5,
-      first: { Single: { id: 'ai-run', kind: 'AiRun', resource_id: null } },
-      second: { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } },
-    },
-  },
-  git: {
-    Split: {
-      direction: 'Horizontal', ratio: 0.4,
-      first: { Single: { id: 'git-status', kind: 'GitStatus', resource_id: null } },
-      second: { Single: { id: 'git-history', kind: 'GitHistory', resource_id: null } },
-    },
-  },
-  browser: {
-    Split: {
-      direction: 'Horizontal', ratio: 0.5,
-      first: { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } },
-      second: { Single: { id: 'browser-0', kind: 'Browser', resource_id: null } },
-    },
-  },
-};
+// Use shared presets — map to PaneLayout for backward compat
+const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
+  Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
+);
 
 export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV }: CommandPaletteProps) {
   const send = useSend();
@@ -61,36 +43,42 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         id: 'pane:split-right',
         label: 'Split Pane Right',
         description: 'Split the focused pane horizontally',
+        shortcut: getShortcut('pane:split-right'),
         action: () => { onSplitH?.(); },
       },
       {
         id: 'pane:split-down',
         label: 'Split Pane Down',
         description: 'Split the focused pane vertically',
+        shortcut: getShortcut('pane:split-down'),
         action: () => { onSplitV?.(); },
       },
       {
         id: 'layout:terminal',
         label: 'Layout: Terminal Focus',
         description: 'Single terminal pane',
+        shortcut: getShortcut('layout:terminal'),
         action: () => { onLayoutChange?.(PRESETS.terminal); onClose(); },
       },
       {
         id: 'layout:ai',
         label: 'Layout: AI Session',
         description: 'Terminal + AI pane side by side',
+        shortcut: getShortcut('layout:ai'),
         action: () => { onLayoutChange?.(PRESETS.ai); onClose(); },
       },
       {
         id: 'layout:git',
         label: 'Layout: Git Review',
         description: 'Git status + git history side by side',
+        shortcut: getShortcut('layout:git'),
         action: () => { onLayoutChange?.(PRESETS.git); onClose(); },
       },
       {
         id: 'layout:browser',
         label: 'Layout: Browser + Terminal',
         description: 'Terminal + embedded browser side by side',
+        shortcut: getShortcut('layout:browser'),
         action: () => { onLayoutChange?.(PRESETS.browser); onClose(); },
       },
       // Sidebar commands
@@ -98,55 +86,67 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         id: 'sidebar:toggle',
         label: 'Toggle Sidebar',
         description: 'Collapse or expand the sidebar',
-        shortcut: 'Ctrl+B',
+        shortcut: getShortcut('sidebar:toggle'),
         action: () => { dispatch({ type: 'TOGGLE_SIDEBAR' }); onClose(); },
       },
       {
         id: 'sidebar:explorer',
         label: 'Explorer',
         description: 'Switch sidebar to explorer view',
-        shortcut: 'Ctrl+Shift+E',
+        shortcut: getShortcut('sidebar:explorer'),
         action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' }); onClose(); },
       },
       {
         id: 'sidebar:changes',
         label: 'Changes',
         description: 'Switch sidebar to changes view',
-        shortcut: 'Ctrl+Shift+G',
+        shortcut: getShortcut('sidebar:changes'),
         action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' }); onClose(); },
       },
       {
         id: 'sidebar:git',
         label: 'Git',
         description: 'Switch sidebar to git view',
-        shortcut: 'Ctrl+Shift+H',
+        shortcut: getShortcut('sidebar:git'),
         action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' }); onClose(); },
       },
       // Git operations
       {
         id: 'git:refresh',
         label: 'Refresh Git Status',
+        shortcut: getShortcut('git:refresh'),
         action: () => { send({ type: 'GetRepoStatus' }); send({ type: 'GetChangedFiles', mode: 'working' }); onClose(); },
       },
       {
         id: 'git:push',
         label: 'Push Branch',
+        shortcut: getShortcut('git:push'),
         action: () => { send({ type: 'PushBranch' }); onClose(); },
       },
       {
         id: 'git:pull',
         label: 'Pull Branch',
+        shortcut: getShortcut('git:pull'),
         action: () => { send({ type: 'PullBranch' }); onClose(); },
       },
       {
         id: 'git:fetch',
         label: 'Fetch Remote',
+        shortcut: getShortcut('git:fetch'),
         action: () => { send({ type: 'FetchRemote' }); onClose(); },
       },
       {
         id: 'workspace:list',
         label: 'List Workspaces',
+        shortcut: getShortcut('workspace:list'),
         action: () => { send({ type: 'ListWorkspaces' }); onClose(); },
+      },
+      // Keybinding management
+      {
+        id: 'keybindings:reset',
+        label: 'Reset All Keybindings',
+        description: 'Restore default keyboard shortcuts',
+        action: () => { resetShortcuts(); onClose(); },
       },
       // Theme commands
       ...themes.map(theme => ({

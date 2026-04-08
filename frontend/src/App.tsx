@@ -12,6 +12,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout, SplitDirection } from './domain/pane/types';
 import { splitPane, closePane, collectPanes } from './domain/pane/types';
+import { LAYOUT_PRESETS } from './core/layoutPresets';
 import type { AppEvent } from './types/protocol.ts';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
 
@@ -258,6 +259,25 @@ function AppContent() {
         const panes = collectPanes(layout);
         const idx = parseInt(e.key) - 1;
         if (idx < panes.length) setFocusedPaneId(panes[idx].id);
+        return;
+      }
+      // Ctrl+Alt+1..4: layout presets
+      if (e.ctrlKey && e.altKey && e.key >= '1' && e.key <= '4') {
+        e.preventDefault();
+        const presetKeys = Object.keys(LAYOUT_PRESETS);
+        const idx = parseInt(e.key) - 1;
+        if (idx < presetKeys.length) {
+          const newLayout = LAYOUT_PRESETS[presetKeys[idx]].layout;
+          setLayout(newLayout);
+          setFocusedPaneId(collectPanes(newLayout)[0]?.id ?? null);
+        }
+        return;
+      }
+      // Ctrl+Shift+R: refresh git
+      if (e.ctrlKey && e.shiftKey && e.key === 'R') {
+        e.preventDefault();
+        send({ type: 'GetRepoStatus' });
+        send({ type: 'GetChangedFiles', mode: 'working' });
         return;
       }
       // Ctrl+Shift+\ : Split right, Ctrl+Shift+- : Split down
