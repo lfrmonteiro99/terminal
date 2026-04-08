@@ -121,6 +121,13 @@ export interface CommitEntry {
   date: string;
 }
 
+export interface BranchInfo {
+  name: string;
+  is_head: boolean;
+  upstream: string | null;
+  last_commit_summary: string | null;
+}
+
 export interface RepoStatus {
   branch: string;
   head: string;
@@ -169,6 +176,7 @@ export type AppCommand =
   | { type: 'StageFile'; path: string }
   | { type: 'UnstageFile'; path: string }
   | { type: 'CreateCommit'; message: string }
+  | { type: 'ListBranches' }
   | { type: 'CheckoutBranch'; name: string }
   | { type: 'CreateBranch'; name: string; from?: string }
   // Workspace commands (M1-01)
@@ -227,6 +235,7 @@ export type AppEvent =
   | { type: 'CommitHistoryResult'; commits: CommitEntry[] }
   | { type: 'CommitCreated'; hash: string }
   | { type: 'BranchChanged'; name: string }
+  | { type: 'BranchList'; branches: BranchInfo[]; current: string | null }
   // Workspace events (M1-01)
   | { type: 'WorkspaceList'; workspaces: WorkspaceSummary[] }
   | { type: 'WorkspaceCreated'; workspace: WorkspaceSummary }

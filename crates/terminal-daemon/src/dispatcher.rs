@@ -908,6 +908,26 @@ impl Dispatcher {
                 }
             }
 
+            AppCommand::ListBranches => {
+                if let Some(root) = self.find_active_project_root().await {
+                    match crate::git_engine::list_branches(&root).await {
+                        Ok((branches, current)) => {
+                            let _ = reply_tx
+                                .send(AppEvent::BranchList { branches, current })
+                                .await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "GIT_ERROR".into(),
+                                    message: e.to_string(),
+                                })
+                                .await;
+                        }
+                    }
+                }
+            }
+
             AppCommand::CheckoutBranch { name } => {
                 if let Some(root) = self.find_active_project_root().await {
                     match crate::git_engine::checkout_branch(&root, &name).await {

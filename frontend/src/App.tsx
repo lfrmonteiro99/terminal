@@ -249,6 +249,11 @@ function AppContent() {
           event.type === 'TerminalSessionClosed') {
         window.dispatchEvent(new CustomEvent('terminal-event', { detail: event }));
       }
+
+      // Route BranchList events via CustomEvent so CommandPalette can receive them
+      if (event.type === 'BranchList') {
+        window.dispatchEvent(new CustomEvent('branch-list', { detail: event }));
+      }
     },
     [dispatch],
   );

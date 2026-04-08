@@ -1,5 +1,5 @@
 use crate::models::{
-    CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
+    BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
     FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
     RunMode, RunState, RunSummary, SessionSummary, StashEntry, TerminalSessionSummary,
     WorkspaceMode, WorkspaceSummary,
@@ -72,6 +72,9 @@ pub enum AppCommand {
         mode: RunMode,
         stash_message: String,
     },
+
+    // Branch operations
+    ListBranches,
 
     // Sidebar commands (Phase 3)
     ListDirectory { path: PathBuf },
@@ -276,6 +279,10 @@ pub enum AppEvent {
     },
     BranchChanged {
         name: String,
+    },
+    BranchList {
+        branches: Vec<BranchInfo>,
+        current: Option<String>,
     },
 
     // Session

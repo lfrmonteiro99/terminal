@@ -369,6 +369,16 @@ pub struct MergeConflictFile {
     pub base: Option<String>,
 }
 
+// --- Branch Types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_head: bool,
+    pub upstream: Option<String>,
+    pub last_commit_summary: Option<String>,
+}
+
 // --- Stash / Dirty State Types ---
 
 /// Git stash entry
