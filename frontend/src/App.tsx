@@ -230,6 +230,16 @@ function AppContent() {
     }
   };
 
+  // Auto-start session after reconnect (refresh) if we have a saved project root
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (status === 'connected' && !state.activeSession && projectRoot.trim() && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      send({ type: 'StartSession', project_root: projectRoot.trim() });
+    }
+    if (status !== 'connected') autoStartedRef.current = false;
+  }, [status, state.activeSession, projectRoot, send]);
+
   // Track previous activeSession to detect transitions from null -> value
   const prevSessionRef = useRef<string | null>(null);
   useEffect(() => {
