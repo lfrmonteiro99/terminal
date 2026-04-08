@@ -220,7 +220,7 @@ function computeSplitters(
 
   const { direction, ratio, first, second } = layout.Split;
   const result: SplitterInfo[] = [];
-  const SPLITTER_HALF = 0.004; // ~4px visible at 1000px container
+  const SPLITTER_HALF = 0.008; // ~8px hit area at 1000px container
 
   if (direction === 'Horizontal') {
     const splitX = rect.x + rect.w * ratio;
@@ -412,6 +412,7 @@ export function PaneRenderer({
       {!zoomedPaneId && computeSplitters(layout).map((sp, i) => (
         <div
           key={`splitter-${i}`}
+          className="pane-splitter"
           style={{
             position: 'absolute',
             left: `${sp.x * 100}%`,
@@ -419,13 +420,12 @@ export function PaneRenderer({
             width: `${sp.w * 100}%`,
             height: `${sp.h * 100}%`,
             cursor: sp.isHorizontal ? 'col-resize' : 'row-resize',
-            zIndex: 10,
+            zIndex: 20,
             backgroundColor: 'transparent',
-            // Widen hit area
-            padding: sp.isHorizontal ? '0 6px' : '6px 0',
-            margin: sp.isHorizontal ? '0 -6px' : '-6px 0',
-            boxSizing: 'content-box',
+            transition: 'background-color 150ms',
           }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(78, 205, 196, 0.3)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
           onMouseDown={(e) => {
             e.preventDefault();
             const container = containerRef.current;
