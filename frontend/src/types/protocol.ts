@@ -22,6 +22,16 @@ export interface RestorableTerminalSession {
   last_active_at: string;
 }
 
+// --- Search types (TERMINAL-006) ---
+
+export interface SearchMatch {
+  file_path: string;
+  line_number: number;
+  line_content: string;
+  context_before: string[];
+  context_after: string[];
+}
+
 // --- Merge Conflict types (M5-05) ---
 
 export interface MergeConflictFile {
@@ -199,7 +209,18 @@ export type AppCommand =
   | { type: 'GetMergeConflicts' }
   | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution }
   // File viewer (TERMINAL-005)
-  | { type: 'ReadFile'; path: string; max_bytes?: number };
+  | { type: 'ReadFile'; path: string; max_bytes?: number }
+  // Search (TERMINAL-006)
+  | {
+      type: 'SearchFiles';
+      query: string;
+      is_regex?: boolean;
+      case_sensitive?: boolean;
+      include_glob?: string;
+      exclude_glob?: string;
+      max_results?: number;
+      context_lines?: number;
+    };
 
 // --- Events (Daemon -> Client) ---
 
@@ -260,4 +281,6 @@ export type AppEvent =
   | { type: 'ConflictResolved'; file_path: string }
   // File viewer (TERMINAL-005)
   | { type: 'FileContent'; path: string; content: string; language: string; truncated: boolean; size_bytes: number }
-  | { type: 'FileReadError'; path: string; error: string };
+  | { type: 'FileReadError'; path: string; error: string }
+  // Search (TERMINAL-006)
+  | { type: 'SearchResults'; query: string; matches: SearchMatch[]; total_matches: number; files_searched: number; truncated: boolean; duration_ms: number };

@@ -31,6 +31,7 @@ import './panes/git/MergeConflictPane';
 import './panes/browser/BrowserPane';
 import './panes/empty/EmptyPane';
 import './panes/file-viewer/FileViewerPane';
+import './panes/search/SearchPane';
 import './modes/definitions';
 
 /** Patch resource_id onto a specific pane id in a layout tree */
@@ -317,6 +318,11 @@ function AppContent() {
       // Route file-viewer events so FileViewerPane can receive them without going through React state
       if (event.type === 'FileContent' || event.type === 'FileReadError') {
         window.dispatchEvent(new CustomEvent('file-viewer-event', { detail: event }));
+      }
+
+      // Route search results to SearchPane
+      if (event.type === 'SearchResults') {
+        window.dispatchEvent(new CustomEvent('search-results', { detail: event }));
       }
     },
     [dispatch],

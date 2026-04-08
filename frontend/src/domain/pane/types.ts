@@ -9,6 +9,7 @@ export type PaneKind =
   | 'Browser'
   | 'Diff'
   | 'FileViewer'
+  | 'Search'
   | 'Empty';
 
 export interface PaneDefinition {

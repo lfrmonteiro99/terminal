@@ -130,6 +130,51 @@ impl Dispatcher {
                 }
             }
 
+            // --- Search (TERMINAL-006) ---
+            AppCommand::SearchFiles {
+                query,
+                is_regex,
+                case_sensitive,
+                include_glob,
+                exclude_glob,
+                max_results,
+                context_lines,
+            } => {
+                if let Some(root) = self.find_active_project_root().await {
+                    let result = crate::search_engine::search_files(
+                        &root,
+                        &query,
+                        is_regex,
+                        case_sensitive,
+                        include_glob.as_deref(),
+                        exclude_glob.as_deref(),
+                        max_results.unwrap_or(500),
+                        context_lines.unwrap_or(1),
+                    )
+                    .await;
+                    match result {
+                        Ok(event) => {
+                            let _ = reply_tx.send(event).await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "SEARCH_ERROR".into(),
+                                    message: e.to_string(),
+                                })
+                                .await;
+                        }
+                    }
+                } else {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "NO_SESSION".into(),
+                            message: "No active session — start a session first".into(),
+                        })
+                        .await;
+                }
+            }
+
             AppCommand::GetStatus => {
                 let runs = self.context.active_runs.lock().await;
                 let sessions = self.context.sessions.lock().await;
