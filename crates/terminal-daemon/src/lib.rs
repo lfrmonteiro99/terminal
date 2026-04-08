@@ -46,12 +46,14 @@ pub async fn start_server(
     // Create data directory (needed for persistence in both modes)
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
-    // Generate auth token
-    let token: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect();
+    // Use TERMINAL_AUTH_TOKEN env var if set, otherwise generate random
+    let token: String = std::env::var("TERMINAL_AUTH_TOKEN").unwrap_or_else(|_| {
+        rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect()
+    });
 
     // Standalone mode: write token to disk
     if config.mode == DaemonMode::Standalone {

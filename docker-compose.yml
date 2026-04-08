@@ -12,6 +12,7 @@ services:
       - TERMINAL_HOST=0.0.0.0
       - TERMINAL_PORT=3000
       - TERMINAL_DATA_DIR=/data
+      - TERMINAL_AUTH_TOKEN=dev-token-123
       - RUST_LOG=info
 
   frontend:
