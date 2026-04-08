@@ -156,6 +156,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       { id: 'add:browser', label: 'Add Pane: Browser', description: 'Add a browser pane', action: () => { onAddPane?.('Browser', 'Horizontal'); } },
       { id: 'add:gitstatus', label: 'Add Pane: Git Status', description: 'Add a git status pane', action: () => { onAddPane?.('GitStatus', 'Horizontal'); } },
       { id: 'add:githistory', label: 'Add Pane: Git History', description: 'Add a git history pane', action: () => { onAddPane?.('GitHistory', 'Horizontal'); } },
+      { id: 'add:empty', label: 'Add Pane: Empty', description: 'Add an empty pane and choose type', action: () => { onAddPane?.('Empty', 'Horizontal'); } },
       // Theme commands
       ...themes.map(theme => ({
         id: `theme:${theme.id}`,

@@ -24,6 +24,7 @@ import './panes/git/GitStatusPane';
 import './panes/git/GitHistoryPane';
 import './panes/git/MergeConflictPane';
 import './panes/browser/BrowserPane';
+import './panes/empty/EmptyPane';
 import './modes/definitions';
 
 const inputStyle: React.CSSProperties = {
@@ -108,13 +109,39 @@ function AppContent() {
     const result = closePane(layout, paneId);
     if (result) {
       setLayout(result);
-      // If we closed the focused pane, focus the first available pane
       if (paneId === focusedPaneId) {
         const panes = collectPanes(result);
         setFocusedPaneId(panes.length > 0 ? panes[0].id : null);
       }
+    } else {
+      // Last pane closed — replace with Empty pane
+      const emptyLayout: PaneLayout = { Single: { id: `empty-${Date.now()}`, kind: 'Empty', resource_id: null } };
+      setLayout(emptyLayout);
+      setFocusedPaneId(emptyLayout.Single.id);
     }
   }, [layout, focusedPaneId]);
+
+  // Listen for set-pane-type events from EmptyPane
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { paneId, kind } = (e as CustomEvent).detail;
+      // Replace the Empty pane with the chosen kind
+      setLayout(prev => {
+        const replace = (l: PaneLayout): PaneLayout => {
+          if ('Single' in l && l.Single.id === paneId) {
+            return { Single: { ...l.Single, kind, id: `${kind.toLowerCase()}-${Date.now()}` } };
+          }
+          if ('Split' in l) {
+            return { Split: { ...l.Split, first: replace(l.Split.first), second: replace(l.Split.second) } };
+          }
+          return l;
+        };
+        return replace(prev);
+      });
+    };
+    window.addEventListener('set-pane-type', handler);
+    return () => window.removeEventListener('set-pane-type', handler);
+  }, []);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);

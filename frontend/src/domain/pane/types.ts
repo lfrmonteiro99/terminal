@@ -7,7 +7,8 @@ export type PaneKind =
   | 'GitHistory'
   | 'FileExplorer'
   | 'Browser'
-  | 'Diff';
+  | 'Diff'
+  | 'Empty';
 
 export interface PaneDefinition {
   id: string;

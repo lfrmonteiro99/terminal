@@ -14,6 +14,7 @@ const PANE_LABELS: Record<string, string> = {
   Browser: 'Browser',
   Diff: 'Diff',
   FileExplorer: 'Explorer',
+  Empty: 'New Pane',
 };
 
 // --- PaneHeader ---
