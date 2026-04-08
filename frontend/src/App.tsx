@@ -405,28 +405,22 @@ function AppContent() {
               }} />
               <SidebarContainer />
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
-                {(() => {
-                  const displayLayout = zoomedPaneId
-                    ? { Single: collectPanes(layout).find(p => p.id === zoomedPaneId) ?? collectPanes(layout)[0] }
-                    : layout;
-                  return (
-                    <PaneRenderer
-                      layout={displayLayout}
-                      workspaceId={state.activeSession ?? ''}
-                      focusedPaneId={focusedPaneId}
-                      onFocusPane={setFocusedPaneId}
-                      onLayoutChange={setLayout}
-                      onSplitPane={(paneId, direction) => {
-                        const result = splitPane(layout, paneId, direction);
-                        if (result) {
-                          setLayout(result.layout);
-                          setFocusedPaneId(result.newPaneId);
-                        }
-                      }}
-                      onClosePane={handleClosePane}
-                    />
-                  );
-                })()}
+                <PaneRenderer
+                  layout={layout}
+                  workspaceId={state.activeSession ?? ''}
+                  focusedPaneId={focusedPaneId}
+                  zoomedPaneId={zoomedPaneId}
+                  onFocusPane={setFocusedPaneId}
+                  onLayoutChange={setLayout}
+                  onSplitPane={(paneId, direction) => {
+                    const result = splitPane(layout, paneId, direction);
+                    if (result) {
+                      setLayout(result.layout);
+                      setFocusedPaneId(result.newPaneId);
+                    }
+                  }}
+                  onClosePane={handleClosePane}
+                />
               </div>
             </div>
 

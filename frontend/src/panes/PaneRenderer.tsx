@@ -149,12 +149,12 @@ interface PaneRendererProps {
   layout: PaneLayout;
   workspaceId: string;
   focusedPaneId: string | null;
+  zoomedPaneId?: string | null;
   onFocusPane: (id: string) => void;
   onLayoutChange?: (layout: PaneLayout) => void;
   onSplitPane?: (paneId: string, direction: 'Horizontal' | 'Vertical') => void;
   onClosePane?: (paneId: string) => void;
   depth?: number;
-  // Internal: all pane IDs in order (computed at root, passed down for index display)
   _allPaneIds?: string[];
 }
 
@@ -164,6 +164,7 @@ export function PaneRenderer({
   layout,
   workspaceId,
   focusedPaneId,
+  zoomedPaneId,
   onFocusPane,
   onLayoutChange,
   onSplitPane,
@@ -188,8 +189,14 @@ export function PaneRenderer({
     const handleSplitV = () => onSplitPane?.(pane.id, 'Vertical');
     const handleClose = () => onClosePane?.(pane.id);
 
+    // When a different pane is zoomed, hide this one (but keep it mounted to preserve state)
+    const isHiddenByZoom = zoomedPaneId != null && zoomedPaneId !== pane.id;
+
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden' }}>
+      <div style={{
+        display: isHiddenByZoom ? 'none' : 'flex',
+        flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden',
+      }}>
         <PaneHeader
           kind={pane.kind}
           focused={focused}
@@ -234,11 +241,13 @@ export function PaneRenderer({
       <SplitContainer
         isHorizontal={isHorizontal}
         initialRatio={ratio}
+        hideControls={zoomedPaneId != null}
         first={
           <PaneRenderer
             layout={first}
             workspaceId={workspaceId}
             focusedPaneId={focusedPaneId}
+            zoomedPaneId={zoomedPaneId}
             onFocusPane={onFocusPane}
             onLayoutChange={onLayoutChange}
             onSplitPane={onSplitPane}
@@ -252,6 +261,7 @@ export function PaneRenderer({
             layout={second}
             workspaceId={workspaceId}
             focusedPaneId={focusedPaneId}
+            zoomedPaneId={zoomedPaneId}
             onFocusPane={onFocusPane}
             onLayoutChange={onLayoutChange}
             onSplitPane={onSplitPane}
@@ -274,9 +284,10 @@ interface SplitContainerProps {
   initialRatio: number;
   first: React.ReactNode;
   second: React.ReactNode;
+  hideControls?: boolean;
 }
 
-function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitContainerProps) {
+function SplitContainer({ isHorizontal, initialRatio, first, second, hideControls }: SplitContainerProps) {
   const [ratio, setRatio] = useState(initialRatio);
   const [splitterState, setSplitterState] = useState<'idle' | 'hover' | 'dragging'>('idle');
 
@@ -338,26 +349,28 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
         overflow: 'hidden',
       }}
     >
-      <div style={{ flex: ratio, overflow: 'hidden', display: 'flex' }}>{first}</div>
-      <div
-        style={{
-          width: isHorizontal ? SPLITTER_SIZE : '100%',
-          height: isHorizontal ? '100%' : SPLITTER_SIZE,
-          backgroundColor: splitterBg,
-          cursor: isHorizontal ? 'col-resize' : 'row-resize',
-          flexShrink: 0,
-          transition: 'background-color 150ms',
-        }}
-        onMouseEnter={() => {
-          if (!dragging.current) setSplitterState('hover');
-        }}
-        onMouseLeave={() => {
-          if (!dragging.current) setSplitterState('idle');
-        }}
-        onMouseDown={handleMouseDown}
-        onDoubleClick={() => setRatio(0.5)}
-      />
-      <div style={{ flex: 1 - ratio, overflow: 'hidden', display: 'flex' }}>{second}</div>
+      <div style={{ flex: hideControls ? 1 : ratio, overflow: 'hidden', display: 'flex' }}>{first}</div>
+      {!hideControls && (
+        <div
+          style={{
+            width: isHorizontal ? SPLITTER_SIZE : '100%',
+            height: isHorizontal ? '100%' : SPLITTER_SIZE,
+            backgroundColor: splitterBg,
+            cursor: isHorizontal ? 'col-resize' : 'row-resize',
+            flexShrink: 0,
+            transition: 'background-color 150ms',
+          }}
+          onMouseEnter={() => {
+            if (!dragging.current) setSplitterState('hover');
+          }}
+          onMouseLeave={() => {
+            if (!dragging.current) setSplitterState('idle');
+          }}
+          onMouseDown={handleMouseDown}
+          onDoubleClick={() => setRatio(0.5)}
+        />
+      )}
+      <div style={{ flex: hideControls ? 1 : (1 - ratio), overflow: 'hidden', display: 'flex' }}>{second}</div>
     </div>
   );
 }
