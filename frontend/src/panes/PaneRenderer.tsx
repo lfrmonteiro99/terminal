@@ -1,22 +1,34 @@
 // PaneRenderer — recursively renders a PaneLayout tree (M2-02)
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
-import { isSingle, isSplit } from '../domain/pane/types';
+import { isSingle, isSplit, collectPanes } from '../domain/pane/types';
 import { getPane } from './registry';
+
+const PANE_LABELS: Record<string, string> = {
+  Terminal: 'Terminal',
+  AiRun: 'AI Run',
+  GitStatus: 'Git Status',
+  GitHistory: 'Git History',
+  Browser: 'Browser',
+  Diff: 'Diff',
+  FileExplorer: 'Explorer',
+};
 
 // --- PaneHeader ---
 
 interface PaneHeaderProps {
   kind: string;
   focused: boolean;
+  paneIndex: number;
+  canClose: boolean;
   onSplitH?: () => void;
   onSplitV?: () => void;
   onClose?: () => void;
 }
 
-function PaneHeader({ kind, focused, onSplitH, onSplitV, onClose }: PaneHeaderProps) {
+function PaneHeader({ kind, focused, paneIndex, canClose, onSplitH, onSplitV, onClose }: PaneHeaderProps) {
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -47,7 +59,8 @@ function PaneHeader({ kind, focused, onSplitH, onSplitV, onClose }: PaneHeaderPr
           textTransform: 'uppercase',
         }}
       >
-        {kind}
+        <span style={{ opacity: 0.5, marginRight: 4 }}>{paneIndex}</span>
+        <span>{PANE_LABELS[kind] ?? kind}</span>
       </span>
 
       <div
@@ -69,7 +82,7 @@ function PaneHeader({ kind, focused, onSplitH, onSplitV, onClose }: PaneHeaderPr
             <Rows2 size={12} />
           </HeaderButton>
         )}
-        {onClose && (
+        {onClose && canClose && (
           <HeaderButton title="Close Pane" onClick={onClose}>
             <X size={12} />
           </HeaderButton>
@@ -128,9 +141,11 @@ interface PaneRendererProps {
   onSplitPane?: (paneId: string, direction: 'Horizontal' | 'Vertical') => void;
   onClosePane?: (paneId: string) => void;
   depth?: number;
+  // Internal: all pane IDs in order (computed at root, passed down for index display)
+  _allPaneIds?: string[];
 }
 
-const SPLITTER_SIZE = 4;
+const SPLITTER_SIZE = 6;
 
 export function PaneRenderer({
   layout,
@@ -141,11 +156,20 @@ export function PaneRenderer({
   onSplitPane,
   onClosePane,
   depth = 0,
+  _allPaneIds,
 }: PaneRendererProps) {
+  // At root (depth 0), compute all pane IDs once; pass them down to children
+  const allPaneIds = useMemo(() => {
+    if (_allPaneIds) return _allPaneIds;
+    return collectPanes(layout).map(p => p.id);
+  }, [_allPaneIds, layout]);
+
   if (isSingle(layout)) {
     const pane = layout.Single;
     const Component = getPane(pane.kind);
     const focused = focusedPaneId === pane.id;
+    const paneIndex = allPaneIds.indexOf(pane.id) + 1;
+    const canClose = allPaneIds.length > 1;
 
     const handleSplitH = () => onSplitPane?.(pane.id, 'Horizontal');
     const handleSplitV = () => onSplitPane?.(pane.id, 'Vertical');
@@ -156,6 +180,8 @@ export function PaneRenderer({
         <PaneHeader
           kind={pane.kind}
           focused={focused}
+          paneIndex={paneIndex}
+          canClose={canClose}
           onSplitH={handleSplitH}
           onSplitV={handleSplitV}
           onClose={handleClose}
@@ -205,6 +231,7 @@ export function PaneRenderer({
             onSplitPane={onSplitPane}
             onClosePane={onClosePane}
             depth={depth + 1}
+            _allPaneIds={allPaneIds}
           />
         }
         second={
@@ -217,6 +244,7 @@ export function PaneRenderer({
             onSplitPane={onSplitPane}
             onClosePane={onClosePane}
             depth={depth + 1}
+            _allPaneIds={allPaneIds}
           />
         }
       />

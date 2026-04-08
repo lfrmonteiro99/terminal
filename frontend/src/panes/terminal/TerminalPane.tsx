@@ -4,6 +4,7 @@
 import 'xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
 import { useSend } from '../../context/SendContext';
+import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 
@@ -59,6 +60,9 @@ function getTermTheme() {
 
 export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   const send = useSend();
+  const state = useAppState();
+  const session = state.sessions.get(workspaceId);
+  const cwd = session?.project_root ?? undefined;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>('idle');
   const [xtermLoaded, setXtermLoaded] = useState(false);
@@ -162,7 +166,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
     if (sessionState !== 'idle') return;
     installGlobalListener();
     setSessionState('creating');
-    send({ type: 'CreateTerminalSession', workspace_id: workspaceId });
+    send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd });
     waitForSession(workspaceId).then((sid) => {
       setSessionId(sid);
       setSessionState('active');
@@ -189,15 +193,11 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   useEffect(() => {
     if (sessionId && xtermLoaded && termRef.current) {
       const timer = setTimeout(() => {
-        const term = xtermRef.current as any;
-        if (term?.cols && term?.rows) {
-          // Set COLUMNS/LINES silently (clear the command from view after)
-          send({
-            type: 'WriteTerminalInput',
-            session_id: sessionId,
-            data: `export COLUMNS=${term.cols} LINES=${term.rows} 2>/dev/null\nclear\n`,
-          });
-        }
+        send({
+          type: 'WriteTerminalInput',
+          session_id: sessionId,
+          data: 'clear\n',
+        });
       }, 800);
       return () => clearTimeout(timer);
     }

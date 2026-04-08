@@ -70,6 +70,7 @@ export function AppChrome() {
           return (
             <div
               key={session.id}
+              title={session.project_root}
               onClick={() => dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: session.id })}
               style={{
                 display: 'flex',
