@@ -252,8 +252,8 @@ function AppContent() {
         setFocusedPaneId(panes[nextIdx].id);
         return;
       }
-      // Alt+1..9: jump to pane by index (like tmux)
-      if (e.altKey && e.key >= '1' && e.key <= '9') {
+      // Ctrl+1..9: jump to pane by index (like tmux)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         e.preventDefault();
         const panes = collectPanes(layout);
         const idx = parseInt(e.key) - 1;
