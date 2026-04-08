@@ -69,7 +69,7 @@ export function splitPane(
   }
 
   if (isSplit(layout)) {
-    const firstResult = splitPane(layout.Split.first, targetPaneId, direction);
+    const firstResult = splitPane(layout.Split.first, targetPaneId, direction, kind);
     if (firstResult) {
       return {
         layout: {
@@ -78,7 +78,7 @@ export function splitPane(
         newPaneId: firstResult.newPaneId,
       };
     }
-    const secondResult = splitPane(layout.Split.second, targetPaneId, direction);
+    const secondResult = splitPane(layout.Split.second, targetPaneId, direction, kind);
     if (secondResult) {
       return {
         layout: {
