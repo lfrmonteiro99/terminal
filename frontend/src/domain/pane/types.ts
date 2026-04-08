@@ -43,22 +43,23 @@ export function collectPanes(layout: PaneLayout): PaneDefinition[] {
 
 let _paneCounter = 0;
 
-/** Split a pane by ID, inserting a new Terminal pane in the given direction. */
+/** Split a pane by ID, inserting a new pane of the given kind in the given direction. */
 export function splitPane(
   layout: PaneLayout,
   targetPaneId: string,
   direction: SplitDirection,
+  kind: PaneKind = 'Terminal',
 ): { layout: PaneLayout; newPaneId: string } | null {
   if (isSingle(layout)) {
     if (layout.Single.id === targetPaneId) {
-      const newPaneId = `terminal-${++_paneCounter}-${Date.now()}`;
+      const newPaneId = `${kind.toLowerCase()}-${++_paneCounter}-${Date.now()}`;
       return {
         layout: {
           Split: {
             direction,
             ratio: 0.5,
             first: layout,
-            second: { Single: { id: newPaneId, kind: 'Terminal', resource_id: null } },
+            second: { Single: { id: newPaneId, kind, resource_id: null } },
           },
         },
         newPaneId,

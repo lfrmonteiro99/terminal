@@ -10,7 +10,7 @@ import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
 import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
-import type { PaneLayout, SplitDirection } from './domain/pane/types';
+import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
 import { splitPane, closePane, collectPanes } from './domain/pane/types';
 import { LAYOUT_PRESETS } from './core/layoutPresets';
 import type { AppEvent } from './types/protocol.ts';
@@ -92,11 +92,11 @@ function AppContent() {
   }, [state.activeSession]);
 
   // Layout mutation handlers
-  const handleSplitPane = useCallback((direction: SplitDirection) => {
+  const handleSplitPane = useCallback((direction: SplitDirection, kind: PaneKind = 'Terminal') => {
     // Use focused pane, or fall back to first pane in layout
     const targetId = focusedPaneId ?? collectPanes(layout)[0]?.id;
     if (!targetId) return;
-    const result = splitPane(layout, targetId, direction);
+    const result = splitPane(layout, targetId, direction, kind);
     if (result) {
       setLayout(result.layout);
       setFocusedPaneId(result.newPaneId);
@@ -444,6 +444,7 @@ function AppContent() {
         }}
         onSplitH={() => { handleSplitPane('Horizontal'); setCommandPaletteOpen(false); }}
         onSplitV={() => { handleSplitPane('Vertical'); setCommandPaletteOpen(false); }}
+        onAddPane={(kind, direction) => { handleSplitPane(direction, kind as PaneKind); setCommandPaletteOpen(false); }}
       />
     </SendProvider>
   );

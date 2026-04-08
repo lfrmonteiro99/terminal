@@ -22,6 +22,7 @@ interface CommandPaletteProps {
   onLayoutChange?: (layout: PaneLayout) => void;
   onSplitH?: () => void;
   onSplitV?: () => void;
+  onAddPane?: (kind: string, direction: 'Horizontal' | 'Vertical') => void;
 }
 
 // Use shared presets — map to PaneLayout for backward compat
@@ -29,7 +30,7 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
   Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
 );
 
-export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -148,6 +149,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         description: 'Restore default keyboard shortcuts',
         action: () => { resetShortcuts(); onClose(); },
       },
+      // Add pane commands
+      { id: 'add:terminal', label: 'Add Pane: Terminal', description: 'Add a terminal pane to the right', action: () => { onAddPane?.('Terminal', 'Horizontal'); } },
+      { id: 'add:terminal:down', label: 'Add Pane: Terminal (below)', description: 'Add a terminal pane below', action: () => { onAddPane?.('Terminal', 'Vertical'); } },
+      { id: 'add:ai', label: 'Add Pane: AI Run', description: 'Add an AI prompt pane', action: () => { onAddPane?.('AiRun', 'Horizontal'); } },
+      { id: 'add:browser', label: 'Add Pane: Browser', description: 'Add a browser pane', action: () => { onAddPane?.('Browser', 'Horizontal'); } },
+      { id: 'add:gitstatus', label: 'Add Pane: Git Status', description: 'Add a git status pane', action: () => { onAddPane?.('GitStatus', 'Horizontal'); } },
+      { id: 'add:githistory', label: 'Add Pane: Git History', description: 'Add a git history pane', action: () => { onAddPane?.('GitHistory', 'Horizontal'); } },
       // Theme commands
       ...themes.map(theme => ({
         id: `theme:${theme.id}`,
