@@ -51,10 +51,15 @@ const buttonStyle: React.CSSProperties = {
 function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
-  const [daemonUrl, setDaemonUrl] = useState('');
-  const [authToken, setAuthToken] = useState('');
-  const [projectRoot, setProjectRoot] = useState('');
+  const [daemonUrl, setDaemonUrl] = useState(() => localStorage.getItem('terminal:daemonUrl') || '');
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('terminal:authToken') || '');
+  const [projectRoot, setProjectRoot] = useState(() => localStorage.getItem('terminal:projectRoot') || '');
   const [tauriMode, setTauriMode] = useState<boolean | null>(null); // null = unknown yet
+
+  // Persist connection settings across page refreshes
+  useEffect(() => { if (daemonUrl) localStorage.setItem('terminal:daemonUrl', daemonUrl); }, [daemonUrl]);
+  useEffect(() => { if (authToken) localStorage.setItem('terminal:authToken', authToken); }, [authToken]);
+  useEffect(() => { if (projectRoot) localStorage.setItem('terminal:projectRoot', projectRoot); }, [projectRoot]);
 
   // Pane layout state
   const [layout, setLayout] = useState<PaneLayout>(() => ({
@@ -425,12 +430,12 @@ function AppContent() {
             </div>
 
             <StatusBar />
-
-            {/* DiffPanel overlay/split — rendered above pane area when open */}
-            {state.diffPanel.open && state.diffPanel.mode !== 'inline' && (
-              <DiffPanel />
-            )}
           </>
+        )}
+
+        {/* DiffPanel overlay — outside activeSession block so it isn't unmounted on re-renders */}
+        {state.diffPanel.open && state.diffPanel.mode !== 'inline' && (
+          <DiffPanel />
         )}
 
         {/* Modals */}
