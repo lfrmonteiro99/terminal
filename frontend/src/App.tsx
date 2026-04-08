@@ -361,7 +361,13 @@ function AppContent() {
 
             {/* Main content: activity bar + sidebar + pane area */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <ActivityBar />
+              <ActivityBar onLayoutPreset={(preset) => {
+                const p = LAYOUT_PRESETS[preset];
+                if (p) {
+                  setLayout(p.layout);
+                  setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
+                }
+              }} />
               <SidebarContainer />
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
                 <PaneRenderer
