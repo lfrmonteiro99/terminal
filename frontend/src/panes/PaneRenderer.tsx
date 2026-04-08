@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
-import { isSingle, isSplit, collectPanes } from '../domain/pane/types';
+import { isSingle, isSplit, collectPanes, updatePaneLabel } from '../domain/pane/types';
 import { getPane } from './registry';
 
 const PANE_LABELS: Record<string, string> = {
@@ -21,16 +21,45 @@ const PANE_LABELS: Record<string, string> = {
 
 interface PaneHeaderProps {
   kind: string;
+  label?: string;
   focused: boolean;
   paneIndex: number;
   canClose: boolean;
   onSplitH?: () => void;
   onSplitV?: () => void;
   onClose?: () => void;
+  onRename?: (newLabel: string | undefined) => void;
 }
 
-function PaneHeader({ kind, focused, paneIndex, canClose, onSplitH, onSplitV, onClose }: PaneHeaderProps) {
+function PaneHeader({ kind, label, focused, paneIndex, canClose, onSplitH, onSplitV, onClose, onRename }: PaneHeaderProps) {
   const [hovered, setHovered] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const displayLabel = label || PANE_LABELS[kind] || kind;
+
+  function startEdit() {
+    setEditValue(displayLabel);
+    setEditing(true);
+  }
+
+  function commitEdit(value: string) {
+    setEditing(false);
+    const trimmed = value.trim();
+    onRename?.(trimmed || undefined);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+  }
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
 
   return (
     <div
@@ -71,9 +100,38 @@ function PaneHeader({ kind, focused, paneIndex, canClose, onSplitH, onSplitV, on
           minWidth: 12,
           textAlign: 'center',
         }}>{paneIndex}</span>
-        <span style={{ color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)' }}>
-          {PANE_LABELS[kind] ?? kind}
-        </span>
+        {editing ? (
+          <input
+            ref={inputRef}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commitEdit(editValue); }
+              else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+            }}
+            onBlur={() => commitEdit(editValue)}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              borderBottom: '1px solid var(--accent-primary)',
+              color: 'var(--text-primary)',
+              fontSize: 'var(--font-size-chrome, 11px)',
+              fontFamily: 'monospace',
+              outline: 'none',
+              width: 120,
+              textTransform: 'uppercase',
+              letterSpacing: '0.02em',
+            }}
+          />
+        ) : (
+          <span
+            style={{ color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)', cursor: 'text' }}
+            onDoubleClick={(e) => { e.stopPropagation(); startEdit(); }}
+          >
+            {displayLabel}
+          </span>
+        )}
       </span>
 
       <div
@@ -377,12 +435,16 @@ export function PaneRenderer({
           >
             <PaneHeader
               kind={pane.kind}
+              label={pane.label}
               focused={focused}
               paneIndex={index + 1}
               canClose={allPanes.length > 1}
               onSplitH={() => onSplitPane?.(pane.id, 'Horizontal')}
               onSplitV={() => onSplitPane?.(pane.id, 'Vertical')}
               onClose={() => onClosePane?.(pane.id)}
+              onRename={(newLabel) => {
+                onLayoutChange?.(updatePaneLabel(layout, pane.id, newLabel));
+              }}
             />
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
               {Component ? (

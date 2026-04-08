@@ -25,6 +25,7 @@ interface CommandPaletteProps {
   onAddPane?: (kind: string, direction: 'Horizontal' | 'Vertical') => void;
   zoomedPaneId?: string | null;
   onZoomPane?: () => void;
+  onShowShortcuts?: () => void;
 }
 
 // Use shared presets — map to PaneLayout for backward compat
@@ -32,7 +33,7 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
   Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
 );
 
-export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -151,6 +152,14 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         shortcut: getShortcut('workspace:list'),
         action: () => { send({ type: 'ListWorkspaces' }); onClose(); },
       },
+      // Help
+      {
+        id: 'help:shortcuts',
+        label: 'Show Keyboard Shortcuts',
+        description: 'Open the keyboard shortcut cheatsheet',
+        shortcut: 'Ctrl+/',
+        action: () => { onShowShortcuts?.(); onClose(); },
+      },
       // Keybinding management
       {
         id: 'keybindings:reset',
@@ -174,7 +183,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane],
+    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts],
   );
 
   const filtered = useMemo(() => {

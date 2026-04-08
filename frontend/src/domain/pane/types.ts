@@ -14,6 +14,7 @@ export interface PaneDefinition {
   id: string;
   kind: PaneKind;
   resource_id: string | null;
+  label?: string;  // custom user-assigned name
 }
 
 export type SplitDirection = 'Horizontal' | 'Vertical';
@@ -91,6 +92,26 @@ export function splitPane(
   }
 
   return null;
+}
+
+/** Update the custom label of a pane by ID. Pass undefined to clear the label. */
+export function updatePaneLabel(layout: PaneLayout, paneId: string, label?: string): PaneLayout {
+  if (isSingle(layout)) {
+    if (layout.Single.id === paneId) {
+      return { Single: { ...layout.Single, label } };
+    }
+    return layout;
+  }
+  if (isSplit(layout)) {
+    return {
+      Split: {
+        ...layout.Split,
+        first: updatePaneLabel(layout.Split.first, paneId, label),
+        second: updatePaneLabel(layout.Split.second, paneId, label),
+      },
+    };
+  }
+  return layout;
 }
 
 /** Close a pane by ID. Returns the remaining layout, or null if it was the last pane. */
