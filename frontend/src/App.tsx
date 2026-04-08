@@ -10,6 +10,7 @@ import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
 import { DiffPanel } from './components/DiffPanel';
 import { CommandPalette } from './components/CommandPalette';
+import { ShortcutCheatsheet } from './components/ShortcutCheatsheet';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
 import { splitPane, closePane, collectPanes } from './domain/pane/types';
@@ -165,8 +166,23 @@ function AppContent() {
     return () => window.removeEventListener('set-pane-type', handler);
   }, []);
 
+  // Listen for focus-pane-kind events from StatusBar AI running click
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const kind = (e as CustomEvent).detail;
+      const panes = collectPanes(layout);
+      const target = panes.find(p => p.kind === kind);
+      if (target) setFocusedPaneId(target.id);
+    };
+    window.addEventListener('focus-pane-kind', handler);
+    return () => window.removeEventListener('focus-pane-kind', handler);
+  }, [layout]);
+
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // Cheatsheet overlay state
+  const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
 
   // On mount: detect Tauri via dynamic import probe, then auto-connect or fall back
   useEffect(() => {
@@ -250,6 +266,11 @@ function AppContent() {
         setCommandPaletteOpen(prev => !prev);
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setCheatsheetOpen(prev => !prev);
+        return;
+      }
       if (e.ctrlKey && e.key === 'b') {
         e.preventDefault();
         dispatch({ type: 'TOGGLE_SIDEBAR' });
@@ -267,6 +288,7 @@ function AppContent() {
         dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
       }
       if (e.key === 'Escape') {
+        if (cheatsheetOpen) { setCheatsheetOpen(false); return; }
         if (commandPaletteOpen) {
           setCommandPaletteOpen(false);
         } else {
@@ -337,7 +359,7 @@ function AppContent() {
     // Use capture phase to intercept shortcuts before xterm.js consumes them
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [dispatch, commandPaletteOpen, layout, focusedPaneId, handleSplitPane]);
+  }, [dispatch, commandPaletteOpen, cheatsheetOpen, layout, focusedPaneId, handleSplitPane]);
 
   return (
     <SendProvider value={send}>
@@ -494,6 +516,12 @@ function AppContent() {
         onAddPane={(kind, direction) => { handleSplitPane(direction, kind as PaneKind); setCommandPaletteOpen(false); }}
         zoomedPaneId={zoomedPaneId}
         onZoomPane={() => { setZoomedPaneId(prev => prev ? null : focusedPaneId); setCommandPaletteOpen(false); }}
+        onShowShortcuts={() => { setCheatsheetOpen(true); setCommandPaletteOpen(false); }}
+      />
+
+      <ShortcutCheatsheet
+        open={cheatsheetOpen}
+        onClose={() => setCheatsheetOpen(false)}
       />
     </SendProvider>
   );
