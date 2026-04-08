@@ -369,6 +369,27 @@ pub struct MergeConflictFile {
     pub base: Option<String>,
 }
 
+// --- Search Types (TERMINAL-006) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMatch {
+    pub file_path: PathBuf,
+    pub line_number: usize,
+    pub line_content: String,
+    pub context_before: Vec<String>,
+    pub context_after: Vec<String>,
+}
+
+// --- Branch Types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_head: bool,
+    pub upstream: Option<String>,
+    pub last_commit_summary: Option<String>,
+}
+
 // --- Stash / Dirty State Types ---
 
 /// Git stash entry

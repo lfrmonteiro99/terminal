@@ -40,6 +40,141 @@ impl Dispatcher {
                 // Auth is handled at the server level, not here
             }
 
+            // --- File viewer (TERMINAL-005) ---
+
+            AppCommand::ReadFile { path, max_bytes } => {
+                let limit = max_bytes.unwrap_or(1_048_576u64); // 1 MB default
+
+                // Resolve against active project root when path is relative
+                let resolved: PathBuf = {
+                    let p = PathBuf::from(&path);
+                    if p.is_absolute() {
+                        p
+                    } else if let Some(root) = self.find_active_project_root().await {
+                        root.join(&p)
+                    } else {
+                        p
+                    }
+                };
+
+                match tokio::fs::metadata(&resolved).await {
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::FileReadError {
+                                path,
+                                error: e.to_string(),
+                            })
+                            .await;
+                    }
+                    Ok(meta) => {
+                        let size_bytes = meta.len();
+
+                        // Read up to max(limit, 8192) bytes for binary detection + content
+                        let read_limit = (limit.max(8192)) as usize;
+                        let raw = match tokio::fs::read(&resolved).await {
+                            Ok(b) => b,
+                            Err(e) => {
+                                let _ = reply_tx
+                                    .send(AppEvent::FileReadError {
+                                        path,
+                                        error: e.to_string(),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        // Binary detection: null byte in first 8 KB
+                        let probe_end = raw.len().min(8192);
+                        if raw[..probe_end].contains(&0u8) {
+                            let _ = reply_tx
+                                .send(AppEvent::FileReadError {
+                                    path,
+                                    error: "Binary file — cannot display".into(),
+                                })
+                                .await;
+                            return;
+                        }
+
+                        // Truncate to limit bytes, then to 10 000 lines
+                        let capped = &raw[..raw.len().min(read_limit)];
+                        let text = String::from_utf8_lossy(capped).into_owned();
+
+                        const MAX_LINES: usize = 10_000;
+                        let (content, truncated) = {
+                            let line_count = text.lines().count();
+                            if size_bytes > limit || line_count > MAX_LINES {
+                                let truncated_text: String = text
+                                    .lines()
+                                    .take(MAX_LINES)
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                (truncated_text + "\n[truncated]", true)
+                            } else {
+                                (text, false)
+                            }
+                        };
+
+                        let language = detect_language(&resolved);
+
+                        let _ = reply_tx
+                            .send(AppEvent::FileContent {
+                                path,
+                                content,
+                                language,
+                                truncated,
+                                size_bytes,
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            // --- Search (TERMINAL-006) ---
+            AppCommand::SearchFiles {
+                query,
+                is_regex,
+                case_sensitive,
+                include_glob,
+                exclude_glob,
+                max_results,
+                context_lines,
+            } => {
+                if let Some(root) = self.find_active_project_root().await {
+                    let result = crate::search_engine::search_files(
+                        &root,
+                        &query,
+                        is_regex,
+                        case_sensitive,
+                        include_glob.as_deref(),
+                        exclude_glob.as_deref(),
+                        max_results.unwrap_or(500),
+                        context_lines.unwrap_or(1),
+                    )
+                    .await;
+                    match result {
+                        Ok(event) => {
+                            let _ = reply_tx.send(event).await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "SEARCH_ERROR".into(),
+                                    message: e.to_string(),
+                                })
+                                .await;
+                        }
+                    }
+                } else {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "NO_SESSION".into(),
+                            message: "No active session — start a session first".into(),
+                        })
+                        .await;
+                }
+            }
+
             AppCommand::GetStatus => {
                 let runs = self.context.active_runs.lock().await;
                 let sessions = self.context.sessions.lock().await;
@@ -908,6 +1043,26 @@ impl Dispatcher {
                 }
             }
 
+            AppCommand::ListBranches => {
+                if let Some(root) = self.find_active_project_root().await {
+                    match crate::git_engine::list_branches(&root).await {
+                        Ok((branches, current)) => {
+                            let _ = reply_tx
+                                .send(AppEvent::BranchList { branches, current })
+                                .await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "GIT_ERROR".into(),
+                                    message: e.to_string(),
+                                })
+                                .await;
+                        }
+                    }
+                }
+            }
+
             AppCommand::CheckoutBranch { name } => {
                 if let Some(root) = self.find_active_project_root().await {
                     match crate::git_engine::checkout_branch(&root, &name).await {
@@ -1568,4 +1723,26 @@ impl Dispatcher {
             .or_else(|| sessions.values().max_by_key(|s| s.started_at))
             .map(|s| s.project_root.clone())
     }
+}
+
+/// Detect a display language name from a file path's extension.
+fn detect_language(path: &PathBuf) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| match ext {
+            "rs" => "rust",
+            "ts" | "tsx" => "typescript",
+            "js" | "jsx" => "javascript",
+            "py" => "python",
+            "json" => "json",
+            "md" => "markdown",
+            "css" => "css",
+            "html" | "htm" => "html",
+            "toml" => "toml",
+            "yaml" | "yml" => "yaml",
+            "sh" | "bash" => "bash",
+            other => other,
+        })
+        .unwrap_or("plaintext")
+        .to_string()
 }

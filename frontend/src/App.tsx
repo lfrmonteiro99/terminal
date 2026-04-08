@@ -30,7 +30,29 @@ import './panes/git/GitHistoryPane';
 import './panes/git/MergeConflictPane';
 import './panes/browser/BrowserPane';
 import './panes/empty/EmptyPane';
+import './panes/file-viewer/FileViewerPane';
+import './panes/search/SearchPane';
 import './modes/definitions';
+
+/** Patch resource_id onto a specific pane id in a layout tree */
+function updateResourceId(layout: PaneLayout, paneId: string, resourceId: string): PaneLayout {
+  if ('Single' in layout) {
+    if (layout.Single.id === paneId) {
+      return { Single: { ...layout.Single, resource_id: resourceId } };
+    }
+    return layout;
+  }
+  if ('Split' in layout) {
+    return {
+      Split: {
+        ...layout.Split,
+        first: updateResourceId(layout.Split.first, paneId, resourceId),
+        second: updateResourceId(layout.Split.second, paneId, resourceId),
+      },
+    };
+  }
+  return layout;
+}
 
 const inputStyle: React.CSSProperties = {
   padding: 8,
@@ -189,6 +211,44 @@ function AppContent() {
     return () => window.removeEventListener('focus-pane', handler);
   }, []);
 
+  // Open a FileViewer pane for a file path (dispatched by ExplorerView double-click)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { path } = (e as CustomEvent).detail as { path: string };
+      if (!path) return;
+
+      // Reuse an existing FileViewer pane that is showing this exact file, or the first idle one
+      setLayout(prev => {
+        const panes = collectPanes(prev);
+        const existing = panes.find(p => p.kind === 'FileViewer' && p.resource_id === path);
+        if (existing) {
+          setFocusedPaneId(existing.id);
+          return prev;
+        }
+
+        // Reuse a FileViewer with no resource (empty) if one exists
+        const idle = panes.find(p => p.kind === 'FileViewer' && !p.resource_id);
+        if (idle) {
+          const updated = updateResourceId(prev, idle.id, path);
+          setFocusedPaneId(idle.id);
+          return updated;
+        }
+
+        // Otherwise split and open a new FileViewer pane
+        const targetId = focusedPaneId ?? panes[0]?.id;
+        if (!targetId) return prev;
+        const result = splitPane(prev, targetId, 'Horizontal', 'FileViewer');
+        if (!result) return prev;
+        // Patch resource_id onto the new pane
+        const patched = updateResourceId(result.layout, result.newPaneId, path);
+        setFocusedPaneId(result.newPaneId);
+        return patched;
+      });
+    };
+    window.addEventListener('open-file-viewer', handler);
+    return () => window.removeEventListener('open-file-viewer', handler);
+  }, [focusedPaneId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
@@ -248,6 +308,21 @@ function AppContent() {
           event.type === 'TerminalOutput' ||
           event.type === 'TerminalSessionClosed') {
         window.dispatchEvent(new CustomEvent('terminal-event', { detail: event }));
+      }
+
+      // Route BranchList events via CustomEvent so CommandPalette can receive them
+      if (event.type === 'BranchList') {
+        window.dispatchEvent(new CustomEvent('branch-list', { detail: event }));
+      }
+
+      // Route file-viewer events so FileViewerPane can receive them without going through React state
+      if (event.type === 'FileContent' || event.type === 'FileReadError') {
+        window.dispatchEvent(new CustomEvent('file-viewer-event', { detail: event }));
+      }
+
+      // Route search results to SearchPane
+      if (event.type === 'SearchResults') {
+        window.dispatchEvent(new CustomEvent('search-results', { detail: event }));
       }
     },
     [dispatch],

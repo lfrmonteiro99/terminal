@@ -6,6 +6,7 @@ pub mod git_engine;
 pub mod parser;
 pub mod persistence;
 pub mod pty;
+pub mod search_engine;
 pub mod server;
 
 use crate::persistence::Persistence;

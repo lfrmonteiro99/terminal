@@ -216,6 +216,41 @@ pub async fn worktree_list(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+pub async fn list_branches(cwd: &Path) -> Result<(Vec<BranchInfo>, Option<String>)> {
+    let output = run_git(cwd, &["branch", "-v", "--no-color"]).await?;
+    let mut branches = Vec::new();
+    let mut current: Option<String> = None;
+
+    for line in output.lines() {
+        let is_head = line.starts_with('*');
+        let trimmed = line.trim_start_matches('*').trim();
+        // Format: "name  <hash>  summary"
+        let mut parts = trimmed.splitn(3, char::is_whitespace);
+        let name = match parts.next() {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => continue,
+        };
+        // skip hash token
+        let _ = parts.next();
+        let summary = trimmed
+            .splitn(3, char::is_whitespace)
+            .nth(2)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if is_head {
+            current = Some(name.clone());
+        }
+        branches.push(BranchInfo {
+            name,
+            is_head,
+            upstream: None,
+            last_commit_summary: summary,
+        });
+    }
+    Ok((branches, current))
+}
+
 pub async fn branch_delete(cwd: &Path, name: &str, force: bool) -> Result<()> {
     let flag = if force { "-D" } else { "-d" };
     run_git(cwd, &["branch", flag, name]).await?;

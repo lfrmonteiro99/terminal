@@ -1,7 +1,7 @@
 use crate::models::{
-    CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
+    BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
     FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
-    RunMode, RunState, RunSummary, SessionSummary, StashEntry, TerminalSessionSummary,
+    RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, TerminalSessionSummary,
     WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,9 @@ pub enum AppCommand {
         mode: RunMode,
         stash_message: String,
     },
+
+    // Branch operations
+    ListBranches,
 
     // Sidebar commands (Phase 3)
     ListDirectory { path: PathBuf },
@@ -157,6 +160,30 @@ pub enum AppCommand {
     ResolveConflict {
         file_path: PathBuf,
         resolution: ConflictResolution,
+    },
+
+    // File viewer (TERMINAL-005)
+    ReadFile {
+        path: String,
+        #[serde(default)]
+        max_bytes: Option<u64>,
+    },
+
+    // Search (TERMINAL-006)
+    SearchFiles {
+        query: String,
+        #[serde(default)]
+        is_regex: bool,
+        #[serde(default)]
+        case_sensitive: bool,
+        #[serde(default)]
+        include_glob: Option<String>,
+        #[serde(default)]
+        exclude_glob: Option<String>,
+        #[serde(default)]
+        max_results: Option<usize>,
+        #[serde(default)]
+        context_lines: Option<usize>,
     },
 
     // System
@@ -277,6 +304,10 @@ pub enum AppEvent {
     BranchChanged {
         name: String,
     },
+    BranchList {
+        branches: Vec<BranchInfo>,
+        current: Option<String>,
+    },
 
     // Session
     SessionStarted {
@@ -371,6 +402,29 @@ pub enum AppEvent {
     },
     ConflictResolved {
         file_path: PathBuf,
+    },
+
+    // File viewer (TERMINAL-005)
+    FileContent {
+        path: String,
+        content: String,
+        language: String,
+        truncated: bool,
+        size_bytes: u64,
+    },
+    FileReadError {
+        path: String,
+        error: String,
+    },
+
+    // Search (TERMINAL-006)
+    SearchResults {
+        query: String,
+        matches: Vec<SearchMatch>,
+        total_matches: usize,
+        files_searched: usize,
+        truncated: bool,
+        duration_ms: u64,
     },
 
     // System

@@ -8,6 +8,8 @@ export type PaneKind =
   | 'FileExplorer'
   | 'Browser'
   | 'Diff'
+  | 'FileViewer'
+  | 'Search'
   | 'Empty';
 
 export interface PaneDefinition {

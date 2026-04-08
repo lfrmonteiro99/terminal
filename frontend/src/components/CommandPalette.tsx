@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSend } from '../context/SendContext';
 import { useAppDispatch } from '../context/AppContext';
 import type { PaneLayout } from '../domain/pane/types';
+import type { BranchInfo } from '../types/protocol';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 import { getShortcut, resetShortcuts } from '../core/shortcutMap';
 import { LAYOUT_PRESETS } from '../core/layoutPresets';
@@ -39,7 +40,7 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
   Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
 );
 
-type PaletteMode = 'commands' | 'quick-commands' | 'save-name' | 'save-cmd';
+type PaletteMode = 'commands' | 'quick-commands' | 'save-name' | 'save-cmd' | 'branches' | 'new-branch';
 
 export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts }: CommandPaletteProps) {
   const send = useSend();
@@ -50,6 +51,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
   const [saveName, setSaveName] = useState('');
   const [quickCmds, setQuickCmds] = useState<QuickCommand[]>([]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Reload snippets whenever we enter quick-commands mode
@@ -153,6 +155,14 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         shortcut: getShortcut('sidebar:git'),
         action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' }); onClose(); },
       },
+      // Git branch
+      {
+        id: 'git:switch-branch',
+        label: 'Switch Branch',
+        description: 'Browse and checkout a local branch',
+        shortcut: getShortcut('git:switch-branch'),
+        action: () => { setMode('branches'); setQuery(''); setSelectedIndex(0); },
+      },
       // Git operations
       {
         id: 'git:refresh',
@@ -200,6 +210,8 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { resetShortcuts(); onClose(); },
       },
       // Add pane commands
+      { id: 'add:search', label: 'Add Pane: Search', description: 'Add a search pane to grep across project files', action: () => { onAddPane?.('Search', 'Horizontal'); } },
+      { id: 'add:fileviewer', label: 'Add Pane: File Viewer', description: 'Add a file viewer pane', action: () => { onAddPane?.('FileViewer', 'Horizontal'); } },
       { id: 'add:terminal', label: 'Add Pane: Terminal', description: 'Add a terminal pane to the right', action: () => { onAddPane?.('Terminal', 'Horizontal'); } },
       { id: 'add:terminal:down', label: 'Add Pane: Terminal (below)', description: 'Add a terminal pane below', action: () => { onAddPane?.('Terminal', 'Vertical'); } },
       { id: 'add:ai', label: 'Add Pane: AI Run', description: 'Add an AI prompt pane', action: () => { onAddPane?.('AiRun', 'Horizontal'); } },
@@ -229,10 +241,14 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts],
   );
 
-  // Determine effective mode: if query starts with '!' override to quick-commands
+  // Determine effective mode: if query starts with '!' override to quick-commands,
+  // if query starts with '>' override to branches (or back if backspaced past '>')
   const effectiveMode: PaletteMode = useMemo(() => {
     if (mode === 'save-name' || mode === 'save-cmd') return mode;
+    if (mode === 'new-branch') return mode;
     if (query.startsWith('!')) return 'quick-commands';
+    if (query.startsWith('>')) return 'branches';
+    if (mode === 'branches') return 'branches';
     return mode;
   }, [query, mode]);
 
@@ -255,7 +271,17 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     );
   }, [quickCmds, query, effectiveMode]);
 
-  const listLength = effectiveMode === 'quick-commands' ? filteredQuickCmds.length : filteredCommands.length;
+  const filteredBranches = useMemo(() => {
+    if (effectiveMode !== 'branches') return [];
+    const q = query.startsWith('>') ? query.slice(1).trim().toLowerCase() : query.toLowerCase();
+    if (!q) return branches;
+    return branches.filter((b) => b.name.toLowerCase().includes(q));
+  }, [branches, query, effectiveMode]);
+
+  const listLength =
+    effectiveMode === 'quick-commands' ? filteredQuickCmds.length :
+    effectiveMode === 'branches' ? filteredBranches.length + 1 : // +1 for "Create New Branch..."
+    filteredCommands.length;
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -267,6 +293,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       setSelectedIndex(0);
       setMode('commands');
       setSaveName('');
+      setBranches([]);
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
@@ -277,6 +304,23 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       setQuickCmds(getQuickCommands());
     }
   }, [effectiveMode]);
+
+  // Request branch list when entering branches mode
+  useEffect(() => {
+    if (effectiveMode === 'branches') {
+      send({ type: 'ListBranches' });
+    }
+  }, [effectiveMode, send]);
+
+  // Listen for BranchList events routed from App.tsx
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const event = (e as CustomEvent).detail;
+      setBranches(event.branches ?? []);
+    };
+    window.addEventListener('branch-list', handler);
+    return () => window.removeEventListener('branch-list', handler);
+  }, []);
 
   const handleDeleteQuickCmd = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -289,8 +333,24 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     onClose();
   };
 
+  const handleSelectBranch = (branch: BranchInfo) => {
+    send({ type: 'CheckoutBranch', name: branch.name });
+    onClose();
+  };
+
+  const handleCreateNewBranch = () => {
+    setMode('new-branch');
+    setQuery('');
+    setSelectedIndex(0);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      if (mode === 'branches' && !query.startsWith('>')) {
+        setMode('commands');
+        setQuery('');
+        return;
+      }
       if (mode !== 'commands') {
         setMode('commands');
         setQuery('');
@@ -329,12 +389,31 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       return;
     }
 
+    if (effectiveMode === 'new-branch') {
+      if (e.key === 'Enter') {
+        const trimmed = query.trim();
+        if (trimmed) {
+          send({ type: 'CreateBranch', name: trimmed });
+          onClose();
+        }
+        e.preventDefault();
+      }
+      return;
+    }
+
     if (e.key === 'ArrowDown') { setSelectedIndex((i) => Math.min(i + 1, listLength - 1)); e.preventDefault(); return; }
     if (e.key === 'ArrowUp') { setSelectedIndex((i) => Math.max(i - 1, 0)); e.preventDefault(); return; }
     if (e.key === 'Enter') {
       if (effectiveMode === 'quick-commands') {
         const cmd = filteredQuickCmds[selectedIndex];
         if (cmd) handleRunQuickCmd(cmd);
+      } else if (effectiveMode === 'branches') {
+        if (selectedIndex === filteredBranches.length) {
+          handleCreateNewBranch();
+        } else {
+          const branch = filteredBranches[selectedIndex];
+          if (branch) handleSelectBranch(branch);
+        }
       } else {
         filteredCommands[selectedIndex]?.action();
       }
@@ -349,12 +428,16 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     effectiveMode === 'save-name' ? 'Snippet name (e.g. Run tests)...' :
     effectiveMode === 'save-cmd' ? `Command for "${saveName}"...` :
     effectiveMode === 'quick-commands' ? 'Filter snippets...' :
-    'Type a command or ! for quick commands...';
+    effectiveMode === 'branches' ? 'Switch Branch: filter branches...' :
+    effectiveMode === 'new-branch' ? 'New branch name...' :
+    'Type a command or ! for quick commands or > for branches...';
 
   const headerLabel =
     effectiveMode === 'save-name' ? 'Save Quick Command — Step 1: enter a name' :
     effectiveMode === 'save-cmd' ? `Save Quick Command — Step 2: enter the command` :
     effectiveMode === 'quick-commands' ? 'Quick Commands' :
+    effectiveMode === 'branches' ? 'Switch Branch' :
+    effectiveMode === 'new-branch' ? 'Create New Branch' :
     null;
 
   return (
@@ -471,6 +554,71 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
               {quickCmds.length === 0
                 ? 'No saved commands. Use "Save Quick Command" to add one.'
                 : 'No matching snippets'}
+            </div>
+          )}
+
+          {/* Branch picker list */}
+          {effectiveMode === 'branches' && filteredBranches.map((branch, idx) => (
+            <div
+              key={branch.name}
+              onClick={() => handleSelectBranch(branch)}
+              onMouseEnter={() => setSelectedIndex(idx)}
+              style={{
+                padding: '10px 16px',
+                cursor: 'pointer',
+                backgroundColor: idx === selectedIndex ? 'var(--bg-overlay)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 13, color: branch.is_head ? 'var(--accent-success, #4ade80)' : 'var(--text-primary)', fontFamily: 'monospace', flex: 1 }}>
+                {branch.is_head ? '● ' : '  '}{branch.name}
+              </span>
+              {branch.last_commit_summary && (
+                <span style={{
+                  fontSize: 11,
+                  color: 'var(--text-muted)',
+                  fontFamily: 'monospace',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: 220,
+                }}>
+                  {branch.last_commit_summary}
+                </span>
+              )}
+            </div>
+          ))}
+          {effectiveMode === 'branches' && (
+            <div
+              onClick={handleCreateNewBranch}
+              onMouseEnter={() => setSelectedIndex(filteredBranches.length)}
+              style={{
+                padding: '10px 16px',
+                cursor: 'pointer',
+                backgroundColor: selectedIndex === filteredBranches.length ? 'var(--bg-overlay)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                borderTop: filteredBranches.length > 0 ? '1px solid var(--border-default)' : undefined,
+              }}
+            >
+              <span style={{ fontSize: 13, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                + Create New Branch...
+              </span>
+            </div>
+          )}
+          {effectiveMode === 'branches' && branches.length === 0 && (
+            <div style={{ padding: '8px 16px', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace' }}>
+              Loading branches...
+            </div>
+          )}
+
+          {/* new-branch input guidance */}
+          {effectiveMode === 'new-branch' && (
+            <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
+              Press Enter to create branch, Escape to cancel
             </div>
           )}
 

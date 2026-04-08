@@ -22,6 +22,16 @@ export interface RestorableTerminalSession {
   last_active_at: string;
 }
 
+// --- Search types (TERMINAL-006) ---
+
+export interface SearchMatch {
+  file_path: string;
+  line_number: number;
+  line_content: string;
+  context_before: string[];
+  context_after: string[];
+}
+
 // --- Merge Conflict types (M5-05) ---
 
 export interface MergeConflictFile {
@@ -121,6 +131,13 @@ export interface CommitEntry {
   date: string;
 }
 
+export interface BranchInfo {
+  name: string;
+  is_head: boolean;
+  upstream: string | null;
+  last_commit_summary: string | null;
+}
+
 export interface RepoStatus {
   branch: string;
   head: string;
@@ -169,6 +186,7 @@ export type AppCommand =
   | { type: 'StageFile'; path: string }
   | { type: 'UnstageFile'; path: string }
   | { type: 'CreateCommit'; message: string }
+  | { type: 'ListBranches' }
   | { type: 'CheckoutBranch'; name: string }
   | { type: 'CreateBranch'; name: string; from?: string }
   // Workspace commands (M1-01)
@@ -189,7 +207,20 @@ export type AppCommand =
   | { type: 'PullBranch'; remote?: string; branch?: string }
   | { type: 'FetchRemote'; remote?: string }
   | { type: 'GetMergeConflicts' }
-  | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution };
+  | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution }
+  // File viewer (TERMINAL-005)
+  | { type: 'ReadFile'; path: string; max_bytes?: number }
+  // Search (TERMINAL-006)
+  | {
+      type: 'SearchFiles';
+      query: string;
+      is_regex?: boolean;
+      case_sensitive?: boolean;
+      include_glob?: string;
+      exclude_glob?: string;
+      max_results?: number;
+      context_lines?: number;
+    };
 
 // --- Events (Daemon -> Client) ---
 
@@ -227,6 +258,7 @@ export type AppEvent =
   | { type: 'CommitHistoryResult'; commits: CommitEntry[] }
   | { type: 'CommitCreated'; hash: string }
   | { type: 'BranchChanged'; name: string }
+  | { type: 'BranchList'; branches: BranchInfo[]; current: string | null }
   // Workspace events (M1-01)
   | { type: 'WorkspaceList'; workspaces: WorkspaceSummary[] }
   | { type: 'WorkspaceCreated'; workspace: WorkspaceSummary }
@@ -246,4 +278,9 @@ export type AppEvent =
   | { type: 'FetchCompleted'; remote: string }
   | { type: 'GitOperationFailed'; operation: string; reason: string }
   | { type: 'MergeConflicts'; files: MergeConflictFile[] }
-  | { type: 'ConflictResolved'; file_path: string };
+  | { type: 'ConflictResolved'; file_path: string }
+  // File viewer (TERMINAL-005)
+  | { type: 'FileContent'; path: string; content: string; language: string; truncated: boolean; size_bytes: number }
+  | { type: 'FileReadError'; path: string; error: string }
+  // Search (TERMINAL-006)
+  | { type: 'SearchResults'; query: string; matches: SearchMatch[]; total_matches: number; files_searched: number; truncated: boolean; duration_ms: number };
