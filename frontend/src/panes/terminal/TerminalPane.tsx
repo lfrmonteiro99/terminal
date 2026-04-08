@@ -45,6 +45,9 @@ function installGlobalListener() {
   });
 }
 
+// Global map: paneId → sessionId. Survives React remounts (e.g., after pane split).
+const paneSessionMap = new Map<string, string>();
+
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
   const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
@@ -58,13 +61,15 @@ function getTermTheme() {
   };
 }
 
-export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
+export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   const send = useSend();
   const state = useAppState();
   const session = state.sessions.get(workspaceId);
   const cwd = session?.project_root ?? undefined;
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionState, setSessionState] = useState<SessionState>('idle');
+  // Check if this pane already has a session from a previous mount (e.g., after split)
+  const existingSessionId = paneSessionMap.get(pane.id) ?? null;
+  const [sessionId, setSessionId] = useState<string | null>(existingSessionId);
+  const [sessionState, setSessionState] = useState<SessionState>(existingSessionId ? 'active' : 'idle');
   const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
@@ -172,6 +177,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
     setSessionState('creating');
     send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd });
     waitForSession(workspaceId).then((sid) => {
+      paneSessionMap.set(pane.id, sid);
       setSessionId(sid);
       setSessionState('active');
     });
@@ -186,6 +192,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
         xtermRef.current?.write(event.data);
       }
       if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
+        paneSessionMap.delete(pane.id);
         setSessionState('lost');
       }
     };
@@ -212,6 +219,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   }, [sessionId, xtermLoaded]);
 
   const handleReconnect = () => {
+    paneSessionMap.delete(pane.id);
     setSessionState('idle');
     setSessionId(null);
   };
