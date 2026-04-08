@@ -242,6 +242,8 @@ export function PaneRenderer({
         isHorizontal={isHorizontal}
         initialRatio={ratio}
         hideControls={zoomedPaneId != null}
+        firstHasZoomed={zoomedPaneId != null && layoutContainsPane(first, zoomedPaneId)}
+        secondHasZoomed={zoomedPaneId != null && layoutContainsPane(second, zoomedPaneId)}
         first={
           <PaneRenderer
             layout={first}
@@ -279,15 +281,23 @@ export function PaneRenderer({
 
 // --- SplitContainer with drag-to-resize (M2-03) ---
 
+function layoutContainsPane(layout: PaneLayout, paneId: string): boolean {
+  if (isSingle(layout)) return layout.Single.id === paneId;
+  if (isSplit(layout)) return layoutContainsPane(layout.Split.first, paneId) || layoutContainsPane(layout.Split.second, paneId);
+  return false;
+}
+
 interface SplitContainerProps {
   isHorizontal: boolean;
   initialRatio: number;
   first: React.ReactNode;
   second: React.ReactNode;
   hideControls?: boolean;
+  firstHasZoomed?: boolean;
+  secondHasZoomed?: boolean;
 }
 
-function SplitContainer({ isHorizontal, initialRatio, first, second, hideControls }: SplitContainerProps) {
+function SplitContainer({ isHorizontal, initialRatio, first, second, hideControls, firstHasZoomed, secondHasZoomed }: SplitContainerProps) {
   const [ratio, setRatio] = useState(initialRatio);
   const [splitterState, setSplitterState] = useState<'idle' | 'hover' | 'dragging'>('idle');
 
@@ -349,7 +359,7 @@ function SplitContainer({ isHorizontal, initialRatio, first, second, hideControl
         overflow: 'hidden',
       }}
     >
-      <div style={{ flex: hideControls ? 1 : ratio, overflow: 'hidden', display: 'flex' }}>{first}</div>
+      <div style={{ flex: hideControls ? (firstHasZoomed ? 1 : 0) : ratio, overflow: 'hidden', display: hideControls && !firstHasZoomed ? 'none' : 'flex' }}>{first}</div>
       {!hideControls && (
         <div
           style={{
@@ -370,7 +380,7 @@ function SplitContainer({ isHorizontal, initialRatio, first, second, hideControl
           onDoubleClick={() => setRatio(0.5)}
         />
       )}
-      <div style={{ flex: hideControls ? 1 : (1 - ratio), overflow: 'hidden', display: 'flex' }}>{second}</div>
+      <div style={{ flex: hideControls ? (secondHasZoomed ? 1 : 0) : (1 - ratio), overflow: 'hidden', display: hideControls && !secondHasZoomed ? 'none' : 'flex' }}>{second}</div>
     </div>
   );
 }
