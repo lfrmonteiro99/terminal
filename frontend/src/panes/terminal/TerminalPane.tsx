@@ -9,6 +9,19 @@ import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
+function getTermTheme() {
+  const s = getComputedStyle(document.documentElement);
+  const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
+  return {
+    background: v('--bg-base') || '#0d1117',
+    foreground: v('--text-primary') || '#e0e0e0',
+    cursor: v('--accent-primary') || '#4ecdc4',
+    cursorAccent: v('--bg-base') || '#0d1117',
+    selectionBackground: v('--bg-overlay') || '#232738',
+    selectionForeground: v('--text-primary') || '#e2e4e9',
+  };
+}
+
 export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   const send = useSend();
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -34,8 +47,8 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
         if (disposed || !termRef.current) return;
 
         const terminal = new Terminal({
-          theme: { background: '#0d1117', foreground: '#e0e0e0' },
-          fontFamily: 'monospace',
+          theme: getTermTheme(),
+          fontFamily: 'var(--font-mono, monospace)',
           fontSize: 13,
           cursorBlink: true,
         });
@@ -88,6 +101,18 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
       xtermRef.current?.dispose();
       xtermRef.current = null;
     };
+  }, []);
+
+  // Update xterm theme when CSS variables change (theme switch)
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const term = xtermRef.current as any;
+      if (term?.options) {
+        term.options.theme = getTermTheme();
+      }
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
   }, []);
 
   // Focus xterm when this pane becomes focused (for keyboard navigation)
@@ -151,7 +176,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   };
 
   return (
-    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#0d1117' }}>
+    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
       {sessionState === 'lost' && (
         <div
           style={{
@@ -166,15 +191,15 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
             zIndex: 10,
           }}
         >
-          <span style={{ color: '#ff6b6b', fontFamily: 'monospace', fontSize: 14 }}>
+          <span style={{ color: 'var(--accent-error)', fontFamily: 'monospace', fontSize: 14 }}>
             Session lost
           </span>
           <button
             onClick={handleReconnect}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#4ecdc4',
-              color: '#1a1a2e',
+              backgroundColor: 'var(--accent-primary)',
+              color: 'var(--bg-surface)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',
@@ -195,7 +220,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#888',
+            color: 'var(--text-muted)',
             fontFamily: 'monospace',
             fontSize: 13,
           }}

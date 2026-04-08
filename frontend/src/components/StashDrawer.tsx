@@ -32,11 +32,11 @@ function getStatusChar(status: FileStatus): string {
 }
 
 function getStatusColor(status: FileStatus): string {
-  if (status === 'Modified') return '#f0a500';
+  if (status === 'Modified') return 'var(--accent-warn)';
   if (status === 'Added') return '#4caf50';
-  if (status === 'Deleted') return '#ff6b6b';
-  if (typeof status === 'object' && 'Renamed' in status) return '#f0a500';
-  return '#666666';
+  if (status === 'Deleted') return 'var(--accent-error)';
+  if (typeof status === 'object' && 'Renamed' in status) return 'var(--accent-warn)';
+  return 'var(--text-muted)';
 }
 
 // --- Styles ---
@@ -59,8 +59,8 @@ const drawerStyle: React.CSSProperties = {
   width: 'calc(60vw)',
   minWidth: 700,
   maxWidth: 1100,
-  backgroundColor: '#1a1a1a',
-  borderLeft: '1px solid #333',
+  backgroundColor: 'var(--bg-surface)',
+  borderLeft: '1px solid var(--border-default)',
   zIndex: 501,
   display: 'flex',
   flexDirection: 'column',
@@ -69,7 +69,7 @@ const drawerStyle: React.CSSProperties = {
 
 const drawerHeaderStyle: React.CSSProperties = {
   padding: '12px 16px',
-  borderBottom: '1px solid #333',
+  borderBottom: '1px solid var(--border-default)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -79,7 +79,7 @@ const drawerHeaderStyle: React.CSSProperties = {
 const closeBtnStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
   border: 'none',
-  color: '#888',
+  color: 'var(--text-muted)',
   fontSize: 18,
   cursor: 'pointer',
   padding: '4px 8px',
@@ -95,7 +95,7 @@ const bodyStyle: React.CSSProperties = {
 const leftColumnStyle: React.CSSProperties = {
   width: 240,
   flexShrink: 0,
-  borderRight: '1px solid #333',
+  borderRight: '1px solid var(--border-default)',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -105,7 +105,7 @@ const leftHeaderStyle: React.CSSProperties = {
   padding: '10px 12px',
   fontSize: 11,
   textTransform: 'uppercase',
-  color: '#888',
+  color: 'var(--text-muted)',
   letterSpacing: 1,
   flexShrink: 0,
   fontFamily: 'monospace',
@@ -128,8 +128,8 @@ const rightColumnStyle: React.CSSProperties = {
 const stashCardStyle = (selected: boolean): React.CSSProperties => ({
   minHeight: 72,
   padding: 12,
-  backgroundColor: selected ? '#16213e' : '#0a0a0a',
-  borderLeft: selected ? '3px solid #4ecdc4' : '3px solid transparent',
+  backgroundColor: selected ? 'var(--bg-raised)' : 'var(--bg-base)',
+  borderLeft: selected ? '3px solid var(--accent-primary)' : '3px solid transparent',
   borderRadius: 4,
   marginBottom: 4,
   cursor: 'pointer',
@@ -142,9 +142,9 @@ const fileRowStyle = (selected: boolean): React.CSSProperties => ({
   padding: '0 12px',
   fontSize: 12,
   fontFamily: 'monospace',
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
   cursor: 'pointer',
-  backgroundColor: selected ? '#16213e' : 'transparent',
+  backgroundColor: selected ? 'var(--bg-raised)' : 'transparent',
   height: 28,
 });
 
@@ -178,13 +178,13 @@ function StashCard({
 }) {
   return (
     <div style={stashCardStyle(selected)} onClick={onClick}>
-      <div style={{ fontSize: 11, color: '#888', fontFamily: 'monospace', marginBottom: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: 4 }}>
         stash@{'{' + stash.index + '}'}
       </div>
       <div style={{
         fontSize: 13,
         fontFamily: 'monospace',
-        color: '#e0e0e0',
+        color: 'var(--text-primary)',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
@@ -192,10 +192,10 @@ function StashCard({
       }}>
         {stash.message || '(no message)'}
       </div>
-      <div style={{ fontSize: 11, color: '#888', fontFamily: 'monospace', marginBottom: 2 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: 2 }}>
         {stash.branch ?? 'detached'}{fileCount !== null ? ` \u00B7 ${fileCount} files` : ''}
       </div>
-      <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
         {relativeTime(stash.date)}
       </div>
     </div>
@@ -232,7 +232,7 @@ function DiffView({ diff }: { diff: string | null }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: '#666',
+        color: 'var(--text-muted)',
         fontSize: 12,
         fontFamily: 'monospace',
       }}>
@@ -255,15 +255,15 @@ function DiffView({ diff }: { diff: string | null }) {
       whiteSpace: 'pre',
     }}>
       {lines.map((line, i) => {
-        let color = '#aaaaaa';
+        let color = 'var(--text-muted)';
         let bg = 'transparent';
         if (line.startsWith('@@')) {
-          color = '#4ecdc4';
+          color = 'var(--accent-primary)';
         } else if (line.startsWith('+')) {
           color = '#4caf50';
           bg = 'rgba(76,175,80,0.08)';
         } else if (line.startsWith('-')) {
-          color = '#ff6b6b';
+          color = 'var(--accent-error)';
           bg = 'rgba(255,107,107,0.08)';
         }
         return (
@@ -286,14 +286,14 @@ function EmptyState() {
       justifyContent: 'center',
       gap: 8,
     }}>
-      <div style={{ color: '#888', fontSize: 13, fontFamily: 'monospace' }}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 13, fontFamily: 'monospace' }}>
         No stashes found
       </div>
-      <div style={{ color: '#666', fontSize: 11, fontFamily: 'monospace' }}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace' }}>
         Use{' '}
         <span style={{
-          backgroundColor: '#0a0a0a',
-          color: '#4ecdc4',
+          backgroundColor: 'var(--bg-base)',
+          color: 'var(--accent-primary)',
           padding: '2px 6px',
           borderRadius: 2,
           fontFamily: 'monospace',
@@ -364,7 +364,7 @@ export function StashDrawer({ onClose, onFetchStashes, onFetchFiles, onFetchDiff
       <div style={drawerStyle}>
         {/* Header */}
         <div style={drawerHeaderStyle}>
-          <span style={{ fontSize: 11, textTransform: 'uppercase', color: '#888', letterSpacing: 1, fontFamily: 'monospace' }}>
+          <span style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1, fontFamily: 'monospace' }}>
             STASH VIEWER
           </span>
           <button style={closeBtnStyle} onClick={onClose}>{'\u00D7'}</button>
@@ -397,14 +397,14 @@ export function StashDrawer({ onClose, onFetchStashes, onFetchFiles, onFetchDiff
               {selectedStashObj ? (
                 <>
                   {/* Stash info header */}
-                  <div style={{ padding: '10px 12px', borderBottom: '1px solid #333', flexShrink: 0, fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-default)', flexShrink: 0, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                     {selectedStashObj.message}{' \u00B7 '}
                     {selectedStashObj.branch ?? 'detached'}{' \u00B7 '}
                     {files ? `${files.length} file${files.length !== 1 ? 's' : ''}` : '...'}
                   </div>
 
                   {/* File list */}
-                  <div style={{ maxHeight: 180, overflowY: 'auto', borderBottom: '1px solid #333', flexShrink: 0 }}>
+                  <div style={{ maxHeight: 180, overflowY: 'auto', borderBottom: '1px solid var(--border-default)', flexShrink: 0 }}>
                     {files ? files.map((file) => (
                       <FileListRow
                         key={file.path}
@@ -413,7 +413,7 @@ export function StashDrawer({ onClose, onFetchStashes, onFetchFiles, onFetchDiff
                         onClick={() => handleSelectFile(file.path)}
                       />
                     )) : (
-                      <div style={{ padding: '8px 12px', color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
+                      <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
                         Loading files...
                       </div>
                     )}
@@ -431,7 +431,7 @@ export function StashDrawer({ onClose, onFetchStashes, onFetchFiles, onFetchDiff
                 </>
               ) : (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <div style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
                     Select a stash to view details.
                   </div>
                 </div>

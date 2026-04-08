@@ -16,10 +16,10 @@ function statusLabel(status: FileChange['status']): string {
 }
 
 function statusColor(status: FileChange['status']): string {
-  if (status === 'Added') return '#4ecdc4';
-  if (status === 'Modified') return '#f0a500';
-  if (status === 'Deleted') return '#ff6b6b';
-  return '#888';
+  if (status === 'Added') return 'var(--accent-primary)';
+  if (status === 'Modified') return 'var(--accent-warn)';
+  if (status === 'Deleted') return 'var(--accent-error)';
+  return 'var(--text-muted)';
 }
 
 export function GitStatusPane({ pane: _pane }: PaneProps) {
@@ -41,39 +41,39 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        backgroundColor: '#16213e',
-        color: '#e0e0e0',
+        backgroundColor: 'var(--bg-surface)',
+        color: 'var(--text-primary)',
       }}
     >
       {/* Header */}
       <div
         style={{
           padding: '8px 12px',
-          borderBottom: '1px solid #333',
+          borderBottom: '1px solid var(--border-default)',
           fontSize: 12,
-          color: '#888',
+          color: 'var(--text-muted)',
           display: 'flex',
           gap: 12,
           alignItems: 'center',
         }}
       >
-        <span style={{ fontWeight: 'bold', color: '#4ecdc4' }}>
+        <span style={{ fontWeight: 'bold', color: 'var(--accent-primary)' }}>
           {repoStatus?.branch ?? 'unknown'}
         </span>
         {repoStatus && (
           <span>
             {repoStatus.staged_count > 0 && (
-              <span style={{ color: '#4ecdc4' }}>+{repoStatus.staged_count} staged</span>
+              <span style={{ color: 'var(--accent-primary)' }}>+{repoStatus.staged_count} staged</span>
             )}
             {repoStatus.staged_count > 0 && repoStatus.unstaged_count > 0 && ' · '}
             {repoStatus.unstaged_count > 0 && (
-              <span style={{ color: '#f0a500' }}>{repoStatus.unstaged_count} unstaged</span>
+              <span style={{ color: 'var(--accent-warn)' }}>{repoStatus.unstaged_count} unstaged</span>
             )}
           </span>
         )}
         <button
           onClick={() => { send({ type: 'GetRepoStatus' }); send({ type: 'GetChangedFiles', mode: 'working' }); }}
-          style={{ marginLeft: 'auto', background: 'none', border: '1px solid #444', color: '#888', borderRadius: 3, padding: '2px 8px', cursor: 'pointer', fontSize: 11 }}
+          style={{ marginLeft: 'auto', background: 'none', border: '1px solid var(--border-default)', color: 'var(--text-muted)', borderRadius: 3, padding: '2px 8px', cursor: 'pointer', fontSize: 11 }}
         >
           ↻ Refresh
         </button>
@@ -82,7 +82,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
       {/* File list */}
       <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
         {files.length === 0 ? (
-          <div style={{ padding: '16px 12px', color: '#555', fontSize: 12, fontFamily: 'monospace' }}>
+          <div style={{ padding: '16px 12px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
             No changed files
           </div>
         ) : (
@@ -98,7 +98,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
                 fontFamily: 'monospace',
                 cursor: 'pointer',
               }}
-              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.backgroundColor = '#1e2a3e')}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--bg-raised)')}
               onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent')}
             >
               <span style={{ color: statusColor(file.status), width: 14, textAlign: 'center' }}>
@@ -109,7 +109,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
               </span>
               <button
                 onClick={() => send({ type: 'StageFile', path: typeof file.path === 'string' ? file.path : String(file.path) })}
-                style={{ background: 'none', border: '1px solid #444', color: '#4ecdc4', borderRadius: 3, padding: '1px 6px', cursor: 'pointer', fontSize: 10 }}
+                style={{ background: 'none', border: '1px solid var(--border-default)', color: 'var(--accent-primary)', borderRadius: 3, padding: '1px 6px', cursor: 'pointer', fontSize: 10 }}
               >
                 Stage
               </button>
@@ -128,7 +128,7 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
   const [msg, setMsg] = React.useState('');
 
   return (
-    <div style={{ padding: '8px 12px', borderTop: '1px solid #333', display: 'flex', gap: 8 }}>
+    <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border-default)', display: 'flex', gap: 8 }}>
       <input
         value={msg}
         onChange={(e) => setMsg(e.target.value)}
@@ -136,9 +136,9 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
         placeholder="Commit message..."
         style={{
           flex: 1,
-          backgroundColor: '#1a1a2e',
-          border: '1px solid #444',
-          color: '#e0e0e0',
+          backgroundColor: 'var(--bg-surface)',
+          border: '1px solid var(--border-default)',
+          color: 'var(--text-primary)',
           padding: '4px 8px',
           borderRadius: 3,
           fontFamily: 'monospace',
@@ -148,8 +148,8 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
       <button
         onClick={() => { if (msg.trim()) { onCommit(msg.trim()); setMsg(''); } }}
         style={{
-          backgroundColor: '#4ecdc4',
-          color: '#1a1a2e',
+          backgroundColor: 'var(--accent-primary)',
+          color: 'var(--bg-surface)',
           border: 'none',
           borderRadius: 3,
           padding: '4px 12px',

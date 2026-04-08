@@ -26,11 +26,11 @@ function getStatusBadgeStyle(status: FileStatus): React.CSSProperties {
     justifyContent: 'center',
     flexShrink: 0,
   };
-  if (status === 'Added') return { ...base, backgroundColor: 'rgba(78,205,196,0.18)', color: '#4ecdc4' };
-  if (status === 'Modified') return { ...base, backgroundColor: 'rgba(240,165,0,0.18)', color: '#f0a500' };
-  if (status === 'Deleted') return { ...base, backgroundColor: 'rgba(255,107,107,0.18)', color: '#ff6b6b' };
-  if (typeof status === 'object' && 'Renamed' in status) return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: '#888' };
-  return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: '#888' };
+  if (status === 'Added') return { ...base, backgroundColor: 'rgba(78,205,196,0.18)', color: 'var(--accent-primary)' };
+  if (status === 'Modified') return { ...base, backgroundColor: 'rgba(240,165,0,0.18)', color: 'var(--accent-warn)' };
+  if (status === 'Deleted') return { ...base, backgroundColor: 'rgba(255,107,107,0.18)', color: 'var(--accent-error)' };
+  if (typeof status === 'object' && 'Renamed' in status) return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
+  return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
 }
 
 function getFileStatus(filePath: string, files: Array<{ path: string; status: FileStatus }>): FileStatus {
@@ -84,16 +84,16 @@ function parseDiffLines(diff: string): DiffLineInfo[] {
 
 const lineStyles: Record<DiffLineInfo['type'], React.CSSProperties> = {
   added: { backgroundColor: 'rgba(76, 175, 80, 0.08)', color: '#4caf50' },
-  removed: { backgroundColor: 'rgba(255, 107, 107, 0.08)', color: '#ff6b6b' },
-  hunk: { backgroundColor: 'rgba(78, 205, 196, 0.06)', color: '#4ecdc4' },
-  normal: { backgroundColor: 'transparent', color: '#aaa' },
+  removed: { backgroundColor: 'rgba(255, 107, 107, 0.08)', color: 'var(--accent-error)' },
+  hunk: { backgroundColor: 'rgba(78, 205, 196, 0.06)', color: 'var(--accent-primary)' },
+  normal: { backgroundColor: 'transparent', color: 'var(--text-muted)' },
 };
 
 const lineNumberStyle: React.CSSProperties = {
   width: 40,
   textAlign: 'right',
   paddingRight: 12,
-  color: '#444',
+  color: 'var(--border-default)',
   fontSize: 10,
   userSelect: 'none',
   flexShrink: 0,
@@ -104,8 +104,8 @@ const headerStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   padding: '5px 10px',
-  backgroundColor: '#16213e',
-  borderBottom: '1px solid #333',
+  backgroundColor: 'var(--bg-surface)',
+  borderBottom: '1px solid var(--border-default)',
   minHeight: 32,
   flexShrink: 0,
 };
@@ -114,7 +114,7 @@ const explainBtnStyle: React.CSSProperties = {
   backgroundColor: 'rgba(78, 205, 196, 0.12)',
   border: '1px solid rgba(78, 205, 196, 0.3)',
   borderRadius: 3,
-  color: '#4ecdc4',
+  color: 'var(--accent-primary)',
   fontSize: 10,
   fontFamily: 'monospace',
   padding: '2px 8px',
@@ -130,7 +130,7 @@ const explainBtnDisabledStyle: React.CSSProperties = {
 const closeBtnStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#666',
+  color: 'var(--text-muted)',
   fontSize: 14,
   cursor: 'pointer',
   padding: '0 2px',
@@ -139,8 +139,8 @@ const closeBtnStyle: React.CSSProperties = {
 };
 
 const splitContainerStyle: React.CSSProperties = {
-  backgroundColor: '#0d1117',
-  borderTop: '1px solid #333',
+  backgroundColor: 'var(--bg-base)',
+  borderTop: '1px solid var(--border-default)',
 };
 
 const overlayContainerStyle: React.CSSProperties = {
@@ -150,8 +150,8 @@ const overlayContainerStyle: React.CSSProperties = {
   transform: 'translate(-50%,-50%)',
   width: '70%',
   height: '80%',
-  backgroundColor: '#0d1117',
-  border: '1px solid #444',
+  backgroundColor: 'var(--bg-base)',
+  border: '1px solid var(--border-default)',
   borderRadius: 4,
   zIndex: 200,
   boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
@@ -167,8 +167,8 @@ const overlayBackdropStyle: React.CSSProperties = {
 };
 
 const inlineContainerStyle: React.CSSProperties = {
-  backgroundColor: '#0d1117',
-  borderTop: '1px solid #333',
+  backgroundColor: 'var(--bg-base)',
+  borderTop: '1px solid var(--border-default)',
   maxHeight: 320,
   display: 'flex',
   flexDirection: 'column',
@@ -269,30 +269,30 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
   // Header
   const headerEl = (
     <div style={headerStyle}>
-      <span style={{ fontSize: 10, color: '#888', fontFamily: 'monospace' }}>
+      <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
         {contextLabel} &gt;
       </span>
       {file && (
         <>
           <span style={getStatusBadgeStyle(fileStatus)}>{getStatusChar(fileStatus)}</span>
-          <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#e0e0e0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {file}
           </span>
         </>
       )}
       {stat && (
-        <span style={{ fontSize: 10, fontFamily: 'monospace', color: '#666' }}>
+        <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-muted)' }}>
           <span style={{ color: '#4caf50' }}>+{stat.insertions}</span>{' '}
-          <span style={{ color: '#ff6b6b' }}>-{stat.deletions}</span>
+          <span style={{ color: 'var(--accent-error)' }}>-{stat.deletions}</span>
         </span>
       )}
       <select
         value={state.diffPanel.mode}
         onChange={handleModeChange}
         style={{
-          backgroundColor: '#0d1117',
-          color: '#e0e0e0',
-          border: '1px solid #333',
+          backgroundColor: 'var(--bg-base)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-default)',
           borderRadius: 3,
           fontSize: 10,
           fontFamily: 'monospace',
@@ -312,7 +312,7 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
         Explain
       </button>
       <button
-        style={{ ...closeBtnStyle, color: closeBtnHover ? '#e0e0e0' : '#666' }}
+        style={{ ...closeBtnStyle, color: closeBtnHover ? 'var(--text-primary)' : 'var(--text-muted)' }}
         onClick={handleClose}
         onMouseEnter={() => setCloseBtnHover(true)}
         onMouseLeave={() => setCloseBtnHover(false)}
@@ -326,11 +326,11 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
   const contentEl = (
     <div style={{ flex: 1, overflow: 'auto' }}>
       {diff === null ? (
-        <div style={{ padding: 16, color: '#666', fontSize: 12, fontFamily: 'monospace', textAlign: 'center' }}>
+        <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace', textAlign: 'center' }}>
           Loading diff...
         </div>
       ) : diffLines.length === 0 ? (
-        <div style={{ padding: 16, color: '#666', fontSize: 12, fontFamily: 'monospace', textAlign: 'center' }}>
+        <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace', textAlign: 'center' }}>
           No changes
         </div>
       ) : (

@@ -53,8 +53,8 @@ export function SidebarContainer() {
       <div style={{
         width,
         flexShrink: 0,
-        backgroundColor: '#1a1a2e',
-        borderRight: '1px solid #333',
+        backgroundColor: 'var(--bg-surface)',
+        borderRight: '1px solid var(--border-default)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',

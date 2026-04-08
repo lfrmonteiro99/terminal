@@ -17,11 +17,11 @@ function getStatusChar(status: FileStatus): string {
 }
 
 function getStatusColor(status: FileStatus): string {
-  if (status === 'Modified') return '#f0a500';
+  if (status === 'Modified') return 'var(--accent-warn)';
   if (status === 'Added') return '#4caf50';
-  if (status === 'Deleted') return '#ff6b6b';
-  if (typeof status === 'object' && 'Renamed' in status) return '#f0a500';
-  return '#666666';
+  if (status === 'Deleted') return 'var(--accent-error)';
+  if (typeof status === 'object' && 'Renamed' in status) return 'var(--accent-warn)';
+  return 'var(--text-muted)';
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -40,8 +40,8 @@ const overlayStyle: React.CSSProperties = {
 const modalStyle: React.CSSProperties = {
   width: 480,
   maxHeight: '70vh',
-  backgroundColor: '#1a1a1a',
-  border: '1px solid #333',
+  backgroundColor: 'var(--bg-surface)',
+  border: '1px solid var(--border-default)',
   borderRadius: 8,
   padding: 24,
   boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
@@ -54,7 +54,7 @@ const modalStyle: React.CSSProperties = {
 const titleStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 'bold',
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
   marginBottom: 12,
   display: 'flex',
   alignItems: 'center',
@@ -65,7 +65,7 @@ const titleStyle: React.CSSProperties = {
 const descriptionStyle: React.CSSProperties = {
   fontSize: 12,
   fontFamily: 'monospace',
-  color: '#aaaaaa',
+  color: 'var(--text-muted)',
   marginBottom: 16,
   lineHeight: 1.5,
 };
@@ -73,7 +73,7 @@ const descriptionStyle: React.CSSProperties = {
 const sectionHeaderStyle: React.CSSProperties = {
   fontSize: 11,
   textTransform: 'uppercase' as const,
-  color: '#888888',
+  color: 'var(--text-muted)',
   letterSpacing: '0.5px',
   cursor: 'pointer',
   userSelect: 'none',
@@ -85,7 +85,7 @@ const sectionHeaderStyle: React.CSSProperties = {
 };
 
 const fileListStyle: React.CSSProperties = {
-  backgroundColor: '#0a0a0a',
+  backgroundColor: 'var(--bg-base)',
   maxHeight: 120,
   overflowY: 'auto',
   borderRadius: 4,
@@ -100,7 +100,7 @@ const fileRowStyle: React.CSSProperties = {
   padding: '0 8px',
   fontSize: 12,
   fontFamily: 'monospace',
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
 };
 
 const badgeStyle = (color: string): React.CSSProperties => ({
@@ -119,7 +119,7 @@ const badgeStyle = (color: string): React.CSSProperties => ({
 });
 
 const separatorStyle: React.CSSProperties = {
-  borderTop: '1px solid #333',
+  borderTop: '1px solid var(--border-default)',
   marginBottom: 16,
 };
 
@@ -130,8 +130,8 @@ const buttonRowStyle: React.CSSProperties = {
 };
 
 const primaryButtonStyle: React.CSSProperties = {
-  backgroundColor: '#4ecdc4',
-  color: '#0a0a0a',
+  backgroundColor: 'var(--accent-primary)',
+  color: 'var(--bg-base)',
   fontWeight: 'bold',
   padding: '10px 20px',
   borderRadius: 4,
@@ -143,8 +143,8 @@ const primaryButtonStyle: React.CSSProperties = {
 
 const secondaryButtonStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
-  color: '#e0e0e0',
-  border: '1px solid #555',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--text-muted)',
   padding: '10px 20px',
   borderRadius: 4,
   cursor: 'pointer',
@@ -154,7 +154,7 @@ const secondaryButtonStyle: React.CSSProperties = {
 
 const ghostButtonStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
-  color: '#888',
+  color: 'var(--text-muted)',
   border: 'none',
   padding: '10px 20px',
   cursor: 'pointer',
@@ -240,14 +240,14 @@ export function DirtyWarningModal({ status, onStashAndRun, onRunAnyway, onCancel
       <div style={modalStyle}>
         {/* Title */}
         <div style={titleStyle}>
-          <span style={{ color: '#f0a500', fontSize: 18 }}>{'\u26A0'}</span>
+          <span style={{ color: 'var(--accent-warn)', fontSize: 18 }}>{'\u26A0'}</span>
           <span>Uncommitted Changes Detected</span>
         </div>
 
         {/* Description */}
         <div style={descriptionStyle}>
           The AI will work in an isolated worktree created from HEAD. These uncommitted changes will{' '}
-          <span style={{ color: '#ff6b6b', fontWeight: 'bold' }}>NOT</span>{' '}
+          <span style={{ color: 'var(--accent-error)', fontWeight: 'bold' }}>NOT</span>{' '}
           be visible to the LLM.
         </div>
 
@@ -265,8 +265,8 @@ export function DirtyWarningModal({ status, onStashAndRun, onRunAnyway, onCancel
           <button
             ref={cancelBtnRef}
             onClick={onCancel}
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#e0e0e0')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
             style={ghostButtonStyle}
           >
             Cancel
@@ -274,8 +274,8 @@ export function DirtyWarningModal({ status, onStashAndRun, onRunAnyway, onCancel
           <button
             ref={runAnywayBtnRef}
             onClick={onRunAnyway}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#888')}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#555')}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--text-primary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--text-muted)')}
             style={secondaryButtonStyle}
           >
             Run Anyway
@@ -283,8 +283,8 @@ export function DirtyWarningModal({ status, onStashAndRun, onRunAnyway, onCancel
           <button
             ref={stashBtnRef}
             onClick={onStashAndRun}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#3dbdb5')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#4ecdc4')}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
             style={primaryButtonStyle}
           >
             Stash & Run

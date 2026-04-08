@@ -32,8 +32,8 @@ const containerStyle: React.CSSProperties = {
   padding: '16px 20px',
   fontFamily: 'monospace',
   fontSize: 13,
-  backgroundColor: '#1a1a2e',
-  color: '#e0e0e0',
+  backgroundColor: 'var(--bg-surface)',
+  color: 'var(--text-primary)',
 };
 
 const sectionStyle: React.CSSProperties = {
@@ -41,7 +41,7 @@ const sectionStyle: React.CSSProperties = {
 };
 
 const labelStyle: React.CSSProperties = {
-  color: '#888',
+  color: 'var(--text-muted)',
   fontSize: 11,
   textTransform: 'uppercase' as const,
   letterSpacing: '0.5px',
@@ -60,20 +60,20 @@ const buttonBase: React.CSSProperties = {
 
 const accentButton: React.CSSProperties = {
   ...buttonBase,
-  backgroundColor: '#4ecdc4',
-  color: '#1a1a2e',
+  backgroundColor: 'var(--accent-primary)',
+  color: 'var(--bg-surface)',
 };
 
 const dangerButton: React.CSSProperties = {
   ...buttonBase,
-  backgroundColor: '#ff6b6b',
-  color: '#fff',
+  backgroundColor: 'var(--accent-error)',
+  color: 'var(--text-primary)',
 };
 
 const mutedButton: React.CSSProperties = {
   ...buttonBase,
-  backgroundColor: '#444',
-  color: '#e0e0e0',
+  backgroundColor: 'var(--border-default)',
+  color: 'var(--text-primary)',
 };
 
 export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunSummaryProps) {
@@ -86,7 +86,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
   if (!run) {
     return (
       <div style={containerStyle}>
-        <div style={{ color: '#888' }}>Run not found: {runId}</div>
+        <div style={{ color: 'var(--text-muted)' }}>Run not found: {runId}</div>
       </div>
     );
   }
@@ -120,7 +120,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         <div style={{ fontSize: 15, fontWeight: 'bold', marginBottom: 4 }}>
           Run Summary
         </div>
-        <div style={{ color: '#888', fontSize: 11 }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
           {run.id.slice(0, 12)}...
         </div>
       </div>
@@ -131,7 +131,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         <div
           style={{
             padding: 10,
-            backgroundColor: '#16213e',
+            backgroundColor: 'var(--bg-surface)',
             borderRadius: 4,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -151,7 +151,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         {exitCode !== null && (
           <div>
             <div style={labelStyle}>Exit Code</div>
-            <div style={{ color: exitCode === 0 ? '#4ecdc4' : '#ff6b6b', fontWeight: 'bold' }}>
+            <div style={{ color: exitCode === 0 ? 'var(--accent-primary)' : 'var(--accent-error)', fontWeight: 'bold' }}>
               {exitCode}
             </div>
           </div>
@@ -162,10 +162,10 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
             style={{
               color:
                 run.state.type === 'Completed'
-                  ? '#4ecdc4'
+                  ? 'var(--accent-primary)'
                   : run.state.type === 'Failed'
-                    ? '#ff6b6b'
-                    : '#888',
+                    ? 'var(--accent-error)'
+                    : 'var(--text-muted)',
             }}
           >
             {run.state.type}
@@ -180,8 +180,8 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
           <>
             <div style={{ marginBottom: 6 }}>
               {run.diff_stat.files_changed} files changed,{' '}
-              <span style={{ color: '#4ecdc4' }}>+{run.diff_stat.insertions}</span>,{' '}
-              <span style={{ color: '#ff6b6b' }}>-{run.diff_stat.deletions}</span>
+              <span style={{ color: 'var(--accent-primary)' }}>+{run.diff_stat.insertions}</span>,{' '}
+              <span style={{ color: 'var(--accent-error)' }}>-{run.diff_stat.deletions}</span>
             </div>
             <DiffStatBar
               insertions={run.diff_stat.insertions}
@@ -189,7 +189,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
             />
           </>
         ) : (
-          <div style={{ color: '#888' }}>
+          <div style={{ color: 'var(--text-muted)' }}>
             {run.state.type === 'Completed' ? 'No git changes' : 'Not a git run'}
           </div>
         )}
@@ -201,15 +201,15 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
           style={{
             padding: 12,
             backgroundColor: 'rgba(240, 165, 0, 0.15)',
-            border: '1px solid #f0a500',
+            border: '1px solid var(--accent-warn)',
             borderRadius: 4,
             marginBottom: 16,
           }}
         >
-          <div style={{ color: '#f0a500', fontWeight: 'bold', marginBottom: 6 }}>
+          <div style={{ color: 'var(--accent-warn)', fontWeight: 'bold', marginBottom: 6 }}>
             Merge Conflicts Detected
           </div>
-          <div style={{ fontSize: 12, color: '#e0e0e0' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>
             {conflict.paths.map((p) => (
               <div key={p} style={{ paddingLeft: 8 }}>
                 {p}
@@ -241,10 +241,10 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         <div
           style={{
             padding: 12,
-            backgroundColor: '#2d2d44',
+            backgroundColor: 'var(--bg-raised)',
             borderRadius: 4,
             marginBottom: 16,
-            border: '1px solid #4ecdc4',
+            border: '1px solid var(--accent-primary)',
           }}
         >
           <div style={{ marginBottom: 8 }}>Merge changes into your current branch?</div>
@@ -264,10 +264,10 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         <div
           style={{
             padding: 12,
-            backgroundColor: '#2d2d44',
+            backgroundColor: 'var(--bg-raised)',
             borderRadius: 4,
             marginBottom: 16,
-            border: '1px solid #ff6b6b',
+            border: '1px solid var(--accent-error)',
           }}
         >
           <div style={{ marginBottom: 8 }}>Discard all changes from this run?</div>
@@ -290,22 +290,22 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
             <pre
               style={{
                 padding: 12,
-                backgroundColor: '#0d1117',
+                backgroundColor: 'var(--bg-base)',
                 borderRadius: 4,
                 overflow: 'auto',
                 maxHeight: 400,
                 fontSize: 12,
                 lineHeight: 1.4,
-                color: '#e0e0e0',
+                color: 'var(--text-primary)',
                 margin: 0,
                 whiteSpace: 'pre',
-                border: '1px solid #333',
+                border: '1px solid var(--border-default)',
               }}
             >
               {cached.diff}
             </pre>
           ) : (
-            <div style={{ color: '#888', padding: 8 }}>Loading diff...</div>
+            <div style={{ color: 'var(--text-muted)', padding: 8 }}>Loading diff...</div>
           )}
         </div>
       )}
@@ -327,7 +327,7 @@ function DiffStatBar({ insertions, deletions }: { insertions: number; deletions:
         height: 8,
         borderRadius: 4,
         overflow: 'hidden',
-        backgroundColor: '#333',
+        backgroundColor: 'var(--border-default)',
         width: '100%',
         maxWidth: 300,
       }}
@@ -336,7 +336,7 @@ function DiffStatBar({ insertions, deletions }: { insertions: number; deletions:
         <div
           style={{
             width: `${insPercent}%`,
-            backgroundColor: '#4ecdc4',
+            backgroundColor: 'var(--accent-primary)',
             transition: 'width 0.3s ease',
           }}
         />
@@ -345,7 +345,7 @@ function DiffStatBar({ insertions, deletions }: { insertions: number; deletions:
         <div
           style={{
             width: `${delPercent}%`,
-            backgroundColor: '#ff6b6b',
+            backgroundColor: 'var(--accent-error)',
             transition: 'width 0.3s ease',
           }}
         />

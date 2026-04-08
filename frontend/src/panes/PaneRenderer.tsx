@@ -173,10 +173,10 @@ export function PaneRenderer({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#888',
+                color: 'var(--text-muted)',
                 fontFamily: 'monospace',
                 fontSize: 13,
-                backgroundColor: '#1a1a2e',
+                backgroundColor: 'var(--bg-surface)',
               }}
             >
               Pane: {pane.kind}

@@ -24,12 +24,12 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
   const loadConflicts = () => send({ type: 'GetMergeConflicts' });
 
   return (
-    <div style={{ flex: 1, display: 'flex', overflow: 'hidden', backgroundColor: '#16213e', color: '#e0e0e0' }}>
+    <div style={{ flex: 1, display: 'flex', overflow: 'hidden', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
       {/* File list */}
-      <div style={{ width: 200, borderRight: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 12, color: '#888', display: 'flex', alignItems: 'center' }}>
+      <div style={{ width: 200, borderRight: '1px solid var(--border-default)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-default)', fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
           <span>Conflicts</span>
-          <button onClick={loadConflicts} style={{ marginLeft: 'auto', background: 'none', border: '1px solid #444', color: '#888', borderRadius: 3, padding: '2px 6px', cursor: 'pointer', fontSize: 10 }}>
+          <button onClick={loadConflicts} style={{ marginLeft: 'auto', background: 'none', border: '1px solid var(--border-default)', color: 'var(--text-muted)', borderRadius: 3, padding: '2px 6px', cursor: 'pointer', fontSize: 10 }}>
             Load
           </button>
         </div>
@@ -43,15 +43,15 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
                 cursor: 'pointer',
                 fontSize: 11,
                 fontFamily: 'monospace',
-                backgroundColor: selected?.path === f.path ? '#1e2a3e' : 'transparent',
-                borderLeft: selected?.path === f.path ? '2px solid #4ecdc4' : '2px solid transparent',
+                backgroundColor: selected?.path === f.path ? 'var(--bg-raised)' : 'transparent',
+                borderLeft: selected?.path === f.path ? '2px solid var(--accent-primary)' : '2px solid transparent',
               }}
             >
               {typeof f.path === 'string' ? f.path.split('/').pop() : String(f.path)}
             </div>
           ))}
           {files.length === 0 && (
-            <div style={{ padding: '12px', color: '#555', fontSize: 11 }}>No conflicts loaded</div>
+            <div style={{ padding: '12px', color: 'var(--text-muted)', fontSize: 11 }}>No conflicts loaded</div>
           )}
         </div>
       </div>
@@ -59,23 +59,23 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
       {/* Conflict viewer */}
       {selected ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#888' }}>{typeof selected.path === 'string' ? selected.path : String(selected.path)}</span>
-            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'ours')} style={{ marginLeft: 'auto', backgroundColor: '#4ecdc4', color: '#1a1a2e', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-default)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: 'var(--text-muted)' }}>{typeof selected.path === 'string' ? selected.path : String(selected.path)}</span>
+            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'ours')} style={{ marginLeft: 'auto', backgroundColor: 'var(--accent-primary)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
               Take Ours
             </button>
-            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'theirs')} style={{ backgroundColor: '#f0a500', color: '#1a1a2e', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
+            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'theirs')} style={{ backgroundColor: 'var(--accent-warn)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
               Take Theirs
             </button>
           </div>
           <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-            <ConflictSide label="Ours (Current)" content={selected.ours} color="#4ecdc4" />
-            <div style={{ width: 1, backgroundColor: '#333' }} />
-            <ConflictSide label="Theirs (Incoming)" content={selected.theirs} color="#f0a500" />
+            <ConflictSide label="Ours (Current)" content={selected.ours} color="var(--accent-primary)" />
+            <div style={{ width: 1, backgroundColor: 'var(--border-default)' }} />
+            <ConflictSide label="Theirs (Incoming)" content={selected.theirs} color="var(--accent-warn)" />
           </div>
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 13 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
           Select a conflict file
         </div>
       )}
@@ -86,10 +86,10 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
 function ConflictSide({ label, content, color }: { label: string; content: string; color: string }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ padding: '4px 8px', backgroundColor: '#1a1a2e', borderBottom: '1px solid #333', fontSize: 11, color, fontWeight: 'bold' }}>
+      <div style={{ padding: '4px 8px', backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border-default)', fontSize: 11, color, fontWeight: 'bold' }}>
         {label}
       </div>
-      <pre style={{ flex: 1, overflow: 'auto', margin: 0, padding: '8px', fontSize: 12, fontFamily: 'monospace', color: '#e0e0e0', backgroundColor: '#16213e' }}>
+      <pre style={{ flex: 1, overflow: 'auto', margin: 0, padding: '8px', fontSize: 12, fontFamily: 'monospace', color: 'var(--text-primary)', backgroundColor: 'var(--bg-surface)' }}>
         {content}
       </pre>
     </div>

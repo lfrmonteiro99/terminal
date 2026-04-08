@@ -14,17 +14,17 @@ const inputStyle: React.CSSProperties = {
   padding: 8,
   fontFamily: 'monospace',
   fontSize: 13,
-  backgroundColor: '#1a1a2e',
-  color: '#e0e0e0',
-  border: '1px solid #444',
+  backgroundColor: 'var(--bg-surface)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-default)',
   borderRadius: 4,
   flex: 1,
 };
 
 const buttonStyle: React.CSSProperties = {
   padding: '8px 16px',
-  backgroundColor: '#4ecdc4',
-  color: '#1a1a2e',
+  backgroundColor: 'var(--accent-primary)',
+  color: 'var(--bg-surface)',
   border: 'none',
   borderRadius: 4,
   cursor: 'pointer',
@@ -95,7 +95,7 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
         <RunPanel />
       )}
       {state.activeSession && !state.activeRun && (
-        <div style={{ padding: '8px 16px', borderTop: '1px solid #333', display: 'flex', gap: 8 }}>
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-default)', display: 'flex', gap: 8 }}>
           <input
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}

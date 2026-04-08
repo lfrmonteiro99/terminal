@@ -22,14 +22,14 @@ const commitRowStyle: React.CSSProperties = {
 };
 
 const hashStyle: React.CSSProperties = {
-  color: '#666',
+  color: 'var(--text-muted)',
   fontSize: 10,
   flexShrink: 0,
   width: 56,
 };
 
 const messageStyle: React.CSSProperties = {
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
   flex: 1,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -37,7 +37,7 @@ const messageStyle: React.CSSProperties = {
 };
 
 const timeStyle: React.CSSProperties = {
-  color: '#555',
+  color: 'var(--text-muted)',
   fontSize: 10,
   flexShrink: 0,
   marginLeft: 'auto',

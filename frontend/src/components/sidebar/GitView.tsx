@@ -10,12 +10,12 @@ const branchRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  borderBottom: '1px solid #333',
+  borderBottom: '1px solid var(--border-default)',
   flexShrink: 0,
 };
 
 const branchNameStyle: React.CSSProperties = {
-  color: '#4ecdc4',
+  color: 'var(--accent-primary)',
   fontWeight: 'bold',
   fontSize: 13,
   overflow: 'hidden',
@@ -24,7 +24,7 @@ const branchNameStyle: React.CSSProperties = {
 };
 
 const headHashStyle: React.CSSProperties = {
-  color: '#666',
+  color: 'var(--text-muted)',
   fontSize: 11,
   fontFamily: 'monospace',
   flexShrink: 0,
@@ -33,14 +33,14 @@ const headHashStyle: React.CSSProperties = {
 const sectionHeaderStyle: React.CSSProperties = {
   padding: '4px 12px 2px',
   fontSize: 10,
-  color: '#888',
+  color: 'var(--text-muted)',
   textTransform: 'uppercase',
   letterSpacing: '0.5px',
 };
 
 const commitSectionStyle: React.CSSProperties = {
   padding: '8px 12px',
-  borderBottom: '1px solid #333',
+  borderBottom: '1px solid var(--border-default)',
   flexShrink: 0,
 };
 
@@ -49,9 +49,9 @@ const textareaBaseStyle: React.CSSProperties = {
   minHeight: 60,
   maxHeight: 120,
   resize: 'vertical',
-  backgroundColor: '#0d1117',
-  color: '#e0e0e0',
-  border: '1px solid #333',
+  backgroundColor: 'var(--bg-base)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-default)',
   borderRadius: 3,
   fontSize: 11,
   fontFamily: 'monospace',
@@ -62,8 +62,8 @@ const textareaBaseStyle: React.CSSProperties = {
 
 const commitBtnStyle: React.CSSProperties = {
   padding: '4px 12px',
-  backgroundColor: '#4ecdc4',
-  color: '#1a1a2e',
+  backgroundColor: 'var(--accent-primary)',
+  color: 'var(--bg-surface)',
   border: 'none',
   borderRadius: 3,
   fontSize: 11,
@@ -81,8 +81,8 @@ const commitBtnDisabledStyle: React.CSSProperties = {
 const stageAllBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   backgroundColor: 'transparent',
-  color: '#888',
-  border: '1px solid #444',
+  color: 'var(--text-muted)',
+  border: '1px solid var(--border-default)',
   borderRadius: 3,
   fontSize: 10,
   fontFamily: 'monospace',
@@ -91,7 +91,7 @@ const stageAllBtnStyle: React.CSSProperties = {
 
 const emptyStyle: React.CSSProperties = {
   padding: 16,
-  color: '#666',
+  color: 'var(--text-muted)',
   fontSize: 11,
   fontFamily: 'monospace',
   textAlign: 'center',
@@ -101,7 +101,7 @@ const stashRowStyle: React.CSSProperties = {
   padding: '6px 12px',
   cursor: 'pointer',
   borderRadius: 4,
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
   fontSize: 11,
   fontFamily: 'monospace',
 };
@@ -149,7 +149,7 @@ export function GitView() {
 
   const textareaStyle: React.CSSProperties = {
     ...textareaBaseStyle,
-    borderColor: textareaFocused ? '#4ecdc4' : '#333',
+    borderColor: textareaFocused ? 'var(--accent-primary)' : 'var(--border-default)',
   };
 
   return (
@@ -225,7 +225,7 @@ export function GitView() {
       <div
         style={{
           ...stashRowStyle,
-          backgroundColor: stashHover ? '#16213e' : 'transparent',
+          backgroundColor: stashHover ? 'var(--bg-raised)' : 'transparent',
         }}
         onClick={() => dispatch({ type: 'TOGGLE_STASH_DRAWER' })}
         onMouseEnter={() => setStashHover(true)}

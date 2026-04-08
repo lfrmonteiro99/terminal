@@ -45,13 +45,13 @@ const triangleStyle: React.CSSProperties = {
   fontSize: 9,
   lineHeight: '12px',
   textAlign: 'center',
-  color: '#666',
+  color: 'var(--text-muted)',
   flexShrink: 0,
   transition: 'transform 0.1s ease',
 };
 
 const dirNameStyle: React.CSSProperties = {
-  color: '#e0e0e0',
+  color: 'var(--text-primary)',
   fontWeight: '500',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -63,11 +63,11 @@ const folderIconStyle: React.CSSProperties = {
   fontSize: 10,
   width: 14,
   textAlign: 'center',
-  color: '#f0a500',
+  color: 'var(--accent-warn)',
 };
 
 const fileSizeStyle: React.CSSProperties = {
-  color: '#666',
+  color: 'var(--text-muted)',
   fontSize: 10,
   marginLeft: 'auto',
   paddingLeft: 8,
@@ -118,7 +118,7 @@ export function FileTreeNode({
     ...rowBaseStyle,
     paddingLeft,
     ...(isSelected
-      ? { backgroundColor: 'rgba(78, 205, 196, 0.12)', borderLeft: '2px solid #4ecdc4' }
+      ? { backgroundColor: 'rgba(78, 205, 196, 0.12)', borderLeft: '2px solid var(--accent-primary)' }
       : hover
         ? { backgroundColor: 'rgba(255, 255, 255, 0.05)' }
         : {}),
@@ -161,8 +161,8 @@ export function FileTreeNode({
           <span style={dirNameStyle}>{entry.name}</span>
         ) : (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, display: 'flex' }}>
-            <span style={{ color: '#e0e0e0' }}>{splitFileName(entry.name).stem}</span>
-            <span style={{ color: '#666', fontSize: 10 }}>{splitFileName(entry.name).ext}</span>
+            <span style={{ color: 'var(--text-primary)' }}>{splitFileName(entry.name).stem}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{splitFileName(entry.name).ext}</span>
           </span>
         )}
 
@@ -176,11 +176,11 @@ export function FileTreeNode({
       {isDir && isExpanded && (
         <>
           {children === undefined ? (
-            <div style={{ ...rowBaseStyle, paddingLeft: 12 + (depth + 1) * 16, color: '#666', cursor: 'default' }}>
+            <div style={{ ...rowBaseStyle, paddingLeft: 12 + (depth + 1) * 16, color: 'var(--text-muted)', cursor: 'default' }}>
               Loading...
             </div>
           ) : children.length === 0 ? (
-            <div style={{ ...rowBaseStyle, paddingLeft: 12 + (depth + 1) * 16, color: '#666', fontStyle: 'italic', cursor: 'default' }}>
+            <div style={{ ...rowBaseStyle, paddingLeft: 12 + (depth + 1) * 16, color: 'var(--text-muted)', fontStyle: 'italic', cursor: 'default' }}>
               (empty)
             </div>
           ) : (
