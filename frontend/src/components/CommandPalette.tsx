@@ -7,6 +7,12 @@ import type { PaneLayout } from '../domain/pane/types';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 import { getShortcut, resetShortcuts } from '../core/shortcutMap';
 import { LAYOUT_PRESETS } from '../core/layoutPresets';
+import {
+  getQuickCommands,
+  saveQuickCommand,
+  deleteQuickCommand,
+  type QuickCommand,
+} from '../state/quickCommands';
 
 interface Command {
   id: string;
@@ -33,15 +39,41 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
   Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
 );
 
+type PaletteMode = 'commands' | 'quick-commands' | 'save-name' | 'save-cmd';
+
 export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [mode, setMode] = useState<PaletteMode>('commands');
+  const [saveName, setSaveName] = useState('');
+  const [quickCmds, setQuickCmds] = useState<QuickCommand[]>([]);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Reload snippets whenever we enter quick-commands mode
+  useEffect(() => {
+    if (mode === 'quick-commands') {
+      setQuickCmds(getQuickCommands());
+    }
+  }, [mode]);
 
   const allCommands: Command[] = useMemo(
     () => [
+      // Quick command entries
+      {
+        id: 'quick:manage',
+        label: 'Quick Commands',
+        description: 'View and run saved commands',
+        action: () => { setMode('quick-commands'); setQuery(''); setSelectedIndex(0); },
+      },
+      {
+        id: 'quick:save',
+        label: 'Save Quick Command',
+        description: 'Save a command snippet for later use',
+        action: () => { setMode('save-name'); setQuery(''); setSelectedIndex(0); },
+      },
       // Pane layout commands
       {
         id: 'pane:zoom',
@@ -175,6 +207,17 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       { id: 'add:gitstatus', label: 'Add Pane: Git Status', description: 'Add a git status pane', action: () => { onAddPane?.('GitStatus', 'Horizontal'); } },
       { id: 'add:githistory', label: 'Add Pane: Git History', description: 'Add a git history pane', action: () => { onAddPane?.('GitHistory', 'Horizontal'); } },
       { id: 'add:empty', label: 'Add Pane: Empty', description: 'Add an empty pane and choose type', action: () => { onAddPane?.('Empty', 'Horizontal'); } },
+      // Notifications
+      {
+        id: 'notifications:toggle',
+        label: 'Toggle Terminal Notifications',
+        description: localStorage.getItem('terminal:notifications') === 'false' ? 'Currently: OFF' : 'Currently: ON',
+        action: () => {
+          const current = localStorage.getItem('terminal:notifications');
+          localStorage.setItem('terminal:notifications', current === 'false' ? 'true' : 'false');
+          onClose();
+        },
+      },
       // Theme commands
       ...themes.map(theme => ({
         id: `theme:${theme.id}`,
@@ -186,35 +229,133 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts],
   );
 
-  const filtered = useMemo(() => {
+  // Determine effective mode: if query starts with '!' override to quick-commands
+  const effectiveMode: PaletteMode = useMemo(() => {
+    if (mode === 'save-name' || mode === 'save-cmd') return mode;
+    if (query.startsWith('!')) return 'quick-commands';
+    return mode;
+  }, [query, mode]);
+
+  const filteredCommands = useMemo(() => {
+    if (effectiveMode !== 'commands') return [];
     if (!query.trim()) return allCommands;
     const q = query.toLowerCase();
     return allCommands.filter(
       (c) => c.label.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q),
     );
-  }, [allCommands, query]);
+  }, [allCommands, query, effectiveMode]);
+
+  const filteredQuickCmds = useMemo(() => {
+    if (effectiveMode !== 'quick-commands') return [];
+    // Strip leading '!' for filter
+    const q = query.startsWith('!') ? query.slice(1).toLowerCase() : query.toLowerCase();
+    if (!q) return quickCmds;
+    return quickCmds.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.command.toLowerCase().includes(q),
+    );
+  }, [quickCmds, query, effectiveMode]);
+
+  const listLength = effectiveMode === 'quick-commands' ? filteredQuickCmds.length : filteredCommands.length;
 
   useEffect(() => {
     setSelectedIndex(0);
-  }, [query]);
+  }, [query, effectiveMode]);
 
   useEffect(() => {
     if (open) {
       setQuery('');
       setSelectedIndex(0);
-      // Defer focus to next tick so the element is mounted
+      setMode('commands');
+      setSaveName('');
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
 
+  // Keep quickCmds fresh when mode flips to quick-commands via '!' prefix
+  useEffect(() => {
+    if (effectiveMode === 'quick-commands') {
+      setQuickCmds(getQuickCommands());
+    }
+  }, [effectiveMode]);
+
+  const handleDeleteQuickCmd = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteQuickCommand(id);
+    setQuickCmds(getQuickCommands());
+  };
+
+  const handleRunQuickCmd = (cmd: QuickCommand) => {
+    window.dispatchEvent(new CustomEvent('write-to-terminal', { detail: { data: cmd.command + '\n' } }));
+    onClose();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') { onClose(); return; }
-    if (e.key === 'ArrowDown') { setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1)); e.preventDefault(); return; }
+    if (e.key === 'Escape') {
+      if (mode !== 'commands') {
+        setMode('commands');
+        setQuery('');
+        setSaveName('');
+        return;
+      }
+      onClose();
+      return;
+    }
+
+    if (effectiveMode === 'save-name') {
+      if (e.key === 'Enter') {
+        const trimmed = query.trim();
+        if (trimmed) {
+          setSaveName(trimmed);
+          setMode('save-cmd');
+          setQuery('');
+        }
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (effectiveMode === 'save-cmd') {
+      if (e.key === 'Enter') {
+        const trimmed = query.trim();
+        if (trimmed && saveName) {
+          saveQuickCommand(saveName, trimmed);
+        }
+        setMode('commands');
+        setQuery('');
+        setSaveName('');
+        onClose();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') { setSelectedIndex((i) => Math.min(i + 1, listLength - 1)); e.preventDefault(); return; }
     if (e.key === 'ArrowUp') { setSelectedIndex((i) => Math.max(i - 1, 0)); e.preventDefault(); return; }
-    if (e.key === 'Enter') { filtered[selectedIndex]?.action(); return; }
+    if (e.key === 'Enter') {
+      if (effectiveMode === 'quick-commands') {
+        const cmd = filteredQuickCmds[selectedIndex];
+        if (cmd) handleRunQuickCmd(cmd);
+      } else {
+        filteredCommands[selectedIndex]?.action();
+      }
+      return;
+    }
   };
 
   if (!open) return null;
+
+  // Placeholder and header text per mode
+  const placeholderText =
+    effectiveMode === 'save-name' ? 'Snippet name (e.g. Run tests)...' :
+    effectiveMode === 'save-cmd' ? `Command for "${saveName}"...` :
+    effectiveMode === 'quick-commands' ? 'Filter snippets...' :
+    'Type a command or ! for quick commands...';
+
+  const headerLabel =
+    effectiveMode === 'save-name' ? 'Save Quick Command — Step 1: enter a name' :
+    effectiveMode === 'save-cmd' ? `Save Quick Command — Step 2: enter the command` :
+    effectiveMode === 'quick-commands' ? 'Quick Commands' :
+    null;
 
   return (
     <div
@@ -235,7 +376,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
           backgroundColor: 'var(--bg-raised)',
           border: '1px solid var(--border-default)',
           borderRadius: 12,
-          width: 520,
+          width: 560,
           maxHeight: '60vh',
           display: 'flex',
           flexDirection: 'column',
@@ -244,12 +385,24 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {headerLabel && (
+          <div style={{
+            padding: '8px 16px',
+            backgroundColor: 'var(--bg-overlay)',
+            borderBottom: '1px solid var(--border-default)',
+            fontSize: 11,
+            color: 'var(--text-muted)',
+            fontFamily: 'monospace',
+          }}>
+            {headerLabel}
+          </div>
+        )}
         <input
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a command..."
+          placeholder={placeholderText}
           style={{
             padding: '12px 16px',
             backgroundColor: 'var(--bg-surface)',
@@ -262,7 +415,67 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
           }}
         />
         <div style={{ overflow: 'auto', flex: 1 }}>
-          {filtered.map((cmd, idx) => (
+          {/* Quick-commands list */}
+          {effectiveMode === 'quick-commands' && filteredQuickCmds.map((cmd, idx) => (
+            <div
+              key={cmd.id}
+              onClick={() => handleRunQuickCmd(cmd)}
+              onMouseEnter={() => { setSelectedIndex(idx); setHoveredId(cmd.id); }}
+              onMouseLeave={() => setHoveredId(null)}
+              style={{
+                padding: '10px 16px',
+                cursor: 'pointer',
+                backgroundColor: idx === selectedIndex ? 'var(--bg-overlay)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                  {cmd.name}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  color: 'var(--text-muted)',
+                  fontFamily: 'monospace',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {cmd.command.length > 60 ? cmd.command.slice(0, 60) + '…' : cmd.command}
+                </span>
+              </div>
+              {hoveredId === cmd.id && (
+                <button
+                  onClick={(e) => handleDeleteQuickCmd(cmd.id, e)}
+                  title="Delete snippet"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--accent-error, #f87171)',
+                    fontSize: 14,
+                    padding: '2px 4px',
+                    flexShrink: 0,
+                    lineHeight: 1,
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+          {effectiveMode === 'quick-commands' && filteredQuickCmds.length === 0 && (
+            <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
+              {quickCmds.length === 0
+                ? 'No saved commands. Use "Save Quick Command" to add one.'
+                : 'No matching snippets'}
+            </div>
+          )}
+
+          {/* Normal commands list */}
+          {effectiveMode === 'commands' && filteredCommands.map((cmd, idx) => (
             <div
               key={cmd.id}
               onClick={cmd.action}
@@ -302,9 +515,16 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
               )}
             </div>
           ))}
-          {filtered.length === 0 && (
+          {effectiveMode === 'commands' && filteredCommands.length === 0 && (
             <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
               No commands found
+            </div>
+          )}
+
+          {/* Save modes — no list, just input guidance already shown via header */}
+          {(effectiveMode === 'save-name' || effectiveMode === 'save-cmd') && (
+            <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
+              Press Enter to confirm, Escape to cancel
             </div>
           )}
         </div>

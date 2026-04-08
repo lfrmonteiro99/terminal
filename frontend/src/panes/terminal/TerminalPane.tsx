@@ -78,9 +78,25 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   const sessionIdRef = useRef<string | null>(null);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
+  // Ref to track focused state inside event handler closures
+  const focusedRef = useRef(focused);
+  useEffect(() => { focusedRef.current = focused; }, [focused]);
+
   // Ref to hold current send function — avoids stale closure after reconnect
   const sendRef = useRef(send);
   useEffect(() => { sendRef.current = send; }, [send]);
+
+  // Git command detection: accumulate recent terminal output to detect when a git
+  // command completes (i.e. prompt returns after git output).
+  const recentOutputRef = useRef<string>('');
+  const gitRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup git refresh timer on unmount
+  useEffect(() => {
+    return () => {
+      if (gitRefreshTimerRef.current) clearTimeout(gitRefreshTimerRef.current);
+    };
+  }, []);
 
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
@@ -190,6 +206,44 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
       const event = (e as CustomEvent).detail;
       if (event.type === 'TerminalOutput' && event.session_id === sessionId) {
         xtermRef.current?.write(event.data);
+
+        // Accumulate recent output for git command detection (bounded at 2KB)
+        recentOutputRef.current += event.data;
+        if (recentOutputRef.current.length > 2048) {
+          recentOutputRef.current = recentOutputRef.current.slice(-2048);
+        }
+
+        // Detect a shell prompt return after a git command.
+        // The git pattern must appear as a command (after a prompt character),
+        // not merely in output text — we check for a prompt prefix before "git".
+        const gitCmdPattern = /(?:^|[\$%>❯]\s+)git\s+(?:add|commit|checkout|switch|merge|rebase|stash|pull|push|reset|revert|cherry-pick|branch|restore|rm|mv|tag)\b/m;
+        // A prompt appearing at the end of the latest chunk signals command completion
+        const promptReturnPattern = /[\$%>❯]\s*$/;
+
+        if (
+          gitCmdPattern.test(recentOutputRef.current) &&
+          promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())
+        ) {
+          if (gitRefreshTimerRef.current) clearTimeout(gitRefreshTimerRef.current);
+          gitRefreshTimerRef.current = setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('git-auto-refresh'));
+            recentOutputRef.current = '';
+          }, 500);
+        }
+
+        // Notify user when prompt returns in an unfocused pane
+        if (!focusedRef.current && promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())) {
+          const notificationsEnabled = localStorage.getItem('terminal:notifications') !== 'false';
+          if (notificationsEnabled) {
+            window.dispatchEvent(new CustomEvent('terminal-notification', {
+              detail: {
+                paneId: pane.id,
+                paneLabel: pane.label ?? 'Terminal',
+                message: 'Command completed',
+              },
+            }));
+          }
+        }
       }
       if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
         paneSessionMap.delete(pane.id);
@@ -199,6 +253,18 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     window.addEventListener('terminal-event', handler);
     return () => window.removeEventListener('terminal-event', handler);
   }, [sessionId]);
+
+  // Listen for quick-command run events — only the focused pane handles them
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { data } = (e as CustomEvent<{ data: string }>).detail;
+      if (focusedRef.current && sessionIdRef.current) {
+        sendRef.current({ type: 'WriteTerminalInput', session_id: sessionIdRef.current, data });
+      }
+    };
+    window.addEventListener('write-to-terminal', handler);
+    return () => window.removeEventListener('write-to-terminal', handler);
+  }, []);
 
   // Clear the xterm viewport once session is active and xterm is loaded
   // Use xterm's own clear API rather than sending 'clear\n' to the PTY

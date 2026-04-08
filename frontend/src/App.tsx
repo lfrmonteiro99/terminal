@@ -20,6 +20,7 @@ import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persist
 import { saveSession, getSession } from './state/sessionStore';
 import { getCurrentThemeId, applyTheme } from './styles/themes';
 import { WelcomeScreen } from './components/WelcomeScreen';
+import { ToastContainer } from './components/ToastContainer';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -178,6 +179,16 @@ function AppContent() {
     return () => window.removeEventListener('focus-pane-kind', handler);
   }, [layout]);
 
+  // Listen for focus-pane events from ToastContainer jump button
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { paneId } = (e as CustomEvent).detail;
+      setFocusedPaneId(paneId);
+    };
+    window.addEventListener('focus-pane', handler);
+    return () => window.removeEventListener('focus-pane', handler);
+  }, []);
+
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
@@ -257,6 +268,18 @@ function AppContent() {
     }
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
+
+  // Listen for git-auto-refresh events dispatched by TerminalPane when a git command completes.
+  // The TerminalPane already debounces by 500ms before dispatching, so we just fire immediately.
+  useEffect(() => {
+    const handler = () => {
+      send({ type: 'GetRepoStatus' });
+      send({ type: 'GetChangedFiles', mode: 'working' });
+      send({ type: 'GetCommitHistory', limit: 50 });
+    };
+    window.addEventListener('git-auto-refresh', handler);
+    return () => window.removeEventListener('git-auto-refresh', handler);
+  }, [send]);
 
   // Keyboard shortcuts for sidebar and command palette
   useEffect(() => {
@@ -518,6 +541,8 @@ function AppContent() {
         onZoomPane={() => { setZoomedPaneId(prev => prev ? null : focusedPaneId); setCommandPaletteOpen(false); }}
         onShowShortcuts={() => { setCheatsheetOpen(true); setCommandPaletteOpen(false); }}
       />
+
+      <ToastContainer />
 
       <ShortcutCheatsheet
         open={cheatsheetOpen}
