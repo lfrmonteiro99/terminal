@@ -119,10 +119,11 @@ export function GitView() {
 
   const { repoStatus, commitHistory, stashes } = state;
 
-  // Fetch repo status and commit history on mount
+  // Fetch repo status, commit history and changed files on mount
   useEffect(() => {
     send({ type: 'GetRepoStatus' });
     send({ type: 'GetCommitHistory', limit: 20 });
+    send({ type: 'GetChangedFiles', mode: 'working' });
   }, [send]);
 
   const stagedCount = repoStatus?.staged_count ?? 0;
@@ -193,10 +194,23 @@ export function GitView() {
             <button
               style={stageAllBtnStyle}
               onClick={() => {
-                // Stage all is a convenience — not in AppCommand yet, so no-op placeholder
-                // Individual file staging is available via ChangesView
+                // Stage all unstaged files from changedFiles list
+                const files = state.changedFiles?.files ?? [];
+                const stagedCount = repoStatus?.staged_count ?? 0;
+                // Unstaged files are those after the staged block (by convention, backend sends staged first)
+                const unstaged = files.slice(stagedCount);
+                for (const file of unstaged) {
+                  const path = typeof file.path === 'string' ? file.path : String(file.path);
+                  send({ type: 'StageFile', path });
+                }
+                if (unstaged.length > 0) {
+                  setTimeout(() => {
+                    send({ type: 'GetRepoStatus' });
+                    send({ type: 'GetChangedFiles', mode: 'working' });
+                  }, 500);
+                }
               }}
-              title="Stage all (use Changes view for individual files)"
+              title="Stage all unstaged files"
             >
               Stage All
             </button>

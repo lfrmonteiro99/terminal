@@ -31,7 +31,9 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
     };
 
     ws.onmessage = (event) => {
-      console.log('[WS] Received:', event.data);
+      if (import.meta.env.DEV && !event.data.includes('TerminalOutput')) {
+        console.log('[WS] Received:', event.data);
+      }
       try {
         const data: AppEvent = JSON.parse(event.data);
 

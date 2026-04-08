@@ -8,6 +8,7 @@ import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
+import { DiffPanel } from './components/DiffPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
@@ -389,6 +390,11 @@ function AppContent() {
             </div>
 
             <StatusBar />
+
+            {/* DiffPanel overlay/split — rendered above pane area when open */}
+            {state.diffPanel.open && state.diffPanel.mode !== 'inline' && (
+              <DiffPanel />
+            )}
           </>
         )}
 

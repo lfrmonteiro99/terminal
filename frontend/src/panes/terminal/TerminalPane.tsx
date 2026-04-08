@@ -73,6 +73,10 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
   const sessionIdRef = useRef<string | null>(null);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
+  // Ref to hold current send function — avoids stale closure after reconnect
+  const sendRef = useRef(send);
+  useEffect(() => { sendRef.current = send; }, [send]);
+
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
     let disposed = false;
@@ -100,10 +104,10 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
         xtermRef.current = terminal;
         setXtermLoaded(true);
 
-        // Send user input to daemon PTY — use ref to avoid stale closure
+        // Send user input to daemon PTY — use refs to avoid stale closures after reconnect
         terminal.onData((data: string) => {
           if (sessionIdRef.current) {
-            send({ type: 'WriteTerminalInput', session_id: sessionIdRef.current, data });
+            sendRef.current({ type: 'WriteTerminalInput', session_id: sessionIdRef.current, data });
           }
         });
 
@@ -116,7 +120,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
             if (sessionIdRef.current) {
               const dims = fitAddon.proposeDimensions();
               if (dims) {
-                send({
+                sendRef.current({
                   type: 'ResizeTerminal',
                   session_id: sessionIdRef.current,
                   cols: dims.cols,
@@ -189,19 +193,23 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
     return () => window.removeEventListener('terminal-event', handler);
   }, [sessionId]);
 
-  // Send initial terminal dimensions once session is active and xterm is loaded
+  // Clear the xterm viewport once session is active and xterm is loaded
+  // Use xterm's own clear API rather than sending 'clear\n' to the PTY
+  // (avoids polluting shell history and the visible clear command flicker)
   useEffect(() => {
-    if (sessionId && xtermLoaded && termRef.current) {
+    if (sessionId && xtermLoaded) {
       const timer = setTimeout(() => {
-        send({
-          type: 'WriteTerminalInput',
-          session_id: sessionId,
-          data: 'clear\n',
-        });
+        const term = xtermRef.current as any;
+        if (term?.clear) {
+          term.clear();
+        } else if (term?.write) {
+          // Fallback: ANSI clear screen + cursor home (written to xterm, not PTY)
+          term.write('\x1b[2J\x1b[H');
+        }
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [sessionId, xtermLoaded, send]);
+  }, [sessionId, xtermLoaded]);
 
   const handleReconnect = () => {
     setSessionState('idle');

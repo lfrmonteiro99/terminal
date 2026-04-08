@@ -252,7 +252,10 @@ export function ChangesView() {
   const files = changedFiles?.files ?? [];
   const stagedCount = state.repoStatus?.staged_count ?? 0;
 
-  // If we have repoStatus info, split the list. Otherwise show flat.
+  // ACCEPTED LIMITATION: FileChange has no per-file `staged` boolean field.
+  // The backend sends staged files first by convention (verified in dispatcher.rs).
+  // We split using repoStatus.staged_count as the boundary index.
+  // If the backend changes ordering, this split will be incorrect.
   const staged = changesContext.mode === 'working' ? files.slice(0, stagedCount) : [];
   const unstaged = changesContext.mode === 'working' ? files.slice(stagedCount) : [];
 

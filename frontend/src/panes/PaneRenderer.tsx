@@ -1,6 +1,6 @@
 // PaneRenderer — recursively renders a PaneLayout tree (M2-02)
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
 import { isSingle, isSplit, collectPanes } from '../domain/pane/types';
@@ -266,6 +266,11 @@ interface SplitContainerProps {
 function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitContainerProps) {
   const [ratio, setRatio] = useState(initialRatio);
   const [splitterState, setSplitterState] = useState<'idle' | 'hover' | 'dragging'>('idle');
+
+  // Sync ratio when a layout is restored from localStorage (initialRatio prop changes)
+  useEffect(() => {
+    setRatio(initialRatio);
+  }, [initialRatio]);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 

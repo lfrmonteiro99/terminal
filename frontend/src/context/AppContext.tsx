@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, RepoStatus, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
+import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, RepoStatus, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
 
 // --- State ---
 
@@ -20,6 +20,7 @@ export interface AppState {
   selectedRun: string | null;
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
   mergeConflict: { runId: string; paths: string[] } | null;
+  mergeConflicts: MergeConflictFile[];
   stashes: StashEntry[];
   stashFiles: Map<number, FileChange[]>;
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
@@ -50,6 +51,7 @@ const initialState: AppState = {
   selectedRun: null,
   diffCache: new Map(),
   mergeConflict: null,
+  mergeConflicts: [],
   stashes: [],
   stashFiles: new Map(),
   stashDiffs: new Map(),
@@ -252,6 +254,15 @@ function reducer(state: AppState, action: Action): AppState {
             mergeConflict: { runId: event.run_id, paths: event.conflict_paths },
           };
         }
+
+        case 'MergeConflicts':
+          return { ...state, mergeConflicts: event.files };
+
+        case 'ConflictResolved':
+          return {
+            ...state,
+            mergeConflicts: state.mergeConflicts.filter(f => f.path !== event.file_path),
+          };
 
         case 'StatusUpdate':
           return state;

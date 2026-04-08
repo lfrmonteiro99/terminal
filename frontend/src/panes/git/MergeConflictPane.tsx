@@ -2,13 +2,15 @@
 
 import { useState } from 'react';
 import { useSend } from '../../context/SendContext';
+import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 import type { MergeConflictFile } from '../../types/protocol';
 
 export function MergeConflictPane({ pane: _pane }: PaneProps) {
   const send = useSend();
-  const [files, setFiles] = useState<MergeConflictFile[]>([]);
+  const state = useAppState();
+  const files: MergeConflictFile[] = state.mergeConflicts;
   const [selected, setSelected] = useState<MergeConflictFile | null>(null);
 
   const resolve = (filePath: string, side: 'ours' | 'theirs') => {
@@ -17,7 +19,7 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
       file_path: filePath,
       resolution: side === 'ours' ? { type: 'TakeOurs' } : { type: 'TakeTheirs' },
     });
-    setFiles((prev) => prev.filter((f) => f.path !== filePath));
+    // State update will come via ConflictResolved event handled in AppContext reducer
     if (selected?.path === filePath) setSelected(null);
   };
 
