@@ -1,19 +1,86 @@
 // TerminalPane — xterm.js terminal bound to a daemon PTY session (M4-02)
 // Registers itself in the pane registry.
 
+import 'xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
 import { useSend } from '../../context/SendContext';
+import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
-export function TerminalPane({ pane, workspaceId }: PaneProps) {
+// FIFO queue: panes register when they send CreateTerminalSession,
+// and TerminalSessionCreated events are matched in order.
+type PendingClaim = { resolve: (sessionId: string) => void; workspaceId: string };
+const pendingQueue: PendingClaim[] = [];
+
+function waitForSession(workspaceId: string): Promise<string> {
+  return new Promise((resolve) => {
+    pendingQueue.push({ resolve, workspaceId });
+  });
+}
+
+// Called from the event handler — resolves the first matching pending claim
+function claimSession(workspaceId: string, sessionId: string): boolean {
+  const idx = pendingQueue.findIndex(p => p.workspaceId === workspaceId);
+  if (idx >= 0) {
+    const claim = pendingQueue.splice(idx, 1)[0];
+    claim.resolve(sessionId);
+    return true;
+  }
+  return false;
+}
+
+// Global listener for TerminalSessionCreated (registered once)
+let globalListenerInstalled = false;
+function installGlobalListener() {
+  if (globalListenerInstalled) return;
+  globalListenerInstalled = true;
+  window.addEventListener('terminal-event', (e: Event) => {
+    const event = (e as CustomEvent).detail;
+    if (event.type === 'TerminalSessionCreated') {
+      claimSession(event.workspace_id, event.session_id);
+    }
+  });
+}
+
+// Global map: paneId → sessionId. Survives React remounts (e.g., after pane split).
+const paneSessionMap = new Map<string, string>();
+
+function getTermTheme() {
+  const s = getComputedStyle(document.documentElement);
+  const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
+  return {
+    background: v('--bg-base') || '#0d1117',
+    foreground: v('--text-primary') || '#e0e0e0',
+    cursor: v('--accent-primary') || '#4ecdc4',
+    cursorAccent: v('--bg-base') || '#0d1117',
+    selectionBackground: v('--bg-overlay') || '#232738',
+    selectionForeground: v('--text-primary') || '#e2e4e9',
+  };
+}
+
+export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   const send = useSend();
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionState, setSessionState] = useState<SessionState>('idle');
+  const state = useAppState();
+  const session = state.sessions.get(workspaceId);
+  const cwd = session?.project_root ?? undefined;
+  // Check if this pane already has a session from a previous mount (e.g., after split)
+  const existingSessionId = paneSessionMap.get(pane.id) ?? null;
+  const [sessionId, setSessionId] = useState<string | null>(existingSessionId);
+  const [sessionState, setSessionState] = useState<SessionState>(existingSessionId ? 'active' : 'idle');
+  const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
+
+  // Ref to hold current sessionId for use inside closures that can't track state
+  const sessionIdRef = useRef<string | null>(null);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  // Ref to hold current send function — avoids stale closure after reconnect
+  const sendRef = useRef(send);
+  useEffect(() => { sendRef.current = send; }, [send]);
 
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
@@ -24,12 +91,12 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
         // @ts-ignore — xterm is a peer dep loaded at runtime
         const { Terminal } = await import('xterm');
         // @ts-ignore
-        const { FitAddon } = await import('xterm-addon-fit');
+        const { FitAddon } = await import('@xterm/addon-fit');
         if (disposed || !termRef.current) return;
 
         const terminal = new Terminal({
-          theme: { background: '#0d1117', foreground: '#e0e0e0' },
-          fontFamily: 'monospace',
+          theme: getTermTheme(),
+          fontFamily: 'var(--font-mono, monospace)',
           fontSize: 13,
           cursorBlink: true,
         });
@@ -40,28 +107,33 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
         fitAddon.fit();
 
         xtermRef.current = terminal;
+        setXtermLoaded(true);
 
-        // Send user input to daemon PTY
+        // Send user input to daemon PTY — use refs to avoid stale closures after reconnect
         terminal.onData((data: string) => {
-          if (sessionId) {
-            send({ type: 'WriteTerminalInput', session_id: sessionId, data });
+          if (sessionIdRef.current) {
+            sendRef.current({ type: 'WriteTerminalInput', session_id: sessionIdRef.current, data });
           }
         });
 
-        // Resize observer
+        // Resize observer — fit immediately (cheap), debounce only the stty ResizeTerminal IPC
+        let resizeTimer: ReturnType<typeof setTimeout>;
         const ro = new ResizeObserver(() => {
           fitAddon.fit();
-          if (sessionId) {
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-              send({
-                type: 'ResizeTerminal',
-                session_id: sessionId,
-                cols: dims.cols,
-                rows: dims.rows,
-              });
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            if (sessionIdRef.current) {
+              const dims = fitAddon.proposeDimensions();
+              if (dims) {
+                sendRef.current({
+                  type: 'ResizeTerminal',
+                  session_id: sessionIdRef.current,
+                  cols: dims.cols,
+                  rows: dims.rows,
+                });
+              }
             }
-          }
+          }, 80);
         });
         if (termRef.current) ro.observe(termRef.current);
 
@@ -79,26 +151,82 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
     };
   }, []);
 
-  // Create a PTY session when component mounts (if no session yet)
+  // Update xterm theme when CSS variables change (theme switch)
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const term = xtermRef.current as any;
+      if (term?.options) {
+        term.options.theme = getTermTheme();
+      }
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, []);
+
+  // Focus xterm when this pane becomes focused (for keyboard navigation)
+  useEffect(() => {
+    if (focused && xtermRef.current) {
+      (xtermRef.current as any).focus?.();
+    }
+  }, [focused]);
+
+  // Create a PTY session when component mounts — uses FIFO queue for reliable matching
   useEffect(() => {
     if (sessionState !== 'idle') return;
+    installGlobalListener();
     setSessionState('creating');
-    send({ type: 'CreateTerminalSession', workspace_id: workspaceId });
+    send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd });
+    waitForSession(workspaceId).then((sid) => {
+      paneSessionMap.set(pane.id, sid);
+      setSessionId(sid);
+      setSessionState('active');
+    });
   }, [workspaceId, sessionState, send]);
 
-  // Write terminal output coming from the daemon
-  // (TerminalOutput events are routed via the workspace event bus and written here)
-  const writeOutput = (data: string) => {
-    xtermRef.current?.write(data);
-  };
+  // Listen for terminal output and close events (session-specific, not creation)
+  useEffect(() => {
+    if (!sessionId) return;
+    const handler = (e: Event) => {
+      const event = (e as CustomEvent).detail;
+      if (event.type === 'TerminalOutput' && event.session_id === sessionId) {
+        xtermRef.current?.write(event.data);
+      }
+      if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
+        paneSessionMap.delete(pane.id);
+        setSessionState('lost');
+      }
+    };
+    window.addEventListener('terminal-event', handler);
+    return () => window.removeEventListener('terminal-event', handler);
+  }, [sessionId]);
+
+  // Clear the xterm viewport once session is active and xterm is loaded
+  // Use xterm's own clear API rather than sending 'clear\n' to the PTY
+  // (avoids polluting shell history and the visible clear command flicker)
+  useEffect(() => {
+    if (sessionId && xtermLoaded) {
+      const timer = setTimeout(() => {
+        const term = xtermRef.current as any;
+        if (term) {
+          // Clear xterm screen
+          if (term.clear) term.clear();
+          else if (term.write) term.write('\x1b[2J\x1b[H');
+          // Send Enter to PTY to trigger a fresh prompt
+          sendRef.current({ type: 'WriteTerminalInput', session_id: sessionId, data: '\n' });
+        }
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [sessionId, xtermLoaded]);
 
   const handleReconnect = () => {
+    paneSessionMap.delete(pane.id);
     setSessionState('idle');
     setSessionId(null);
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#0d1117' }}>
+    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
       {sessionState === 'lost' && (
         <div
           style={{
@@ -113,15 +241,15 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
             zIndex: 10,
           }}
         >
-          <span style={{ color: '#ff6b6b', fontFamily: 'monospace', fontSize: 14 }}>
+          <span style={{ color: 'var(--accent-error)', fontFamily: 'monospace', fontSize: 14 }}>
             Session lost
           </span>
           <button
             onClick={handleReconnect}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#4ecdc4',
-              color: '#1a1a2e',
+              backgroundColor: 'var(--accent-primary)',
+              color: 'var(--bg-surface)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',
@@ -135,14 +263,14 @@ export function TerminalPane({ pane, workspaceId }: PaneProps) {
       )}
       {/* xterm.js mount point */}
       <div ref={termRef} style={{ flex: 1, overflow: 'hidden' }} />
-      {!xtermRef.current && sessionState !== 'lost' && (
+      {!xtermLoaded && sessionState !== 'lost' && (
         <div
           style={{
             flex: 1,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#888',
+            color: 'var(--text-muted)',
             fontFamily: 'monospace',
             fontSize: 13,
           }}

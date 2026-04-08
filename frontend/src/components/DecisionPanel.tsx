@@ -34,11 +34,11 @@ export function DecisionPanel({
   return (
     <div
       style={{
-        border: '2px solid #f0a500',
+        border: '2px solid var(--accent-warn)',
         borderRadius: 8,
         padding: 16,
         margin: 12,
-        backgroundColor: '#2d2d44',
+        backgroundColor: 'var(--bg-raised)',
       }}
     >
       <div
@@ -47,7 +47,7 @@ export function DecisionPanel({
           alignItems: 'center',
           gap: 8,
           marginBottom: 12,
-          color: '#f0a500',
+          color: 'var(--accent-warn)',
           fontWeight: 'bold',
           fontSize: 14,
         }}
@@ -58,13 +58,13 @@ export function DecisionPanel({
       <div
         style={{
           padding: 12,
-          backgroundColor: '#1a1a2e',
+          backgroundColor: 'var(--bg-surface)',
           borderRadius: 4,
           marginBottom: 12,
           fontFamily: 'monospace',
           fontSize: 13,
           whiteSpace: 'pre-wrap',
-          color: '#e0e0e0',
+          color: 'var(--text-primary)',
         }}
       >
         {question}
@@ -72,7 +72,7 @@ export function DecisionPanel({
 
       {context.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ color: '#888', fontSize: 12, marginBottom: 4 }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 4 }}>
             Context:
           </div>
           {context.map((c, i) => (
@@ -81,7 +81,7 @@ export function DecisionPanel({
               style={{
                 fontFamily: 'monospace',
                 fontSize: 12,
-                color: '#aaa',
+                color: 'var(--text-muted)',
                 paddingLeft: 8,
               }}
             >
@@ -103,9 +103,9 @@ export function DecisionPanel({
             padding: 8,
             fontFamily: 'monospace',
             fontSize: 13,
-            backgroundColor: '#1a1a2e',
-            color: '#e0e0e0',
-            border: '1px solid #444',
+            backgroundColor: 'var(--bg-surface)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-default)',
             borderRadius: 4,
             resize: 'vertical',
           }}
@@ -115,8 +115,8 @@ export function DecisionPanel({
             onClick={handleSubmit}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#4ecdc4',
-              color: '#1a1a2e',
+              backgroundColor: 'var(--accent-primary)',
+              color: 'var(--bg-surface)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',
@@ -129,8 +129,8 @@ export function DecisionPanel({
             onClick={() => onCancel(runId)}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#ff6b6b',
-              color: '#fff',
+              backgroundColor: 'var(--accent-error)',
+              color: 'var(--text-primary)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',

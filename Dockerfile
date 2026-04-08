@@ -55,4 +55,5 @@ ENV RUST_LOG=info
 
 EXPOSE 3000
 
-CMD ["terminal-daemon"]
+# Entrypoint: seed test repo if script exists, then start daemon
+CMD ["sh", "-c", "if [ -f /app/scripts/seed-test-repo.sh ]; then bash /app/scripts/seed-test-repo.sh; fi && terminal-daemon"]

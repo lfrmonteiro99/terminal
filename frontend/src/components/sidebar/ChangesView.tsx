@@ -26,11 +26,11 @@ function getStatusBadgeStyle(status: FileStatus): React.CSSProperties {
     justifyContent: 'center',
     flexShrink: 0,
   };
-  if (status === 'Added') return { ...base, backgroundColor: 'rgba(78,205,196,0.18)', color: '#4ecdc4' };
-  if (status === 'Modified') return { ...base, backgroundColor: 'rgba(240,165,0,0.18)', color: '#f0a500' };
-  if (status === 'Deleted') return { ...base, backgroundColor: 'rgba(255,107,107,0.18)', color: '#ff6b6b' };
-  if (typeof status === 'object' && 'Renamed' in status) return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: '#888' };
-  return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: '#888' };
+  if (status === 'Added') return { ...base, backgroundColor: 'rgba(78,205,196,0.18)', color: 'var(--accent-primary)' };
+  if (status === 'Modified') return { ...base, backgroundColor: 'rgba(240,165,0,0.18)', color: 'var(--accent-warn)' };
+  if (status === 'Deleted') return { ...base, backgroundColor: 'rgba(255,107,107,0.18)', color: 'var(--accent-error)' };
+  if (typeof status === 'object' && 'Renamed' in status) return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
+  return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
 }
 
 function isRunActive(state: { type: string }): boolean {
@@ -45,7 +45,7 @@ const contextBannerStyle: React.CSSProperties = {
   borderBottom: '1px solid rgba(78, 205, 196, 0.2)',
   fontSize: 11,
   fontFamily: 'monospace',
-  color: '#4ecdc4',
+  color: 'var(--accent-primary)',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -55,7 +55,7 @@ const contextBannerStyle: React.CSSProperties = {
 const sectionHeaderStyle: React.CSSProperties = {
   padding: '4px 12px 2px',
   fontSize: 10,
-  color: '#888',
+  color: 'var(--text-muted)',
   textTransform: 'uppercase',
   letterSpacing: '0.5px',
 };
@@ -73,9 +73,9 @@ const fileRowBaseStyle: React.CSSProperties = {
 
 const selectStyle: React.CSSProperties = {
   width: '100%',
-  backgroundColor: '#0d1117',
-  color: '#e0e0e0',
-  border: '1px solid #333',
+  backgroundColor: 'var(--bg-base)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-default)',
   borderRadius: 3,
   fontSize: 11,
   fontFamily: 'monospace',
@@ -103,13 +103,13 @@ const stageBtnBase: React.CSSProperties = {
 const stageAddBtnStyle: React.CSSProperties = {
   ...stageBtnBase,
   backgroundColor: 'rgba(78,205,196,0.12)',
-  color: '#4ecdc4',
+  color: 'var(--accent-primary)',
 };
 
 const stageRemoveBtnStyle: React.CSSProperties = {
   ...stageBtnBase,
   backgroundColor: 'rgba(255,107,107,0.12)',
-  color: '#ff6b6b',
+  color: 'var(--accent-error)',
 };
 
 // --- Sub-components ---
@@ -146,7 +146,7 @@ function FileRow({
       onMouseLeave={() => setHover(false)}
     >
       <span style={getStatusBadgeStyle(file.status)}>{getStatusChar(file.status)}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: '#e0e0e0' }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }}>
         {file.path}
       </span>
       {showStageButton && onStageAction && (
@@ -252,7 +252,10 @@ export function ChangesView() {
   const files = changedFiles?.files ?? [];
   const stagedCount = state.repoStatus?.staged_count ?? 0;
 
-  // If we have repoStatus info, split the list. Otherwise show flat.
+  // ACCEPTED LIMITATION: FileChange has no per-file `staged` boolean field.
+  // The backend sends staged files first by convention (verified in dispatcher.rs).
+  // We split using repoStatus.staged_count as the boundary index.
+  // If the backend changes ordering, this split will be incorrect.
   const staged = changesContext.mode === 'working' ? files.slice(0, stagedCount) : [];
   const unstaged = changesContext.mode === 'working' ? files.slice(stagedCount) : [];
 
@@ -260,7 +263,7 @@ export function ChangesView() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Context banner */}
       <div style={contextBannerStyle}>
-        <span style={{ color: '#666', marginRight: 4 }}>Context:</span>
+        <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>Context:</span>
         {contextBannerText}
       </div>
 
@@ -283,7 +286,7 @@ export function ChangesView() {
       {/* File lists */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
         {files.length === 0 ? (
-          <div style={{ padding: 16, color: '#666', fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>
+          <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>
             No changes detected
           </div>
         ) : changesContext.mode === 'working' ? (

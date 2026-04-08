@@ -11,7 +11,7 @@ export function RunPanel() {
 
   if (!state.activeRun && state.outputLines.length === 0) {
     return (
-      <div style={{ padding: 24, color: '#888', fontFamily: 'monospace' }}>
+      <div style={{ padding: 24, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
         No active run. Start a session and run a prompt.
       </div>
     );
@@ -26,8 +26,8 @@ export function RunPanel() {
         fontFamily: 'monospace',
         fontSize: 13,
         lineHeight: 1.5,
-        backgroundColor: '#1a1a2e',
-        color: '#e0e0e0',
+        backgroundColor: 'var(--bg-surface)',
+        color: 'var(--text-primary)',
       }}
     >
       {state.outputLines.map((line, i) => (
@@ -36,14 +36,14 @@ export function RunPanel() {
           style={{
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
-            color: line.startsWith('[stderr]') ? '#ff6b6b' : '#e0e0e0',
+            color: line.startsWith('[stderr]') ? 'var(--accent-error)' : 'var(--text-primary)',
           }}
         >
           {line}
         </div>
       ))}
       {state.activeRun && (
-        <div style={{ color: '#4ecdc4', marginTop: 8 }}>
+        <div style={{ color: 'var(--accent-primary)', marginTop: 8 }}>
           Running...
         </div>
       )}

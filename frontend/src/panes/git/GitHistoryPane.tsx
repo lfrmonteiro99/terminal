@@ -23,16 +23,16 @@ export function GitHistoryPane({ pane: _pane }: PaneProps) {
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        backgroundColor: '#16213e',
-        color: '#e0e0e0',
+        backgroundColor: 'var(--bg-surface)',
+        color: 'var(--text-primary)',
       }}
     >
       <div
         style={{
           padding: '8px 12px',
-          borderBottom: '1px solid #333',
+          borderBottom: '1px solid var(--border-default)',
           fontSize: 12,
-          color: '#888',
+          color: 'var(--text-muted)',
           display: 'flex',
           alignItems: 'center',
         }}
@@ -40,14 +40,14 @@ export function GitHistoryPane({ pane: _pane }: PaneProps) {
         <span>Commit History</span>
         <button
           onClick={() => send({ type: 'GetCommitHistory', limit: 50 })}
-          style={{ marginLeft: 'auto', background: 'none', border: '1px solid #444', color: '#888', borderRadius: 3, padding: '2px 8px', cursor: 'pointer', fontSize: 11 }}
+          style={{ marginLeft: 'auto', background: 'none', border: '1px solid var(--border-default)', color: 'var(--text-muted)', borderRadius: 3, padding: '2px 8px', cursor: 'pointer', fontSize: 11 }}
         >
           ↻
         </button>
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {commits.length === 0 ? (
-          <div style={{ padding: '16px 12px', color: '#555', fontSize: 12, fontFamily: 'monospace' }}>
+          <div style={{ padding: '16px 12px', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
             No commits yet
           </div>
         ) : (
@@ -56,17 +56,17 @@ export function GitHistoryPane({ pane: _pane }: PaneProps) {
               key={commit.hash}
               style={{
                 padding: '8px 12px',
-                borderBottom: '1px solid #222',
+                borderBottom: '1px solid var(--border-default)',
                 fontSize: 12,
                 fontFamily: 'monospace',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-                <span style={{ color: '#f0a500', fontSize: 10 }}>{commit.hash.slice(0, 7)}</span>
-                <span style={{ color: '#888', fontSize: 10 }}>{commit.author}</span>
-                <span style={{ color: '#555', fontSize: 10, marginLeft: 'auto' }}>{commit.date}</span>
+                <span style={{ color: 'var(--accent-warn)', fontSize: 10 }}>{commit.hash.slice(0, 7)}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{commit.author}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 'auto' }}>{commit.date}</span>
               </div>
-              <div style={{ color: '#e0e0e0', wordBreak: 'break-word' }}>{commit.message}</div>
+              <div style={{ color: 'var(--text-primary)', wordBreak: 'break-word' }}>{commit.message}</div>
             </div>
           ))
         )}

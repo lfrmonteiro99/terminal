@@ -24,11 +24,19 @@ const APP_LEVEL_EVENTS = new Set([
 ]);
 
 export class EventRouter {
+  private readonly appDispatch: AppStoreDispatch;
+  private readonly workspaceDispatch: WorkspaceDispatch;
+  private readonly getActiveWorkspaceId: () => string | null;
+
   constructor(
-    private readonly appDispatch: AppStoreDispatch,
-    private readonly workspaceDispatch: WorkspaceDispatch,
-    private readonly getActiveWorkspaceId: () => string | null,
-  ) {}
+    appDispatch: AppStoreDispatch,
+    workspaceDispatch: WorkspaceDispatch,
+    getActiveWorkspaceId: () => string | null,
+  ) {
+    this.appDispatch = appDispatch;
+    this.workspaceDispatch = workspaceDispatch;
+    this.getActiveWorkspaceId = getActiveWorkspaceId;
+  }
 
   route(event: AppEvent): void {
     if (APP_LEVEL_EVENTS.has(event.type)) {

@@ -2,12 +2,15 @@
 // Allows switching a workspace's mode while preserving context (e.g., keeping the same project).
 
 import type { WorkspaceMode } from '../../domain/workspace/types';
-import type { PaneLayout } from '../../domain/pane/types';
 import { getMode } from '../../modes/registry';
 import type { CommandBus } from '../commands/commandBus';
 
 export class ContextSwitchService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   /**
    * Switch the active workspace to a different mode.

@@ -1,127 +1,150 @@
-// AppChrome — consistent header: workspace title, mode badge, connection status (M7-01)
+// AppChrome — top chrome bar: title, session tabs, connection status
 
+import { useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
-import { listModes } from '../modes/registry';
-import type { WorkspaceMode } from '../domain/workspace/types';
+import { useSend } from '../context/SendContext';
 
-interface AppChromeProps {
-  connectionStatus: string;
-  onOpenCommandPalette: () => void;
-}
-
-function ModeBadge({ mode }: { mode?: WorkspaceMode }) {
-  const modes = listModes();
-  const def = modes.find((m) => m.id === mode);
-  if (!def) return null;
-
-  const colors: Record<WorkspaceMode, string> = {
-    AiSession: '#4ecdc4',
-    Terminal: '#f0a500',
-    Git: '#ff6b6b',
-    Browser: '#a29bfe',
-  };
-
-  return (
-    <span
-      style={{
-        fontSize: 10,
-        fontFamily: 'monospace',
-        padding: '2px 8px',
-        borderRadius: 10,
-        backgroundColor: colors[def.id] + '22',
-        color: colors[def.id],
-        border: `1px solid ${colors[def.id]}44`,
-        fontWeight: 'bold',
-      }}
-    >
-      {def.icon} {def.label}
-    </span>
-  );
-}
-
-export function AppChrome({ connectionStatus, onOpenCommandPalette }: AppChromeProps) {
+export function AppChrome() {
   const state = useAppState();
   const dispatch = useAppDispatch();
+  const send = useSend();
+  const [addingSession, setAddingSession] = useState(false);
+  const [newPath, setNewPath] = useState('');
 
-  const activeWorkspace = (state as any).workspaces?.get?.((state as any).activeWorkspaceId);
-  const workspaceName = activeWorkspace?.name ?? 'Terminal Engine';
-  const workspaceMode: WorkspaceMode | undefined = activeWorkspace?.mode;
-
+  const connectionStatus = state.connection.status;
   const statusColor =
     connectionStatus === 'connected'
-      ? '#4ecdc4'
-      : connectionStatus === 'connecting' || connectionStatus === 'authenticating'
-        ? '#f0a500'
-        : '#ff6b6b';
+      ? 'var(--accent-primary)'
+      : connectionStatus === 'connecting'
+        ? 'var(--accent-warn)'
+        : 'var(--accent-error)';
+
+  const sessions = Array.from(state.sessions.values());
+
+  const handleNewSession = () => {
+    if (!newPath.trim()) return;
+    send({ type: 'StartSession', project_root: newPath.trim() });
+    setNewPath('');
+    setAddingSession(false);
+  };
+
+  const handleCloseSession = (sessionId: string) => {
+    send({ type: 'EndSession', session_id: sessionId });
+    // If closing the active session, switch to another
+    if (sessionId === state.activeSession) {
+      const remaining = sessions.filter(s => s.id !== sessionId);
+      if (remaining.length > 0) {
+        dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: remaining[0].id });
+      }
+    }
+  };
+
+  const projectName = (root: string) => root.split('/').filter(Boolean).pop() ?? root;
 
   return (
     <div
       style={{
-        padding: '6px 16px',
-        borderBottom: '1px solid #333',
+        height: 'var(--chrome-height)',
+        backgroundColor: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border-default)',
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        backgroundColor: '#16213e',
-        fontSize: 13,
-        fontFamily: 'monospace',
+        paddingLeft: 12,
+        paddingRight: 12,
+        gap: 0,
         flexShrink: 0,
-        minHeight: 36,
+        fontFamily: 'var(--font-mono)',
+        fontSize: 'var(--font-size-chrome)',
       }}
     >
-      {/* Workspace title */}
-      <span style={{ fontWeight: 'bold', color: '#e0e0e0' }}>{workspaceName}</span>
+      {/* Title */}
+      <span style={{ fontWeight: 'bold', color: 'var(--text-primary)', marginRight: 12, whiteSpace: 'nowrap' }}>
+        Terminal Engine
+      </span>
 
-      {/* Mode badge */}
-      {workspaceMode && <ModeBadge mode={workspaceMode} />}
+      {/* Session tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflow: 'hidden', gap: 0 }}>
+        {sessions.map(session => {
+          const isActive = session.id === state.activeSession;
+          return (
+            <div
+              key={session.id}
+              title={session.project_root}
+              onClick={() => dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: session.id })}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '0 12px',
+                height: '100%',
+                cursor: 'pointer',
+                borderBottom: isActive ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+                backgroundColor: isActive ? 'var(--bg-overlay)' : 'transparent',
+                whiteSpace: 'nowrap',
+                transition: 'color 100ms, background-color 100ms',
+              }}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-raised)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              <span>{projectName(session.project_root)}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleCloseSession(session.id); }}
+                style={{
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
+                }}
+                title="Close session"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          );
+        })}
 
-      {/* Session indicator */}
-      {state.activeSession && (
-        <span style={{ color: '#555', fontSize: 11 }}>
-          sess:{state.activeSession.slice(0, 6)}
+        {/* Add session button or inline input */}
+        {addingSession ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px' }}>
+            <input
+              autoFocus
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleNewSession();
+                if (e.key === 'Escape') { setAddingSession(false); setNewPath(''); }
+              }}
+              placeholder="Project path..."
+              style={{
+                backgroundColor: 'var(--bg-raised)', border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)', padding: '2px 6px', borderRadius: 3,
+                fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-chrome)', width: 180,
+              }}
+            />
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddingSession(true)}
+            title="New session"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
+              padding: '0 8px', height: '100%',
+            }}
+          >
+            <Plus size={14} />
+          </button>
+        )}
+      </div>
+
+      {/* Right: Ctrl+K hint + connection status */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+        <span style={{ color: 'var(--text-muted)' }}>Ctrl+K</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: statusColor }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: statusColor }} />
+          {connectionStatus}
         </span>
-      )}
-
-      {/* Run state indicator */}
-      {state.activeRun && (
-        <span style={{ color: '#f0a500', fontSize: 11 }}>
-          ● Running
-        </span>
-      )}
-
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
-
-      {/* Error */}
-      {state.error && (
-        <span
-          style={{ color: '#ff6b6b', fontSize: 11, cursor: 'pointer' }}
-          onClick={() => dispatch({ type: 'CLEAR_ERROR' })}
-          title="Click to dismiss"
-        >
-          ⚠ {state.error}
-        </span>
-      )}
-
-      {/* Command palette button */}
-      <button
-        onClick={onOpenCommandPalette}
-        title="Command Palette (Ctrl+P)"
-        style={{
-          background: 'none',
-          border: '1px solid #333',
-          color: '#888',
-          borderRadius: 4,
-          padding: '2px 8px',
-          cursor: 'pointer',
-          fontSize: 11,
-        }}
-      >
-        ⌘P
-      </button>
-
-      {/* Connection status dot */}
-      <span style={{ color: statusColor, fontSize: 11 }}>● {connectionStatus}</span>
+      </div>
     </div>
   );
 }

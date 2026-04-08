@@ -38,7 +38,7 @@ export function SidebarContainer() {
     });
   }, []);
 
-  if (state.sidebarCollapsed) return null;
+  const collapsed = state.sidebarCollapsed;
 
   const ActiveView = (() => {
     switch (state.activeSidebarView) {
@@ -51,22 +51,25 @@ export function SidebarContainer() {
   return (
     <>
       <div style={{
-        width,
+        width: collapsed ? 0 : width,
         flexShrink: 0,
-        backgroundColor: '#1a1a2e',
-        borderRight: '1px solid #333',
+        backgroundColor: 'var(--bg-surface)',
+        borderRight: collapsed ? 'none' : '1px solid var(--border-default)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
         fontFamily: 'monospace',
         fontSize: 12,
+        transition: 'width 150ms ease-out',
       }}>
         <SessionStrip />
         <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
           <ActiveView />
         </div>
       </div>
-      <ResizeHandle direction="horizontal" onResize={handleResize} onResizeEnd={handleResizeEnd} />
+      {!collapsed && (
+        <ResizeHandle direction="horizontal" onResize={handleResize} onResizeEnd={handleResizeEnd} />
+      )}
     </>
   );
 }

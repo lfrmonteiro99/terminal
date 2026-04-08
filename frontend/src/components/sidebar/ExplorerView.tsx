@@ -7,14 +7,14 @@ import { FileTreeNode } from './FileTreeNode';
 
 const headerLabelStyle: React.CSSProperties = {
   fontSize: 10,
-  color: '#888',
+  color: 'var(--text-muted)',
   textTransform: 'uppercase',
   letterSpacing: '0.5px',
 };
 
 const projectNameStyle: React.CSSProperties = {
   fontSize: 13,
-  color: '#4ecdc4',
+  color: 'var(--accent-primary)',
   fontWeight: 'bold',
 };
 
@@ -67,11 +67,11 @@ export function ExplorerView() {
       {/* Tree */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
         {rootEntries === undefined ? (
-          <div style={{ padding: '8px 12px', color: '#666', fontSize: 11, fontFamily: 'monospace' }}>
+          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace' }}>
             Loading...
           </div>
         ) : rootEntries.length === 0 ? (
-          <div style={{ padding: '8px 12px', color: '#666', fontSize: 11, fontFamily: 'monospace', fontStyle: 'italic' }}>
+          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace', fontStyle: 'italic' }}>
             (empty)
           </div>
         ) : (

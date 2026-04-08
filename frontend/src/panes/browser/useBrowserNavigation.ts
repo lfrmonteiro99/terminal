@@ -1,10 +1,8 @@
 // Hook for "Open in Browser" flows from terminal/git/AI context (M6-02)
 
 import { useCallback } from 'react';
-import { useSend } from '../../context/SendContext';
 
 export function useBrowserNavigation() {
-  const send = useSend();
 
   /**
    * Open a URL in the browser pane.

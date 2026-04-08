@@ -431,6 +431,7 @@ mod tests {
     use chrono::Utc;
     use std::path::PathBuf;
     use tempfile::tempdir;
+    use terminal_core::models::RunMode;
 
     fn make_session() -> Session {
         Session {

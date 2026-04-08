@@ -3,7 +3,11 @@
 import type { CommandBus } from '../commands/commandBus';
 
 export class TerminalService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   createSession(params: {
     workspaceId: string;

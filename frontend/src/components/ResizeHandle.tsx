@@ -57,7 +57,7 @@ export function ResizeHandle({ direction, onResize, onResizeEnd }: ResizeHandleP
         position: 'relative',
         zIndex: 10,
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#4ecdc4'; }}
+      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--accent-primary)'; }}
       onMouseLeave={(e) => { if (!dragging.current) e.currentTarget.style.backgroundColor = 'transparent'; }}
     />
   );

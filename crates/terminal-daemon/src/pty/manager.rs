@@ -54,7 +54,12 @@ impl PtyManager {
         });
 
         let mut cmd = Command::new(&shell_path);
-        cmd.current_dir(&work_dir)
+        cmd.arg("-i") // Force interactive mode (shows prompt even with piped stdin)
+            .current_dir(&work_dir)
+            .env("TERM", "xterm-256color")
+            .env("PS1", "\\w $ ")
+            .env("COLUMNS", "120")
+            .env("LINES", "40")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -164,7 +169,10 @@ impl PtyManager {
             match reader.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+                    // Pipe-based PTY fix: convert bare \n to \r\n for xterm.js
+                    // A real PTY does this via the terminal line discipline; pipes don't.
+                    let data = raw.replace('\n', "\r\n");
                     let event = AppEvent::TerminalOutput { session_id, data };
                     let json = serde_json::to_string(&event).expect("serialization");
                     let _ = event_tx.send(json);

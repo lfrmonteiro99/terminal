@@ -52,8 +52,8 @@ export function PaneSplitActions({
         display: 'flex',
         gap: 4,
         padding: '2px 8px',
-        borderTop: '1px solid #222',
-        backgroundColor: '#1a1a2e',
+        borderTop: '1px solid var(--border-default)',
+        backgroundColor: 'var(--bg-surface)',
       }}
     >
       <ActionButton onClick={onSplitHorizontal} title="Split Right (Ctrl+Shift+\\)" label="⊢" />
@@ -82,8 +82,8 @@ function ActionButton({
       title={title}
       style={{
         background: 'none',
-        border: '1px solid #333',
-        color: danger ? '#ff6b6b' : '#888',
+        border: '1px solid var(--border-default)',
+        color: danger ? 'var(--accent-error)' : 'var(--text-muted)',
         borderRadius: 3,
         padding: '1px 6px',
         cursor: 'pointer',

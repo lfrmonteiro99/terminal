@@ -7,7 +7,7 @@ import type { PaneProps } from '../registry';
 const navButtonStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#888',
+  color: 'var(--text-muted)',
   cursor: 'pointer',
   padding: '0 6px',
   fontSize: 16,
@@ -41,7 +41,7 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: '#16213e' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-surface)' }}>
       {/* URL bar */}
       <div
         style={{
@@ -49,8 +49,8 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
           alignItems: 'center',
           gap: 4,
           padding: '4px 8px',
-          borderBottom: '1px solid #333',
-          backgroundColor: '#1a1a2e',
+          borderBottom: '1px solid var(--border-default)',
+          backgroundColor: 'var(--bg-surface)',
         }}
       >
         <button onClick={goBack} style={navButtonStyle} title="Back">←</button>
@@ -63,9 +63,9 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
           placeholder="Enter URL..."
           style={{
             flex: 1,
-            backgroundColor: '#16213e',
-            border: '1px solid #333',
-            color: '#e0e0e0',
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-default)',
+            color: 'var(--text-primary)',
             padding: '4px 8px',
             borderRadius: 3,
             fontFamily: 'monospace',
@@ -75,8 +75,8 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
         <button
           onClick={() => navigate(input)}
           style={{
-            backgroundColor: '#4ecdc4',
-            color: '#1a1a2e',
+            backgroundColor: 'var(--accent-primary)',
+            color: 'var(--bg-surface)',
             border: 'none',
             borderRadius: 3,
             padding: '4px 10px',
@@ -89,13 +89,30 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
       </div>
 
       {/* Iframe */}
-      <iframe
-        ref={iframeRef}
-        src={url}
-        style={{ flex: 1, border: 'none', backgroundColor: '#fff' }}
-        title="Browser Pane"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-      />
+      {url === 'about:blank' ? (
+        <div style={{
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', gap: 8, color: 'var(--text-muted)', fontSize: 13,
+          fontFamily: 'var(--font-mono)', backgroundColor: 'var(--bg-surface)',
+        }}>
+          <span style={{ fontSize: 24 }}>🌐</span>
+          <span>Enter a URL above to browse</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Note: some sites block iframe embedding (e.g. Google)
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Try: localhost URLs, docs, or sites that allow embedding
+          </span>
+        </div>
+      ) : (
+        <iframe
+          ref={iframeRef}
+          src={url}
+          style={{ flex: 1, border: 'none', backgroundColor: '#fff' }}
+          title="Browser Pane"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        />
+      )}
     </div>
   );
 }

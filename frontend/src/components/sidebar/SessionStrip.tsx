@@ -5,15 +5,15 @@ function getStatusColor(state: RunState): string {
   switch (state.type) {
     case 'Running':
     case 'Preparing':
-      return '#4ecdc4';
+      return 'var(--accent-primary)';
     case 'Completed':
-      return '#4ecdc4';
+      return 'var(--accent-primary)';
     case 'Failed':
-      return '#ff6b6b';
+      return 'var(--accent-error)';
     case 'Cancelled':
-      return '#888';
+      return 'var(--text-muted)';
     default:
-      return '#f0a500';
+      return 'var(--accent-warn)';
   }
 }
 
@@ -49,14 +49,14 @@ export function SessionStrip() {
   return (
     <div style={{
       flexShrink: 0,
-      borderBottom: '1px solid #333',
+      borderBottom: '1px solid var(--border-default)',
       fontFamily: 'monospace',
       fontSize: 12,
     }}>
       <style>{pulseKeyframes}</style>
       <div style={{
         padding: '8px 12px 4px',
-        color: '#4ecdc4',
+        color: 'var(--accent-primary)',
         fontWeight: 'bold',
         fontSize: 13,
         overflow: 'hidden',
@@ -67,7 +67,7 @@ export function SessionStrip() {
       </div>
       <div style={{
         padding: '0 12px 4px',
-        color: '#888',
+        color: 'var(--text-muted)',
         fontSize: 11,
       }}>
         {session.id.slice(0, 8)}... | {session.run_count} runs
@@ -92,7 +92,7 @@ export function SessionStrip() {
                 borderRadius: 3,
                 cursor: 'pointer',
                 backgroundColor: isSelected ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
-                borderLeft: isSelected ? '2px solid #4ecdc4' : '2px solid transparent',
+                borderLeft: isSelected ? '2px solid var(--accent-primary)' : '2px solid transparent',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -108,7 +108,7 @@ export function SessionStrip() {
                 animation: running ? 'pulse-dot 1.5s ease-in-out infinite' : 'none',
               }} />
               <span style={{
-                color: '#e0e0e0',
+                color: 'var(--text-primary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',

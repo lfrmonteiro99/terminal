@@ -4,7 +4,11 @@ import type { ConflictResolution } from '../../types/protocol';
 import type { CommandBus } from '../commands/commandBus';
 
 export class GitService {
-  constructor(private readonly bus: CommandBus) {}
+  private readonly bus: CommandBus;
+
+  constructor(bus: CommandBus) {
+    this.bus = bus;
+  }
 
   getRepoStatus(): void {
     this.bus.dispatch({ type: 'GetRepoStatus' });
