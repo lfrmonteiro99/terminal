@@ -33,6 +33,7 @@ interface CommandPaletteProps {
   zoomedPaneId?: string | null;
   onZoomPane?: () => void;
   onShowShortcuts?: () => void;
+  onOpenSsh?: () => void;
 }
 
 // Use shared presets — map to PaneLayout for backward compat
@@ -42,7 +43,7 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
 
 type PaletteMode = 'commands' | 'quick-commands' | 'save-name' | 'save-cmd' | 'branches' | 'new-branch';
 
-export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -209,6 +210,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         description: 'Restore default keyboard shortcuts',
         action: () => { resetShortcuts(); onClose(); },
       },
+      // SSH
+      {
+        id: 'add:ssh',
+        label: 'Add Pane: SSH Terminal',
+        description: 'Connect to a remote host via SSH',
+        action: () => { onOpenSsh?.(); onClose(); },
+      },
       // Add pane commands
       { id: 'add:search', label: 'Add Pane: Search', description: 'Add a search pane to grep across project files', action: () => { onAddPane?.('Search', 'Horizontal'); } },
       { id: 'add:fileviewer', label: 'Add Pane: File Viewer', description: 'Add a file viewer pane', action: () => { onAddPane?.('FileViewer', 'Horizontal'); } },
@@ -238,7 +246,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts],
+    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
   );
 
   // Determine effective mode: if query starts with '!' override to quick-commands,

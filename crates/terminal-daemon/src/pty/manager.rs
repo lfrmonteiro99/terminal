@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::Arc;
-use terminal_core::models::{TerminalSessionMeta, TerminalSessionSummary};
+use terminal_core::models::{SshConfig, TerminalSessionMeta, TerminalSessionSummary};
 use terminal_core::protocol::v1::AppEvent;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -46,12 +46,36 @@ impl PtyManager {
         shell: Option<String>,
         cwd: Option<PathBuf>,
         env: Option<Vec<(String, String)>>,
+        ssh: Option<SshConfig>,
     ) -> Result<Uuid, String> {
         let session_id = Uuid::new_v4();
-        let shell_path = shell
-            .map(PathBuf::from)
-            .or_else(|| std::env::var("SHELL").ok().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("/bin/bash"));
+
+        // Determine command path, args, and whether this is an SSH session.
+        let (shell_path, extra_args, is_ssh, ssh_host_label) = if let Some(ref ssh_cfg) = ssh {
+            let mut args = vec![
+                "-p".to_string(),
+                ssh_cfg.port.to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=30".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=3".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=accept-new".to_string(),
+            ];
+            if let Some(ref key) = ssh_cfg.identity_file {
+                args.push("-i".to_string());
+                args.push(key.to_string_lossy().to_string());
+            }
+            args.push(format!("{}@{}", ssh_cfg.username, ssh_cfg.host));
+            let label = format!("{}@{}", ssh_cfg.username, ssh_cfg.host);
+            (PathBuf::from("ssh"), args, true, Some(label))
+        } else {
+            let path = shell
+                .map(PathBuf::from)
+                .or_else(|| std::env::var("SHELL").ok().map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("/bin/bash"));
+            (path, vec!["-i".to_string()], false, None)
+        };
 
         let work_dir = cwd.unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
@@ -78,7 +102,8 @@ impl PtyManager {
 
         // Build the command. pre_exec sets up the child side of the PTY.
         let mut cmd = Command::new(&shell_path);
-        cmd.current_dir(&work_dir)
+        cmd.args(&extra_args)
+            .current_dir(&work_dir)
             .env("TERM", "xterm-256color")
             .kill_on_drop(true)
             // Suppress Tokio's default piped stdio — we handle it via PTY.
@@ -194,6 +219,8 @@ impl PtyManager {
             workspace_id,
             shell: shell_path.to_string_lossy().to_string(),
             cwd: work_dir,
+            is_ssh,
+            ssh_host: ssh_host_label,
         };
         let json = serde_json::to_string(&created_event).expect("serialization");
         let _ = self.event_tx.send(json);

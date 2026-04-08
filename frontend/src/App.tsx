@@ -21,6 +21,8 @@ import { saveSession, getSession } from './state/sessionStore';
 import { getCurrentThemeId, applyTheme } from './styles/themes';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ToastContainer } from './components/ToastContainer';
+import { SshConnectDialog } from './components/SshConnectDialog';
+import type { SshConnectConfig } from './components/SshConnectDialog';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -252,8 +254,59 @@ function AppContent() {
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
+  // SSH dialog state
+  const [sshDialogOpen, setSshDialogOpen] = useState(false);
+  // Pane ID to replace when SSH is launched from EmptyPane (null = open as new split)
+  const [sshTargetPaneId, setSshTargetPaneId] = useState<string | null>(null);
+
   // Cheatsheet overlay state
   const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
+
+  // Listen for open-ssh-dialog events from EmptyPane
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { paneId } = (e as CustomEvent).detail as { paneId: string };
+      setSshTargetPaneId(paneId ?? null);
+      setSshDialogOpen(true);
+    };
+    window.addEventListener('open-ssh-dialog', handler);
+    return () => window.removeEventListener('open-ssh-dialog', handler);
+  }, []);
+
+  // Handle SSH connection — build resource_id and create/replace a terminal pane
+  const handleSshConnect = useCallback((cfg: SshConnectConfig) => {
+    // Build ssh:// URI encoding the config
+    const identity = cfg.identity_file
+      ? `?identity=${encodeURIComponent(cfg.identity_file)}`
+      : '';
+    const resourceId = `ssh://${encodeURIComponent(cfg.username)}@${cfg.host}:${cfg.port}${identity}`;
+
+    if (sshTargetPaneId) {
+      // Replace an existing Empty pane with a Terminal pane that has ssh:// resource_id
+      setLayout(prev => {
+        const replace = (l: PaneLayout): PaneLayout => {
+          if ('Single' in l && l.Single.id === sshTargetPaneId) {
+            return { Single: { ...l.Single, kind: 'Terminal' as const, id: `ssh-${Date.now()}`, resource_id: resourceId } };
+          }
+          if ('Split' in l) {
+            return { Split: { ...l.Split, first: replace(l.Split.first), second: replace(l.Split.second) } };
+          }
+          return l;
+        };
+        return replace(prev);
+      });
+      setSshTargetPaneId(null);
+    } else {
+      // Split and add a new SSH terminal pane
+      const targetId = focusedPaneId ?? collectPanes(layout)[0]?.id;
+      if (!targetId) return;
+      const result = splitPane(layout, targetId, 'Horizontal', 'Terminal');
+      if (!result) return;
+      const patched = updateResourceId(result.layout, result.newPaneId, resourceId);
+      setLayout(patched);
+      setFocusedPaneId(result.newPaneId);
+    }
+  }, [sshTargetPaneId, focusedPaneId, layout]);
 
   // On mount: detect Tauri via dynamic import probe, then auto-connect or fall back
   useEffect(() => {
@@ -615,6 +668,13 @@ function AppContent() {
         zoomedPaneId={zoomedPaneId}
         onZoomPane={() => { setZoomedPaneId(prev => prev ? null : focusedPaneId); setCommandPaletteOpen(false); }}
         onShowShortcuts={() => { setCheatsheetOpen(true); setCommandPaletteOpen(false); }}
+        onOpenSsh={() => { setSshTargetPaneId(null); setSshDialogOpen(true); setCommandPaletteOpen(false); }}
+      />
+
+      <SshConnectDialog
+        open={sshDialogOpen}
+        onClose={() => { setSshDialogOpen(false); setSshTargetPaneId(null); }}
+        onConnect={handleSshConnect}
       />
 
       <ToastContainer />

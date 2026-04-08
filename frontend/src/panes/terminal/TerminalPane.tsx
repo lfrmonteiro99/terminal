@@ -186,18 +186,44 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     }
   }, [focused]);
 
+  // Parse SSH config from resource_id (format: ssh://user@host:port?identity=/path)
+  const sshConfig = (() => {
+    const rid = pane.resource_id;
+    if (typeof rid !== 'string' || !rid.startsWith('ssh://')) return undefined;
+    try {
+      // ssh://username@host:port or ssh://username@host:port?identity=/path/to/key
+      const url = new URL(rid);
+      return {
+        host: url.hostname,
+        port: url.port ? parseInt(url.port, 10) : 22,
+        username: url.username || 'root',
+        identity_file: url.searchParams.get('identity') || undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  })();
+
   // Create a PTY session when component mounts — uses FIFO queue for reliable matching
   useEffect(() => {
     if (sessionState !== 'idle') return;
     installGlobalListener();
     setSessionState('creating');
-    send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd });
+    const cmd: Record<string, unknown> = {
+      type: 'CreateTerminalSession',
+      workspace_id: workspaceId,
+      cwd,
+    };
+    if (sshConfig) {
+      cmd.ssh = sshConfig;
+    }
+    send(cmd as any);
     waitForSession(workspaceId).then((sid) => {
       paneSessionMap.set(pane.id, sid);
       setSessionId(sid);
       setSessionState('active');
     });
-  }, [workspaceId, sessionState, send]);
+  }, [workspaceId, sessionState, send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for terminal output and close events (session-specific, not creation)
   useEffect(() => {
@@ -341,7 +367,9 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             fontSize: 13,
           }}
         >
-          {sessionState === 'creating' ? 'Starting terminal...' : 'Terminal'}
+          {sessionState === 'creating'
+            ? (sshConfig ? `Connecting to ${sshConfig.username}@${sshConfig.host}...` : 'Starting terminal...')
+            : 'Terminal'}
         </div>
       )}
     </div>
