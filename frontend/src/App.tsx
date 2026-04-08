@@ -252,6 +252,14 @@ function AppContent() {
         setFocusedPaneId(panes[nextIdx].id);
         return;
       }
+      // Alt+1..9: jump to pane by index (like tmux)
+      if (e.altKey && e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const panes = collectPanes(layout);
+        const idx = parseInt(e.key) - 1;
+        if (idx < panes.length) setFocusedPaneId(panes[idx].id);
+        return;
+      }
       // Ctrl+Shift+\ : Split right, Ctrl+Shift+- : Split down
       if (e.ctrlKey && e.shiftKey && e.key === '|') {
         e.preventDefault();
