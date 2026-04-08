@@ -201,6 +201,85 @@ function computePaneRects(
   return result;
 }
 
+// --- Splitter computation ---
+
+interface SplitterInfo {
+  x: number; y: number; w: number; h: number;
+  isHorizontal: boolean;
+  /** Path to the Split node in the layout tree (sequence of 0=first, 1=second) */
+  path: number[];
+}
+
+function computeSplitters(
+  layout: PaneLayout,
+  rect: Rect = { x: 0, y: 0, w: 1, h: 1 },
+  path: number[] = [],
+): SplitterInfo[] {
+  if (isSingle(layout)) return [];
+  if (!isSplit(layout)) return [];
+
+  const { direction, ratio, first, second } = layout.Split;
+  const result: SplitterInfo[] = [];
+  const SPLITTER_HALF = 0.003; // ~3px at 1000px container
+
+  if (direction === 'Horizontal') {
+    const splitX = rect.x + rect.w * ratio;
+    result.push({
+      x: splitX - SPLITTER_HALF, y: rect.y,
+      w: SPLITTER_HALF * 2, h: rect.h,
+      isHorizontal: true, path,
+    });
+    result.push(...computeSplitters(first, { x: rect.x, y: rect.y, w: rect.w * ratio, h: rect.h }, [...path, 0]));
+    result.push(...computeSplitters(second, { x: splitX, y: rect.y, w: rect.w * (1 - ratio), h: rect.h }, [...path, 1]));
+  } else {
+    const splitY = rect.y + rect.h * ratio;
+    result.push({
+      x: rect.x, y: splitY - SPLITTER_HALF,
+      w: rect.w, h: SPLITTER_HALF * 2,
+      isHorizontal: false, path,
+    });
+    result.push(...computeSplitters(first, { x: rect.x, y: rect.y, w: rect.w, h: rect.h * ratio }, [...path, 0]));
+    result.push(...computeSplitters(second, { x: rect.x, y: splitY, w: rect.w, h: rect.h * (1 - ratio) }, [...path, 1]));
+  }
+
+  return result;
+}
+
+/** Navigate to a Split node in the layout tree by path and update its ratio */
+function updateRatioAtPath(layout: PaneLayout, path: number[], newRatio: number): PaneLayout {
+  if (path.length === 0 && isSplit(layout)) {
+    return { Split: { ...layout.Split, ratio: Math.max(0.1, Math.min(0.9, newRatio)) } };
+  }
+  if (isSplit(layout) && path.length > 0) {
+    const [head, ...rest] = path;
+    if (head === 0) {
+      return { Split: { ...layout.Split, first: updateRatioAtPath(layout.Split.first, rest, newRatio) } };
+    } else {
+      return { Split: { ...layout.Split, second: updateRatioAtPath(layout.Split.second, rest, newRatio) } };
+    }
+  }
+  return layout;
+}
+
+/** Get the bounding rect of the Split node at path (for computing new ratio from mouse position) */
+function getSplitRect(layout: PaneLayout, path: number[], rect: Rect = { x: 0, y: 0, w: 1, h: 1 }): { rect: Rect; direction: string } | null {
+  if (path.length === 0 && isSplit(layout)) {
+    return { rect, direction: layout.Split.direction };
+  }
+  if (isSplit(layout) && path.length > 0) {
+    const { direction, ratio, first, second } = layout.Split;
+    const [head, ...rest] = path;
+    if (direction === 'Horizontal') {
+      if (head === 0) return getSplitRect(first, rest, { x: rect.x, y: rect.y, w: rect.w * ratio, h: rect.h });
+      else return getSplitRect(second, rest, { x: rect.x + rect.w * ratio, y: rect.y, w: rect.w * (1 - ratio), h: rect.h });
+    } else {
+      if (head === 0) return getSplitRect(first, rest, { x: rect.x, y: rect.y, w: rect.w, h: rect.h * ratio });
+      else return getSplitRect(second, rest, { x: rect.x, y: rect.y + rect.h * ratio, w: rect.w, h: rect.h * (1 - ratio) });
+    }
+  }
+  return null;
+}
+
 // --- PaneRenderer ---
 
 interface PaneRendererProps {
@@ -220,7 +299,7 @@ export function PaneRenderer({
   focusedPaneId,
   zoomedPaneId,
   onFocusPane,
-  onLayoutChange: _onLayoutChange,
+  onLayoutChange,
   onSplitPane,
   onClosePane,
 }: PaneRendererProps) {
@@ -326,6 +405,69 @@ export function PaneRenderer({
           </div>
         );
       })}
+
+      {/* Interactive splitter overlays for drag-to-resize */}
+      {!zoomedPaneId && computeSplitters(layout).map((sp, i) => (
+        <div
+          key={`splitter-${i}`}
+          style={{
+            position: 'absolute',
+            left: `${sp.x * 100}%`,
+            top: `${sp.y * 100}%`,
+            width: `${sp.w * 100}%`,
+            height: `${sp.h * 100}%`,
+            cursor: sp.isHorizontal ? 'col-resize' : 'row-resize',
+            zIndex: 10,
+            backgroundColor: 'transparent',
+            // Widen hit area
+            padding: sp.isHorizontal ? '0 3px' : '3px 0',
+            margin: sp.isHorizontal ? '0 -3px' : '-3px 0',
+            boxSizing: 'content-box',
+          }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const container = containerRef.current;
+            if (!container) return;
+            const containerRect = container.getBoundingClientRect();
+            const splitterPath = sp.path;
+            const splitInfo = getSplitRect(layout, splitterPath);
+            if (!splitInfo) return;
+
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = sp.isHorizontal ? 'col-resize' : 'row-resize';
+
+            const onMouseMove = (moveEvt: MouseEvent) => {
+              if (!splitInfo) return;
+              const { rect: splitRect, direction } = splitInfo;
+              let newRatio: number;
+              if (direction === 'Horizontal') {
+                const absX = (moveEvt.clientX - containerRect.left) / containerRect.width;
+                newRatio = (absX - splitRect.x) / splitRect.w;
+              } else {
+                const absY = (moveEvt.clientY - containerRect.top) / containerRect.height;
+                newRatio = (absY - splitRect.y) / splitRect.h;
+              }
+              newRatio = Math.max(0.1, Math.min(0.9, newRatio));
+              const updated = updateRatioAtPath(layout, splitterPath, newRatio);
+              onLayoutChange?.(updated);
+            };
+
+            const onMouseUp = () => {
+              document.body.style.userSelect = '';
+              document.body.style.cursor = '';
+              window.removeEventListener('mousemove', onMouseMove);
+              window.removeEventListener('mouseup', onMouseUp);
+            };
+
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+          }}
+          onDoubleClick={() => {
+            const updated = updateRatioAtPath(layout, sp.path, 0.5);
+            onLayoutChange?.(updated);
+          }}
+        />
+      ))}
     </div>
   );
 }
