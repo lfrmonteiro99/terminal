@@ -220,7 +220,7 @@ function computeSplitters(
 
   const { direction, ratio, first, second } = layout.Split;
   const result: SplitterInfo[] = [];
-  const SPLITTER_HALF = 0.003; // ~3px at 1000px container
+  const SPLITTER_HALF = 0.004; // ~4px visible at 1000px container
 
   if (direction === 'Horizontal') {
     const splitX = rect.x + rect.w * ratio;
@@ -304,6 +304,8 @@ export function PaneRenderer({
   onClosePane,
 }: PaneRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
@@ -420,8 +422,8 @@ export function PaneRenderer({
             zIndex: 10,
             backgroundColor: 'transparent',
             // Widen hit area
-            padding: sp.isHorizontal ? '0 3px' : '3px 0',
-            margin: sp.isHorizontal ? '0 -3px' : '-3px 0',
+            padding: sp.isHorizontal ? '0 6px' : '6px 0',
+            margin: sp.isHorizontal ? '0 -6px' : '-6px 0',
             boxSizing: 'content-box',
           }}
           onMouseDown={(e) => {
@@ -430,15 +432,16 @@ export function PaneRenderer({
             if (!container) return;
             const containerRect = container.getBoundingClientRect();
             const splitterPath = sp.path;
-            const splitInfo = getSplitRect(layout, splitterPath);
+            const splitInfo = getSplitRect(layoutRef.current, splitterPath);
             if (!splitInfo) return;
 
             document.body.style.userSelect = 'none';
             document.body.style.cursor = sp.isHorizontal ? 'col-resize' : 'row-resize';
 
             const onMouseMove = (moveEvt: MouseEvent) => {
-              if (!splitInfo) return;
-              const { rect: splitRect, direction } = splitInfo;
+              const currentSplitInfo = getSplitRect(layoutRef.current, splitterPath);
+              if (!currentSplitInfo) return;
+              const { rect: splitRect, direction } = currentSplitInfo;
               let newRatio: number;
               if (direction === 'Horizontal') {
                 const absX = (moveEvt.clientX - containerRect.left) / containerRect.width;
@@ -448,7 +451,7 @@ export function PaneRenderer({
                 newRatio = (absY - splitRect.y) / splitRect.h;
               }
               newRatio = Math.max(0.1, Math.min(0.9, newRatio));
-              const updated = updateRatioAtPath(layout, splitterPath, newRatio);
+              const updated = updateRatioAtPath(layoutRef.current, splitterPath, newRatio);
               onLayoutChange?.(updated);
             };
 
@@ -463,7 +466,7 @@ export function PaneRenderer({
             window.addEventListener('mouseup', onMouseUp);
           }}
           onDoubleClick={() => {
-            const updated = updateRatioAtPath(layout, sp.path, 0.5);
+            const updated = updateRatioAtPath(layoutRef.current, sp.path, 0.5);
             onLayoutChange?.(updated);
           }}
         />
