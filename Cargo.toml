@@ -19,3 +19,4 @@ tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+nix = { version = "0.31", features = ["term", "signal", "process", "ioctl"] }

@@ -39,6 +39,7 @@ services:
       - cargo-git:/usr/local/cargo/git
       - target-cache:/app/target
     command: cargo test -p terminal-core -p terminal-daemon
+    privileged: true  # required for PTY operations (/dev/ptmx, /dev/pts)
     profiles:
       - test
 
