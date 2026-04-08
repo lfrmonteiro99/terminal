@@ -162,6 +162,13 @@ pub enum AppCommand {
         resolution: ConflictResolution,
     },
 
+    // File viewer (TERMINAL-005)
+    ReadFile {
+        path: String,
+        #[serde(default)]
+        max_bytes: Option<u64>,
+    },
+
     // System
     GetStatus,
     Ping,
@@ -378,6 +385,19 @@ pub enum AppEvent {
     },
     ConflictResolved {
         file_path: PathBuf,
+    },
+
+    // File viewer (TERMINAL-005)
+    FileContent {
+        path: String,
+        content: String,
+        language: String,
+        truncated: bool,
+        size_bytes: u64,
+    },
+    FileReadError {
+        path: String,
+        error: String,
     },
 
     // System

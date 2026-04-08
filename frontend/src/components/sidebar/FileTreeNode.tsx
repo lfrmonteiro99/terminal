@@ -132,11 +132,18 @@ export function FileTreeNode({
     }
   };
 
+  const handleDoubleClick = () => {
+    if (!isDir) {
+      window.dispatchEvent(new CustomEvent('open-file-viewer', { detail: { path: fullPath } }));
+    }
+  };
+
   return (
     <>
       <div
         style={rowStyle}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >

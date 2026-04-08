@@ -210,6 +210,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { resetShortcuts(); onClose(); },
       },
       // Add pane commands
+      { id: 'add:fileviewer', label: 'Add Pane: File Viewer', description: 'Add a file viewer pane', action: () => { onAddPane?.('FileViewer', 'Horizontal'); } },
       { id: 'add:terminal', label: 'Add Pane: Terminal', description: 'Add a terminal pane to the right', action: () => { onAddPane?.('Terminal', 'Horizontal'); } },
       { id: 'add:terminal:down', label: 'Add Pane: Terminal (below)', description: 'Add a terminal pane below', action: () => { onAddPane?.('Terminal', 'Vertical'); } },
       { id: 'add:ai', label: 'Add Pane: AI Run', description: 'Add an AI prompt pane', action: () => { onAddPane?.('AiRun', 'Horizontal'); } },

@@ -197,7 +197,9 @@ export type AppCommand =
   | { type: 'PullBranch'; remote?: string; branch?: string }
   | { type: 'FetchRemote'; remote?: string }
   | { type: 'GetMergeConflicts' }
-  | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution };
+  | { type: 'ResolveConflict'; file_path: string; resolution: ConflictResolution }
+  // File viewer (TERMINAL-005)
+  | { type: 'ReadFile'; path: string; max_bytes?: number };
 
 // --- Events (Daemon -> Client) ---
 
@@ -255,4 +257,7 @@ export type AppEvent =
   | { type: 'FetchCompleted'; remote: string }
   | { type: 'GitOperationFailed'; operation: string; reason: string }
   | { type: 'MergeConflicts'; files: MergeConflictFile[] }
-  | { type: 'ConflictResolved'; file_path: string };
+  | { type: 'ConflictResolved'; file_path: string }
+  // File viewer (TERMINAL-005)
+  | { type: 'FileContent'; path: string; content: string; language: string; truncated: boolean; size_bytes: number }
+  | { type: 'FileReadError'; path: string; error: string };
