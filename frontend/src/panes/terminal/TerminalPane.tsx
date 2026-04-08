@@ -9,6 +9,9 @@ import type { PaneProps } from '../registry';
 
 type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
 
+// Global set to prevent two panes from claiming the same PTY session
+const claimedSessions = new Set<string>();
+
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
   const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
@@ -135,6 +138,9 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
       const event = (e as CustomEvent).detail;
 
       if (event.type === 'TerminalSessionCreated' && event.workspace_id === workspaceId && sessionState === 'creating') {
+        // Prevent two panes from claiming the same session
+        if (claimedSessions.has(event.session_id)) return;
+        claimedSessions.add(event.session_id);
         setSessionId(event.session_id);
         setSessionState('active');
       }
@@ -144,6 +150,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
       }
 
       if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
+        claimedSessions.delete(event.session_id);
         setSessionState('lost');
       }
     };
