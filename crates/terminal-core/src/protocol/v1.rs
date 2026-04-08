@@ -1,8 +1,8 @@
 use crate::models::{
     BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
     FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
-    RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, TerminalSessionSummary,
-    WorkspaceMode, WorkspaceSummary,
+    RunMode, RunState, RunSummary, SearchMatch, SessionSummary, SshConfig, StashEntry,
+    TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -118,6 +118,8 @@ pub enum AppCommand {
         shell: Option<String>,
         cwd: Option<PathBuf>,
         env: Option<Vec<(String, String)>>,
+        #[serde(default)]
+        ssh: Option<SshConfig>,
     },
     CloseTerminalSession {
         session_id: Uuid,
@@ -352,6 +354,10 @@ pub enum AppEvent {
         workspace_id: Uuid,
         shell: String,
         cwd: PathBuf,
+        #[serde(default)]
+        is_ssh: bool,
+        #[serde(default)]
+        ssh_host: Option<String>,
     },
     TerminalSessionClosed {
         session_id: Uuid,
@@ -808,10 +814,86 @@ mod tests {
             shell: Some("/bin/zsh".into()),
             cwd: Some(PathBuf::from("/home/user")),
             env: None,
+            ssh: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"type\":\"CreateTerminalSession\""));
         let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn create_terminal_session_ssh_roundtrip() {
+        use crate::models::SshConfig;
+        let cmd = AppCommand::CreateTerminalSession {
+            workspace_id: Uuid::new_v4(),
+            shell: None,
+            cwd: None,
+            env: None,
+            ssh: Some(SshConfig {
+                host: "myserver.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                identity_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
+            }),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::CreateTerminalSession { ssh: Some(cfg), .. } => {
+                assert_eq!(cfg.host, "myserver.com");
+                assert_eq!(cfg.port, 22);
+                assert_eq!(cfg.username, "deploy");
+            }
+            _ => panic!("wrong variant or missing ssh config"),
+        }
+    }
+
+    #[test]
+    fn create_terminal_session_backward_compat_no_ssh_field() {
+        // JSON without the ssh field should deserialize with ssh: None (backward compat)
+        let json = r#"{"type":"CreateTerminalSession","workspace_id":"550e8400-e29b-41d4-a716-446655440000","shell":null,"cwd":null,"env":null}"#;
+        let cmd: AppCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            AppCommand::CreateTerminalSession { ssh, .. } => {
+                assert!(ssh.is_none(), "ssh should default to None when absent");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn terminal_session_created_event_with_ssh_fields() {
+        let evt = AppEvent::TerminalSessionCreated {
+            session_id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            shell: "ssh".into(),
+            cwd: PathBuf::from("/"),
+            is_ssh: true,
+            ssh_host: Some("deploy@myserver.com".into()),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::TerminalSessionCreated { is_ssh, ssh_host, .. } => {
+                assert!(is_ssh);
+                assert_eq!(ssh_host.as_deref(), Some("deploy@myserver.com"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn terminal_session_created_backward_compat_no_ssh_fields() {
+        // Old events without is_ssh / ssh_host should deserialize with defaults
+        let json = r#"{"type":"TerminalSessionCreated","session_id":"550e8400-e29b-41d4-a716-446655440001","workspace_id":"550e8400-e29b-41d4-a716-446655440000","shell":"/bin/bash","cwd":"/"}"#;
+        let evt: AppEvent = serde_json::from_str(json).unwrap();
+        match evt {
+            AppEvent::TerminalSessionCreated { is_ssh, ssh_host, .. } => {
+                assert!(!is_ssh, "is_ssh should default to false");
+                assert!(ssh_host.is_none(), "ssh_host should default to None");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

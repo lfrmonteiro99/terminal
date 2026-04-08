@@ -1115,10 +1115,10 @@ impl Dispatcher {
             }
 
             // --- PTY commands (M4-01) ---
-            AppCommand::CreateTerminalSession { workspace_id, shell, cwd, env } => {
+            AppCommand::CreateTerminalSession { workspace_id, shell, cwd, env, ssh } => {
                 let pane_id = format!("terminal-{}", workspace_id);
                 let result = self.pty_manager
-                    .create_session(workspace_id, pane_id, shell, cwd, env)
+                    .create_session(workspace_id, pane_id, shell, cwd, env, ssh)
                     .await;
                 match result {
                     Ok(_session_id) => {}

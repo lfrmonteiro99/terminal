@@ -327,6 +327,16 @@ pub struct RepoStatusSnapshot {
     pub unstaged_count: usize,
 }
 
+// --- SSH Config (TERMINAL-051) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub identity_file: Option<PathBuf>,
+}
+
 // --- Terminal Session Types (M4-01, M4-06) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

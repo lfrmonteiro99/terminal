@@ -1,11 +1,12 @@
 // EmptyPane — placeholder pane that lets users pick what to create here
 
-import { TerminalSquare, Bot, Globe, GitBranch, History } from 'lucide-react';
+import { TerminalSquare, Bot, Globe, GitBranch, History, Server } from 'lucide-react';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 
 const PANE_OPTIONS = [
   { kind: 'Terminal', label: 'Terminal', Icon: TerminalSquare, description: 'Shell session' },
+  { kind: 'SSH', label: 'SSH', Icon: Server, description: 'Remote SSH session' },
   { kind: 'AiRun', label: 'AI Run', Icon: Bot, description: 'AI prompt & output' },
   { kind: 'Browser', label: 'Browser', Icon: Globe, description: 'Embedded browser' },
   { kind: 'GitStatus', label: 'Git Status', Icon: GitBranch, description: 'Staging & commits' },
@@ -30,6 +31,13 @@ export function EmptyPane({ pane }: PaneProps) {
           <button
             key={kind}
             onClick={() => {
+              // SSH kind opens the dialog instead of directly replacing the pane
+              if (kind === 'SSH') {
+                window.dispatchEvent(new CustomEvent('open-ssh-dialog', {
+                  detail: { paneId: pane.id },
+                }));
+                return;
+              }
               // Dispatch a custom event that App.tsx listens for to replace this pane
               window.dispatchEvent(new CustomEvent('set-pane-type', {
                 detail: { paneId: pane.id, kind },
