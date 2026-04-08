@@ -111,7 +111,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
           }
         });
 
-        // Resize observer — debounced to avoid spamming stty on drag
+        // Resize observer — fit immediately (cheap), debounce only the stty ResizeTerminal IPC
         let resizeTimer: ReturnType<typeof setTimeout>;
         const ro = new ResizeObserver(() => {
           fitAddon.fit();
@@ -128,7 +128,7 @@ export function TerminalPane({ pane: _pane, workspaceId, focused }: PaneProps) {
                 });
               }
             }
-          }, 150);
+          }, 80);
         });
         if (termRef.current) ro.observe(termRef.current);
 

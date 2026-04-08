@@ -23,6 +23,8 @@ interface CommandPaletteProps {
   onSplitH?: () => void;
   onSplitV?: () => void;
   onAddPane?: (kind: string, direction: 'Horizontal' | 'Vertical') => void;
+  zoomedPaneId?: string | null;
+  onZoomPane?: () => void;
 }
 
 // Use shared presets — map to PaneLayout for backward compat
@@ -30,7 +32,7 @@ const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
   Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
 );
 
-export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -40,6 +42,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
   const allCommands: Command[] = useMemo(
     () => [
       // Pane layout commands
+      {
+        id: 'pane:zoom',
+        label: zoomedPaneId ? 'Restore Panes' : 'Zoom Pane',
+        description: zoomedPaneId ? 'Restore split layout' : 'Maximize focused pane (hide others)',
+        shortcut: 'Ctrl+Shift+Z',
+        action: () => { onZoomPane?.(); },
+      },
       {
         id: 'pane:split-right',
         label: 'Split Pane Right',
@@ -165,7 +174,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange],
+    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane],
   );
 
   const filtered = useMemo(() => {

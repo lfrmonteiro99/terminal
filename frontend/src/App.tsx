@@ -61,6 +61,7 @@ function AppContent() {
     Single: { id: 'terminal-0', kind: 'Terminal' as const, resource_id: null },
   }));
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
+  const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
 
   // Persist layout on every change
   useEffect(() => {
@@ -308,6 +309,12 @@ function AppContent() {
         send({ type: 'GetChangedFiles', mode: 'working' });
         return;
       }
+      // Ctrl+Shift+Z: zoom/restore focused pane
+      if (e.ctrlKey && e.shiftKey && e.key === 'Z') {
+        e.preventDefault();
+        setZoomedPaneId(prev => prev ? null : focusedPaneId);
+        return;
+      }
       // Ctrl+Shift+\ : Split right, Ctrl+Shift+- : Split down
       if (e.ctrlKey && e.shiftKey && e.key === '|') {
         e.preventDefault();
@@ -398,21 +405,28 @@ function AppContent() {
               }} />
               <SidebarContainer />
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
-                <PaneRenderer
-                  layout={layout}
-                  workspaceId={state.activeSession ?? ''}
-                  focusedPaneId={focusedPaneId}
-                  onFocusPane={setFocusedPaneId}
-                  onLayoutChange={setLayout}
-                  onSplitPane={(paneId, direction) => {
-                    const result = splitPane(layout, paneId, direction);
-                    if (result) {
-                      setLayout(result.layout);
-                      setFocusedPaneId(result.newPaneId);
-                    }
-                  }}
-                  onClosePane={handleClosePane}
-                />
+                {(() => {
+                  const displayLayout = zoomedPaneId
+                    ? { Single: collectPanes(layout).find(p => p.id === zoomedPaneId) ?? collectPanes(layout)[0] }
+                    : layout;
+                  return (
+                    <PaneRenderer
+                      layout={displayLayout}
+                      workspaceId={state.activeSession ?? ''}
+                      focusedPaneId={focusedPaneId}
+                      onFocusPane={setFocusedPaneId}
+                      onLayoutChange={setLayout}
+                      onSplitPane={(paneId, direction) => {
+                        const result = splitPane(layout, paneId, direction);
+                        if (result) {
+                          setLayout(result.layout);
+                          setFocusedPaneId(result.newPaneId);
+                        }
+                      }}
+                      onClosePane={handleClosePane}
+                    />
+                  );
+                })()}
               </div>
             </div>
 
@@ -478,6 +492,8 @@ function AppContent() {
         onSplitH={() => { handleSplitPane('Horizontal'); setCommandPaletteOpen(false); }}
         onSplitV={() => { handleSplitPane('Vertical'); setCommandPaletteOpen(false); }}
         onAddPane={(kind, direction) => { handleSplitPane(direction, kind as PaneKind); setCommandPaletteOpen(false); }}
+        zoomedPaneId={zoomedPaneId}
+        onZoomPane={() => { setZoomedPaneId(prev => prev ? null : focusedPaneId); setCommandPaletteOpen(false); }}
       />
     </SendProvider>
   );

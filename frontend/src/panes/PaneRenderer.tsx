@@ -42,26 +42,38 @@ function PaneHeader({ kind, focused, paneIndex, canClose, onSplitH, onSplitV, on
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingLeft: 10,
+        paddingLeft: focused ? 7 : 10,
         paddingRight: 6,
         userSelect: 'none',
         backgroundColor: focused ? 'var(--bg-overlay)' : 'var(--bg-surface)',
         borderBottom: focused
           ? '2px solid var(--accent-primary)'
           : '1px solid var(--border-default)',
+        borderLeft: focused ? '3px solid var(--accent-primary)' : '3px solid transparent',
+        boxShadow: focused ? 'inset 0 -2px 0 var(--accent-primary)' : 'none',
         boxSizing: 'border-box',
       }}
     >
       <span
         style={{
           fontSize: 'var(--font-size-chrome, 11px)',
-          color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)',
           letterSpacing: '0.02em',
           textTransform: 'uppercase',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
         }}
       >
-        <span style={{ opacity: 0.5, marginRight: 4 }}>{paneIndex}</span>
-        <span>{PANE_LABELS[kind] ?? kind}</span>
+        <span style={{
+          color: focused ? 'var(--accent-primary, #4ecdc4)' : 'var(--text-muted, #888)',
+          fontWeight: focused ? 700 : 400,
+          fontSize: '10px',
+          minWidth: 12,
+          textAlign: 'center',
+        }}>{paneIndex}</span>
+        <span style={{ color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)' }}>
+          {PANE_LABELS[kind] ?? kind}
+        </span>
       </span>
 
       <div
@@ -343,6 +355,7 @@ function SplitContainer({ isHorizontal, initialRatio, first, second }: SplitCont
           if (!dragging.current) setSplitterState('idle');
         }}
         onMouseDown={handleMouseDown}
+        onDoubleClick={() => setRatio(0.5)}
       />
       <div style={{ flex: 1 - ratio, overflow: 'hidden', display: 'flex' }}>{second}</div>
     </div>
