@@ -1,6 +1,6 @@
-// PaneRenderer — recursively renders a PaneLayout tree (M2-02)
+// PaneRenderer — flat absolute-positioned rendering to prevent React remounts on layout changes
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
 import { isSingle, isSplit, collectPanes } from '../domain/pane/types';
@@ -143,6 +143,64 @@ function HeaderButton({ title, onClick, children }: HeaderButtonProps) {
   );
 }
 
+// --- Flat rect computation ---
+
+interface Rect { x: number; y: number; w: number; h: number }
+
+/**
+ * Recursively walk the layout tree and compute a normalized bounding rect
+ * (0–1) for every leaf pane. Because this is pure math over a data tree,
+ * it does NOT affect React component identity — panes keep their keys.
+ */
+function computePaneRects(
+  layout: PaneLayout,
+  rect: Rect = { x: 0, y: 0, w: 1, h: 1 },
+): Map<string, Rect> {
+  const result = new Map<string, Rect>();
+
+  if (isSingle(layout)) {
+    result.set(layout.Single.id, rect);
+    return result;
+  }
+
+  if (isSplit(layout)) {
+    const { direction, ratio, first, second } = layout.Split;
+
+    if (direction === 'Horizontal') {
+      for (const [id, r] of computePaneRects(first, {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w * ratio,
+        h: rect.h,
+      })) result.set(id, r);
+
+      for (const [id, r] of computePaneRects(second, {
+        x: rect.x + rect.w * ratio,
+        y: rect.y,
+        w: rect.w * (1 - ratio),
+        h: rect.h,
+      })) result.set(id, r);
+    } else {
+      // Vertical — top / bottom
+      for (const [id, r] of computePaneRects(first, {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w,
+        h: rect.h * ratio,
+      })) result.set(id, r);
+
+      for (const [id, r] of computePaneRects(second, {
+        x: rect.x,
+        y: rect.y + rect.h * ratio,
+        w: rect.w,
+        h: rect.h * (1 - ratio),
+      })) result.set(id, r);
+    }
+  }
+
+  return result;
+}
+
 // --- PaneRenderer ---
 
 interface PaneRendererProps {
@@ -154,11 +212,7 @@ interface PaneRendererProps {
   onLayoutChange?: (layout: PaneLayout) => void;
   onSplitPane?: (paneId: string, direction: 'Horizontal' | 'Vertical') => void;
   onClosePane?: (paneId: string) => void;
-  depth?: number;
-  _allPaneIds?: string[];
 }
-
-const SPLITTER_SIZE = 6;
 
 export function PaneRenderer({
   layout,
@@ -166,221 +220,112 @@ export function PaneRenderer({
   focusedPaneId,
   zoomedPaneId,
   onFocusPane,
-  onLayoutChange,
+  onLayoutChange: _onLayoutChange,
   onSplitPane,
   onClosePane,
-  depth = 0,
-  _allPaneIds,
 }: PaneRendererProps) {
-  // At root (depth 0), compute all pane IDs once; pass them down to children
-  const allPaneIds = useMemo(() => {
-    if (_allPaneIds) return _allPaneIds;
-    return collectPanes(layout).map(p => p.id);
-  }, [_allPaneIds, layout]);
-
-  if (isSingle(layout)) {
-    const pane = layout.Single;
-    const Component = getPane(pane.kind);
-    const focused = focusedPaneId === pane.id;
-    const paneIndex = allPaneIds.indexOf(pane.id) + 1;
-    const canClose = allPaneIds.length > 1;
-
-    const handleSplitH = () => onSplitPane?.(pane.id, 'Horizontal');
-    const handleSplitV = () => onSplitPane?.(pane.id, 'Vertical');
-    const handleClose = () => onClosePane?.(pane.id);
-
-    // When a different pane is zoomed, hide this one (but keep it mounted to preserve state)
-    const isHiddenByZoom = zoomedPaneId != null && zoomedPaneId !== pane.id;
-
-    return (
-      <div style={{
-        display: isHiddenByZoom ? 'none' : 'flex',
-        flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden',
-      }}>
-        <PaneHeader
-          kind={pane.kind}
-          focused={focused}
-          paneIndex={paneIndex}
-          canClose={canClose}
-          onSplitH={handleSplitH}
-          onSplitV={handleSplitV}
-          onClose={handleClose}
-        />
-        <div
-          style={{ flex: 1, overflow: 'hidden', display: 'flex' }}
-          onClick={() => onFocusPane(pane.id)}
-        >
-          {Component ? (
-            <Component pane={pane} workspaceId={workspaceId} focused={focused} />
-          ) : (
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--text-muted)',
-                fontFamily: 'monospace',
-                fontSize: 13,
-                backgroundColor: 'var(--bg-surface)',
-              }}
-            >
-              Pane: {pane.kind}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (isSplit(layout)) {
-    const { direction, ratio, first, second } = layout.Split;
-    const isHorizontal = direction === 'Horizontal';
-
-    return (
-      <SplitContainer
-        isHorizontal={isHorizontal}
-        initialRatio={ratio}
-        hideControls={zoomedPaneId != null}
-        firstHasZoomed={zoomedPaneId != null && layoutContainsPane(first, zoomedPaneId)}
-        secondHasZoomed={zoomedPaneId != null && layoutContainsPane(second, zoomedPaneId)}
-        first={
-          <PaneRenderer
-            layout={first}
-            workspaceId={workspaceId}
-            focusedPaneId={focusedPaneId}
-            zoomedPaneId={zoomedPaneId}
-            onFocusPane={onFocusPane}
-            onLayoutChange={onLayoutChange}
-            onSplitPane={onSplitPane}
-            onClosePane={onClosePane}
-            depth={depth + 1}
-            _allPaneIds={allPaneIds}
-          />
-        }
-        second={
-          <PaneRenderer
-            layout={second}
-            workspaceId={workspaceId}
-            focusedPaneId={focusedPaneId}
-            zoomedPaneId={zoomedPaneId}
-            onFocusPane={onFocusPane}
-            onLayoutChange={onLayoutChange}
-            onSplitPane={onSplitPane}
-            onClosePane={onClosePane}
-            depth={depth + 1}
-            _allPaneIds={allPaneIds}
-          />
-        }
-      />
-    );
-  }
-
-  return null;
-}
-
-// --- SplitContainer with drag-to-resize (M2-03) ---
-
-function layoutContainsPane(layout: PaneLayout, paneId: string): boolean {
-  if (isSingle(layout)) return layout.Single.id === paneId;
-  if (isSplit(layout)) return layoutContainsPane(layout.Split.first, paneId) || layoutContainsPane(layout.Split.second, paneId);
-  return false;
-}
-
-interface SplitContainerProps {
-  isHorizontal: boolean;
-  initialRatio: number;
-  first: React.ReactNode;
-  second: React.ReactNode;
-  hideControls?: boolean;
-  firstHasZoomed?: boolean;
-  secondHasZoomed?: boolean;
-}
-
-function SplitContainer({ isHorizontal, initialRatio, first, second, hideControls, firstHasZoomed, secondHasZoomed }: SplitContainerProps) {
-  const [ratio, setRatio] = useState(initialRatio);
-  const [splitterState, setSplitterState] = useState<'idle' | 'hover' | 'dragging'>('idle');
-
-  // Sync ratio when a layout is restored from localStorage (initialRatio prop changes)
-  useEffect(() => {
-    setRatio(initialRatio);
-  }, [initialRatio]);
   const containerRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      dragging.current = true;
-      setSplitterState('dragging');
-      document.body.style.userSelect = 'none';
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect;
+      setContainerSize({ width, height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
-      const onMouseMove = (moveEvt: MouseEvent) => {
-        if (!dragging.current || !containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        let newRatio: number;
-        if (isHorizontal) {
-          newRatio = (moveEvt.clientX - rect.left) / rect.width;
-        } else {
-          newRatio = (moveEvt.clientY - rect.top) / rect.height;
-        }
-        // Clamp between 10% and 90%
-        setRatio(Math.max(0.1, Math.min(0.9, newRatio)));
-      };
+  // Suppress unused-var warning; containerSize is intentionally observed so
+  // that pane children that depend on container dimensions re-render correctly.
+  void containerSize;
 
-      const onMouseUp = () => {
-        dragging.current = false;
-        setSplitterState('idle');
-        document.body.style.userSelect = '';
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', onMouseUp);
-      };
+  const allPanes = useMemo(() => collectPanes(layout), [layout]);
 
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-    },
-    [isHorizontal],
-  );
+  // Normalized rects for each pane id from the layout tree
+  const rects = useMemo(() => computePaneRects(layout), [layout]);
 
-  const splitterBg =
-    splitterState === 'dragging'
-      ? 'var(--accent-primary, #4ecdc4)'
-      : splitterState === 'hover'
-        ? 'rgba(78, 205, 196, 0.4)'
-        : 'var(--border-default, #333)';
+  // When a pane is zoomed give it the full rect; collapse others to zero-size
+  const displayRects = useMemo(() => {
+    if (!zoomedPaneId) return rects;
+    const zoomed = new Map<string, Rect>();
+    for (const [id] of rects) {
+      zoomed.set(
+        id,
+        id === zoomedPaneId
+          ? { x: 0, y: 0, w: 1, h: 1 }
+          : { x: 0, y: 0, w: 0, h: 0 },
+      );
+    }
+    return zoomed;
+  }, [rects, zoomedPaneId]);
 
   return (
     <div
       ref={containerRef}
-      style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: isHorizontal ? 'row' : 'column',
-        overflow: 'hidden',
-      }}
+      style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
     >
-      <div style={{ flex: hideControls ? (firstHasZoomed ? 1 : 0) : ratio, overflow: 'hidden', display: hideControls && !firstHasZoomed ? 'none' : 'flex' }}>{first}</div>
-      {!hideControls && (
-        <div
-          style={{
-            width: isHorizontal ? SPLITTER_SIZE : '100%',
-            height: isHorizontal ? '100%' : SPLITTER_SIZE,
-            backgroundColor: splitterBg,
-            cursor: isHorizontal ? 'col-resize' : 'row-resize',
-            flexShrink: 0,
-            transition: 'background-color 150ms',
-          }}
-          onMouseEnter={() => {
-            if (!dragging.current) setSplitterState('hover');
-          }}
-          onMouseLeave={() => {
-            if (!dragging.current) setSplitterState('idle');
-          }}
-          onMouseDown={handleMouseDown}
-          onDoubleClick={() => setRatio(0.5)}
-        />
-      )}
-      <div style={{ flex: hideControls ? (secondHasZoomed ? 1 : 0) : (1 - ratio), overflow: 'hidden', display: hideControls && !secondHasZoomed ? 'none' : 'flex' }}>{second}</div>
+      {allPanes.map((pane, index) => {
+        const rect = displayRects.get(pane.id);
+        if (!rect) return null;
+
+        const Component = getPane(pane.kind);
+        const focused = focusedPaneId === pane.id;
+        const hidden = rect.w === 0 || rect.h === 0;
+
+        return (
+          <div
+            key={pane.id}
+            style={{
+              position: 'absolute',
+              left: `${rect.x * 100}%`,
+              top: `${rect.y * 100}%`,
+              width: `${rect.w * 100}%`,
+              height: `${rect.h * 100}%`,
+              display: hidden ? 'none' : 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              boxSizing: 'border-box',
+              // 3 px border on right + bottom for visual separation between panes
+              borderRight: '3px solid var(--border-default, #333)',
+              borderBottom: '3px solid var(--border-default, #333)',
+            }}
+            onClick={() => onFocusPane(pane.id)}
+          >
+            <PaneHeader
+              kind={pane.kind}
+              focused={focused}
+              paneIndex={index + 1}
+              canClose={allPanes.length > 1}
+              onSplitH={() => onSplitPane?.(pane.id, 'Horizontal')}
+              onSplitV={() => onSplitPane?.(pane.id, 'Vertical')}
+              onClose={() => onClosePane?.(pane.id)}
+            />
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+              {Component ? (
+                <Component pane={pane} workspaceId={workspaceId} focused={focused} />
+              ) : (
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-muted)',
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    backgroundColor: 'var(--bg-surface)',
+                  }}
+                >
+                  Pane: {pane.kind}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
