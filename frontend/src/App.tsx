@@ -225,12 +225,44 @@ function AppContent() {
         dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
       }
       if (e.key === 'Escape') {
-        dispatch({ type: 'CLOSE_DIFF' });
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false);
+        } else {
+          dispatch({ type: 'CLOSE_DIFF' });
+        }
+        return;
+      }
+      // Alt+Arrow: navigate between panes
+      if (e.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+        e.preventDefault();
+        const panes = collectPanes(layout);
+        if (panes.length < 2) return;
+        const currentIdx = panes.findIndex(p => p.id === focusedPaneId);
+        let nextIdx: number;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+          nextIdx = (currentIdx + 1) % panes.length;
+        } else {
+          nextIdx = (currentIdx - 1 + panes.length) % panes.length;
+        }
+        setFocusedPaneId(panes[nextIdx].id);
+        return;
+      }
+      // Ctrl+Shift+\ : Split right, Ctrl+Shift+- : Split down
+      if (e.ctrlKey && e.shiftKey && e.key === '|') {
+        e.preventDefault();
+        handleSplitPane('Horizontal');
+        return;
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === '_') {
+        e.preventDefault();
+        handleSplitPane('Vertical');
+        return;
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [dispatch]);
+    // Use capture phase to intercept shortcuts before xterm.js consumes them
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+  }, [dispatch, commandPaletteOpen, layout, focusedPaneId, handleSplitPane]);
 
   return (
     <SendProvider value={send}>

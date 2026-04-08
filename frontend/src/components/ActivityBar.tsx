@@ -1,11 +1,11 @@
-import { FolderTree, GitCompareArrows, GitBranch } from 'lucide-react';
+import { FolderTree, FileDiff, GitBranch } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 
 type SidebarView = 'explorer' | 'changes' | 'git';
 
 const icons: { view: SidebarView; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
   { view: 'explorer', label: 'Explorer', Icon: FolderTree },
-  { view: 'changes', label: 'Changes', Icon: GitCompareArrows },
+  { view: 'changes', label: 'Changes', Icon: FileDiff },
   { view: 'git', label: 'Git', Icon: GitBranch },
 ];
 
