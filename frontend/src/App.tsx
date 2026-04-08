@@ -16,6 +16,9 @@ import { splitPane, closePane, collectPanes } from './domain/pane/types';
 import { LAYOUT_PRESETS } from './core/layoutPresets';
 import type { AppEvent } from './types/protocol.ts';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
+import { saveSession, getSession } from './state/sessionStore';
+import { getCurrentThemeId, applyTheme } from './styles/themes';
+import { WelcomeScreen } from './components/WelcomeScreen';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -35,17 +38,6 @@ const inputStyle: React.CSSProperties = {
   color: '#e0e0e0',
   border: '1px solid #444',
   borderRadius: 4,
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: '8px 16px',
-  backgroundColor: '#4ecdc4',
-  color: '#1a1a2e',
-  border: 'none',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontWeight: 'bold',
-  fontFamily: 'monospace',
 };
 
 function AppContent() {
@@ -86,10 +78,19 @@ function AppContent() {
   // Restore layout when a session becomes active (or reset to default)
   useEffect(() => {
     if (state.activeSession) {
-      const saved = loadWorkspaceLayout(state.activeSession);
-      if (saved) {
-        setLayout(saved.layout);
-        setFocusedPaneId(saved.focusedPaneId ?? collectPanes(saved.layout)[0]?.id ?? null);
+      // First try session-store (keyed by projectRoot) to restore cross-session preferences
+      const sessionSaved = projectRoot ? getSession(projectRoot) : null;
+      const workspaceSaved = loadWorkspaceLayout(state.activeSession);
+
+      if (sessionSaved) {
+        setLayout(sessionSaved.layout);
+        setFocusedPaneId(collectPanes(sessionSaved.layout)[0]?.id ?? null);
+        applyTheme(sessionSaved.theme);
+        dispatch({ type: 'SET_SIDEBAR_VIEW', view: sessionSaved.sidebarView });
+        if (sessionSaved.sidebarCollapsed) dispatch({ type: 'TOGGLE_SIDEBAR' });
+      } else if (workspaceSaved) {
+        setLayout(workspaceSaved.layout);
+        setFocusedPaneId(workspaceSaved.focusedPaneId ?? collectPanes(workspaceSaved.layout)[0]?.id ?? null);
       } else {
         // New session — reset to default single terminal pane
         const defaultLayout: PaneLayout = { Single: { id: 'terminal-0', kind: 'Terminal', resource_id: null } };
@@ -97,7 +98,22 @@ function AppContent() {
         setFocusedPaneId('terminal-0');
       }
     }
-  }, [state.activeSession]);
+  }, [state.activeSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist session preferences whenever layout/sidebar changes while a session is active
+  useEffect(() => {
+    if (state.activeSession && projectRoot) {
+      saveSession({
+        projectRoot,
+        name: projectRoot.split('/').filter(Boolean).pop() || projectRoot,
+        lastUsed: new Date().toISOString(),
+        layout,
+        theme: getCurrentThemeId(),
+        sidebarView: state.activeSidebarView,
+        sidebarCollapsed: state.sidebarCollapsed,
+      });
+    }
+  }, [state.activeSession, layout, projectRoot, state.activeSidebarView, state.sidebarCollapsed]);
 
   // Layout mutation handlers
   const handleSplitPane = useCallback((direction: SplitDirection, kind: PaneKind = 'Terminal') => {
@@ -215,20 +231,6 @@ function AppContent() {
     token: authToken,
     onEvent: handleEvent,
   });
-
-  const handleBrowse = async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const selected = await open({ directory: true, title: 'Select project root' });
-    if (typeof selected === 'string') {
-      setProjectRoot(selected);
-    }
-  };
-
-  const handleStartSession = () => {
-    if (projectRoot.trim()) {
-      send({ type: 'StartSession', project_root: projectRoot.trim() });
-    }
-  };
 
   // Auto-start session after reconnect (refresh) if we have a saved project root
   const autoStartedRef = useRef(false);
@@ -384,23 +386,22 @@ function AppContent() {
 
         {/* Session setup (show when connected but no session) */}
         {status === 'connected' && !state.activeSession && (
-          <div style={{ padding: 16, display: 'flex', gap: 8, maxWidth: 600 }}>
-            <input
-              value={projectRoot}
-              onChange={(e) => setProjectRoot(e.target.value)}
-              placeholder="Project root path (e.g. /home/user/myproject)"
-              style={{ ...inputStyle, flex: 1 }}
-              onKeyDown={(e) => e.key === 'Enter' && handleStartSession()}
-            />
-            {tauriMode && (
-              <button onClick={handleBrowse} style={buttonStyle}>
-                Browse
-              </button>
-            )}
-            <button onClick={handleStartSession} style={buttonStyle}>
-              Start Session
-            </button>
-          </div>
+          <WelcomeScreen
+            tauriMode={tauriMode ?? false}
+            onBrowse={tauriMode ? async () => {
+              const { open } = await import('@tauri-apps/plugin-dialog');
+              const selected = await open({ directory: true, title: 'Select project root' });
+              return typeof selected === 'string' ? selected : null;
+            } : undefined}
+            onOpenSession={(root) => {
+              setProjectRoot(root);
+              send({ type: 'StartSession', project_root: root });
+            }}
+            onNewSession={(root) => {
+              setProjectRoot(root);
+              send({ type: 'StartSession', project_root: root });
+            }}
+          />
         )}
 
         {/* Main layout (when session is active) */}
