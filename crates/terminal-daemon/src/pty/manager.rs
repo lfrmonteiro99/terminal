@@ -14,6 +14,7 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::info;
 use uuid::Uuid;
+use crate::safety::broadcast_event;
 
 /// A live PTY session.
 pub struct PtySession {
@@ -197,9 +198,7 @@ impl PtyManager {
             let mut child = child;
             let _ = child.wait().await;
             sessions_for_watcher.lock().await.remove(&session_id);
-            let json = serde_json::to_string(&AppEvent::TerminalSessionClosed { session_id })
-                .expect("serialization");
-            let _ = event_tx_for_watcher.send(json);
+            broadcast_event(&event_tx_for_watcher, &AppEvent::TerminalSessionClosed { session_id });
             info!("PTY session {} exited", session_id);
         });
 
@@ -222,8 +221,7 @@ impl PtyManager {
             is_ssh,
             ssh_host: ssh_host_label,
         };
-        let json = serde_json::to_string(&created_event).expect("serialization");
-        let _ = self.event_tx.send(json);
+        broadcast_event(&self.event_tx, &created_event);
 
         info!("PTY session {} created for workspace {}", session_id, workspace_id);
         Ok(session_id)
@@ -257,8 +255,7 @@ impl PtyManager {
                     // Real PTY line discipline handles \n → \r\n; no manual replacement needed.
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
                     let event = AppEvent::TerminalOutput { session_id, data };
-                    let json = serde_json::to_string(&event).expect("serialization");
-                    let _ = event_tx.send(json);
+                    broadcast_event(&event_tx, &event);
                 }
             }
         }
@@ -299,12 +296,12 @@ impl PtyManager {
     pub async fn close_session(&self, session_id: Uuid) -> Result<(), String> {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.remove(&session_id) {
+            // Signal the stdin_writer task to exit; it will drop its tokio::fs::File,
+            // closing the write half of the master PTY and sending EOF to the shell.
+            // The stdout_reader task will exit when it sees EOF/error.
+            // We do NOT call nix::libc::close() here — the Tokio Files own the fds.
             let _ = session.close_tx.send(()).await;
-            // Closing the master fd signals EOF to the shell, causing it to exit.
-            unsafe { nix::libc::close(session.master_raw_fd) };
-            let json = serde_json::to_string(&AppEvent::TerminalSessionClosed { session_id })
-                .expect("serialization");
-            let _ = self.event_tx.send(json);
+            broadcast_event(&self.event_tx, &AppEvent::TerminalSessionClosed { session_id });
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -326,5 +323,74 @@ impl PtyManager {
                 last_active_at: s.meta.last_active_at,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn close_nonexistent_session_returns_error() {
+        let (tx, _) = broadcast::channel::<String>(16);
+        let manager = PtyManager::new(tx);
+        let fake_id = Uuid::new_v4();
+        let result = manager.close_session(fake_id).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn write_input_nonexistent_session_returns_error() {
+        let (tx, _) = broadcast::channel::<String>(16);
+        let manager = PtyManager::new(tx);
+        let fake_id = Uuid::new_v4();
+        let result = manager.write_input(fake_id, "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_sessions_empty_workspace() {
+        let (tx, _) = broadcast::channel::<String>(16);
+        let manager = PtyManager::new(tx);
+        let sessions = manager.list_sessions(Uuid::new_v4()).await;
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_session_emits_event() {
+        let (tx, mut rx) = broadcast::channel::<String>(16);
+        let manager = PtyManager::new(tx);
+        let workspace_id = Uuid::new_v4();
+
+        let result = manager.create_session(
+            workspace_id,
+            "pane-1".to_string(),
+            Some("/bin/sh".to_string()),
+            Some(PathBuf::from("/tmp")),
+            None,
+            None,
+        ).await;
+
+        assert!(result.is_ok(), "create_session failed: {:?}", result.err());
+        let session_id = result.unwrap();
+
+        // Drain events until we find TerminalSessionCreated
+        let mut found = false;
+        for _ in 0..10 {
+            if let Ok(msg) = rx.try_recv() {
+                if msg.contains("TerminalSessionCreated") {
+                    found = true;
+                    assert!(msg.contains(&session_id.to_string()));
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(found, "Expected TerminalSessionCreated event");
+
+        // Cleanup
+        let _ = manager.close_session(session_id).await;
     }
 }
