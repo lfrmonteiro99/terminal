@@ -2,6 +2,7 @@
 
 use crate::claude_runner::ClaudeRunner;
 use crate::persistence::Persistence;
+use crate::safety::broadcast_event;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,18 +61,21 @@ impl DaemonContext {
 
     /// Broadcast an event to all connected clients (global channel).
     pub fn broadcast(&self, event: &AppEvent) {
-        let json = serde_json::to_string(event).expect("event serialization never fails");
-        let _ = self.event_tx.send(json);
+        broadcast_event(&self.event_tx, event);
     }
 
     /// Broadcast an event to a specific workspace channel, falling back to global.
     pub async fn broadcast_workspace(&self, workspace_id: Uuid, event: &AppEvent) {
-        let json = serde_json::to_string(event).expect("event serialization never fails");
-        let channels = self.workspace_channels.lock().await;
-        if let Some(tx) = channels.get(&workspace_id) {
-            let _ = tx.send(json);
-        } else {
-            let _ = self.event_tx.send(json);
+        match serde_json::to_string(event) {
+            Ok(json) => {
+                let channels = self.workspace_channels.lock().await;
+                if let Some(tx) = channels.get(&workspace_id) {
+                    let _ = tx.send(json);
+                } else {
+                    let _ = self.event_tx.send(json);
+                }
+            }
+            Err(e) => tracing::error!("Failed to serialize workspace event: {}", e),
         }
     }
 
