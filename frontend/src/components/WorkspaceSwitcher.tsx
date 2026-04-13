@@ -6,20 +6,44 @@ import { useSend } from '../context/SendContext';
 import { listModes } from '../modes/registry';
 import type { WorkspaceMode } from '../domain/workspace/types';
 
+// Legacy extension of app state — WorkspaceSwitcher predates a formal
+// workspace-state contract. Cast narrowly rather than via `any`.
+interface LegacyWorkspace {
+  id: string;
+  name: string;
+  mode: WorkspaceMode;
+}
+interface LegacySessionLike {
+  project_root?: string;
+}
+interface LegacyStateShape {
+  workspaces?: Map<string, LegacyWorkspace> | { values?: () => Iterable<LegacyWorkspace> };
+  sessions?: Map<string, LegacySessionLike> | { values?: () => Iterable<LegacySessionLike> };
+  activeWorkspaceId?: string;
+}
+
+function valuesOf<T>(source: unknown): T[] {
+  if (!source || typeof source !== 'object') return [];
+  const maybeValues = (source as { values?: () => Iterable<T> }).values;
+  if (typeof maybeValues !== 'function') return [];
+  return Array.from(maybeValues.call(source));
+}
+
 export function WorkspaceSwitcher() {
   const state = useAppState();
+  const legacy = state as unknown as LegacyStateShape;
   const send = useSend();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newMode, setNewMode] = useState<WorkspaceMode>('AiSession');
 
   const modes = listModes();
-  const workspaces = Array.from((state as any).workspaces?.values?.() ?? []);
+  const workspaces = valuesOf<LegacyWorkspace>(legacy.workspaces);
 
   const handleCreate = () => {
     if (!newName.trim() || !state.activeSession) return;
-    const sessions = Array.from((state as any).sessions?.values?.() ?? []);
-    const session = sessions[0] as any;
+    const sessions = valuesOf<LegacySessionLike>(legacy.sessions);
+    const session = sessions[0];
     if (!session) return;
     send({
       type: 'CreateWorkspace',
@@ -52,7 +76,7 @@ export function WorkspaceSwitcher() {
         WORKSPACES
       </div>
 
-      {(workspaces as any[]).map((ws: any) => (
+      {workspaces.map((ws) => (
         <div
           key={ws.id}
           onClick={() => handleActivate(ws.id)}
@@ -60,8 +84,8 @@ export function WorkspaceSwitcher() {
             padding: '6px 8px',
             borderRadius: 4,
             cursor: 'pointer',
-            backgroundColor: (state as any).activeWorkspaceId === ws.id ? '#1e2a3e' : 'transparent',
-            border: (state as any).activeWorkspaceId === ws.id ? '1px solid #4ecdc4' : '1px solid transparent',
+            backgroundColor: legacy.activeWorkspaceId === ws.id ? '#1e2a3e' : 'transparent',
+            border: legacy.activeWorkspaceId === ws.id ? '1px solid #4ecdc4' : '1px solid transparent',
             fontSize: 12,
             fontFamily: 'monospace',
             color: '#e0e0e0',

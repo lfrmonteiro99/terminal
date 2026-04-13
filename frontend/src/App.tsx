@@ -249,7 +249,7 @@ function AppContent() {
     };
     window.addEventListener('open-file-viewer', handler);
     return () => window.removeEventListener('open-file-viewer', handler);
-  }, [focusedPaneId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [focusedPaneId]);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -314,7 +314,7 @@ function AppContent() {
 
     const detectAndConnect = async () => {
       // Check for Tauri runtime (injected by the native shell, not present in browsers)
-      if (!(window as any).__TAURI_INTERNALS__) {
+      if (!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
         console.log('[Browser] Tauri runtime not detected, using standalone mode');
         setDaemonUrl('ws://127.0.0.1:3000/ws');
         setTauriMode(false);
@@ -510,6 +510,8 @@ function AppContent() {
     // Use capture phase to intercept shortcuts before xterm.js consumes them
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    // `send` is stable via ref but not literally in deps — exhaustive-deps noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, commandPaletteOpen, cheatsheetOpen, layout, focusedPaneId, handleSplitPane]);
 
   return (

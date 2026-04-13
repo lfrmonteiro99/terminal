@@ -246,7 +246,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
+    [send, dispatch, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
   );
 
   // Determine effective mode: if query starts with '!' override to quick-commands,

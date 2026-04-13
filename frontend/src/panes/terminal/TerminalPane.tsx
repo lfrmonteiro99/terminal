@@ -48,6 +48,15 @@ function installGlobalListener() {
 // Global map: paneId → sessionId. Survives React remounts (e.g., after pane split).
 const paneSessionMap = new Map<string, string>();
 
+/** Minimal subset of xterm.js Terminal we use here. */
+interface XTermHandle {
+  write: (data: string) => void;
+  dispose: () => void;
+  clear?: () => void;
+  focus?: () => void;
+  options?: { theme?: unknown };
+}
+
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
   const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
@@ -72,7 +81,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   const [sessionState, setSessionState] = useState<SessionState>(existingSessionId ? 'active' : 'idle');
   const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
+  const xtermRef = useRef<XTermHandle | null>(null);
 
   // Ref to hold current sessionId for use inside closures that can't track state
   const sessionIdRef = useRef<string | null>(null);
@@ -104,9 +113,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
 
     const initXterm = async () => {
       try {
-        // @ts-ignore — xterm is a peer dep loaded at runtime
         const { Terminal } = await import('xterm');
-        // @ts-ignore
         const { FitAddon } = await import('@xterm/addon-fit');
         if (disposed || !termRef.current) return;
 
@@ -170,7 +177,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Update xterm theme when CSS variables change (theme switch)
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const term = xtermRef.current as any;
+      const term = xtermRef.current;
       if (term?.options) {
         term.options.theme = getTermTheme();
       }
@@ -182,7 +189,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Focus xterm when this pane becomes focused (for keyboard navigation)
   useEffect(() => {
     if (focused && xtermRef.current) {
-      (xtermRef.current as any).focus?.();
+      xtermRef.current.focus?.();
     }
   }, [focused]);
 
@@ -217,7 +224,9 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     if (sshConfig) {
       cmd.ssh = sshConfig;
     }
-    send(cmd as any);
+    // cmd is structurally an AppCommand for CreateTerminalSession — the
+    // optional `ssh` field isn't on every variant, hence the unknown cast.
+    send(cmd as unknown as Parameters<typeof send>[0]);
     waitForSession(workspaceId).then((sid) => {
       paneSessionMap.set(pane.id, sid);
       setSessionId(sid);
@@ -242,12 +251,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         // Detect a shell prompt return after a git command.
         // The git pattern must appear as a command (after a prompt character),
         // not merely in output text — we check for a prompt prefix before "git".
-        const gitCmdPattern = /(?:^|[\$%>❯]\s+)git\s+(?:add|commit|checkout|switch|merge|rebase|stash|pull|push|reset|revert|cherry-pick|branch|restore|rm|mv|tag)\b/m;
+        const gitCmdPattern = /(?:^|[$%>❯]\s+)git\s+(?:add|commit|checkout|switch|merge|rebase|stash|pull|push|reset|revert|cherry-pick|branch|restore|rm|mv|tag)\b/m;
         // A prompt appearing at the end of the latest chunk signals command completion
-        const promptReturnPattern = /[\$%>❯]\s*$/;
+        const promptReturnPattern = /[$%>❯]\s*$/;
 
         if (
           gitCmdPattern.test(recentOutputRef.current) &&
+          // eslint-disable-next-line no-control-regex
           promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())
         ) {
           if (gitRefreshTimerRef.current) clearTimeout(gitRefreshTimerRef.current);
@@ -258,6 +268,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         }
 
         // Notify user when prompt returns in an unfocused pane
+        // eslint-disable-next-line no-control-regex
         if (!focusedRef.current && promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())) {
           const notificationsEnabled = localStorage.getItem('terminal:notifications') !== 'false';
           if (notificationsEnabled) {
@@ -278,6 +289,8 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     };
     window.addEventListener('terminal-event', handler);
     return () => window.removeEventListener('terminal-event', handler);
+    // pane.id and pane.label are stable per component instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // Listen for quick-command run events — only the focused pane handles them
@@ -298,7 +311,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   useEffect(() => {
     if (sessionId && xtermLoaded) {
       const timer = setTimeout(() => {
-        const term = xtermRef.current as any;
+        const term = xtermRef.current;
         if (term) {
           // Clear xterm screen
           if (term.clear) term.clear();
