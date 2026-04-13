@@ -82,8 +82,19 @@ export function StatusBar() {
           onClick={() => window.dispatchEvent(new CustomEvent('focus-pane-kind', { detail: 'AiRun' }))}
           title="Focus AI Run pane"
         >
-          <span style={{ color: 'var(--accent-warn)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span>&#9679;</span>
+          <span style={{ color: 'var(--accent-warn)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-block',
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: 'var(--accent-warn)',
+                animation: 'soft-pulse 1.2s ease-in-out infinite',
+                boxShadow: '0 0 8px rgba(var(--accent-warn-rgb), 0.6)',
+              }}
+            />
             AI running
           </span>
         </StatusBarItem>
@@ -94,8 +105,11 @@ export function StatusBar() {
         title={isDisconnected ? 'Click to reconnect' : state.connection.status}
       >
         <span style={{
-          width: 6, height: 6, borderRadius: '50%',
+          width: 7, height: 7, borderRadius: '50%',
           backgroundColor: state.connection.status === 'connected' ? 'var(--accent-primary)' : 'var(--accent-error)',
+          boxShadow: state.connection.status === 'connected'
+            ? '0 0 6px rgba(var(--accent-primary-rgb), 0.7)'
+            : 'none',
         }} />
         {state.connection.status}
       </StatusBarItem>

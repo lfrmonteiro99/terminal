@@ -8,8 +8,27 @@ export interface Theme {
 
 export const themes: Theme[] = [
   {
+    id: 'terminal-engine',
+    name: 'Terminal Engine (signature)',
+    colors: {
+      '--bg-base': '#0c0e17',
+      '--bg-surface': '#141624',
+      '--bg-raised': '#1a1d2e',
+      '--bg-overlay': '#232738',
+      '--border-default': '#2a2d3d',
+      '--border-focus': '#5fe3d9',
+      '--text-primary': '#eaecf2',
+      '--text-secondary': '#9ca0b5',
+      '--text-muted': '#616682',
+      '--accent-primary': '#5fe3d9',
+      '--accent-warn': '#ecb04a',
+      '--accent-error': '#ec6a6a',
+      '--accent-info': '#8a97f8',
+    },
+  },
+  {
     id: 'midnight',
-    name: 'Midnight (default)',
+    name: 'Midnight',
     colors: {
       '--bg-base': '#0f1119',
       '--bg-surface': '#161822',
@@ -202,6 +221,24 @@ export const themes: Theme[] = [
 
 const THEME_KEY = 'terminal:theme';
 
+/** Convert "#rrggbb" → "r, g, b" string, usable inside rgba(var(--x), a). */
+function hexToRgbTriplet(hex: string): string {
+  const normalized = hex.trim().replace(/^#/, '');
+  if (normalized.length !== 6) return '78, 205, 196'; // fallback: default teal
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  if ([r, g, b].some(Number.isNaN)) return '78, 205, 196';
+  return `${r}, ${g}, ${b}`;
+}
+
+const RGB_DERIVED = [
+  ['--accent-primary', '--accent-primary-rgb'],
+  ['--accent-warn', '--accent-warn-rgb'],
+  ['--accent-error', '--accent-error-rgb'],
+  ['--accent-info', '--accent-info-rgb'],
+] as const;
+
 export function applyTheme(themeId: string): void {
   const theme = themes.find(t => t.id === themeId);
   if (!theme) return;
@@ -209,8 +246,15 @@ export function applyTheme(themeId: string): void {
   for (const [prop, value] of Object.entries(theme.colors)) {
     root.style.setProperty(prop, value);
   }
+  // Re-derive RGB triplets so glow tokens auto-retint per theme.
+  for (const [hexVar, rgbVar] of RGB_DERIVED) {
+    const hex = theme.colors[hexVar];
+    if (hex) root.style.setProperty(rgbVar, hexToRgbTriplet(hex));
+  }
   localStorage.setItem(THEME_KEY, themeId);
 }
+
+const DEFAULT_THEME_ID = 'terminal-engine';
 
 export function loadSavedTheme(): string {
   const saved = localStorage.getItem(THEME_KEY);
@@ -218,9 +262,10 @@ export function loadSavedTheme(): string {
     applyTheme(saved);
     return saved;
   }
-  return 'midnight';
+  applyTheme(DEFAULT_THEME_ID);
+  return DEFAULT_THEME_ID;
 }
 
 export function getCurrentThemeId(): string {
-  return localStorage.getItem(THEME_KEY) ?? 'midnight';
+  return localStorage.getItem(THEME_KEY) ?? DEFAULT_THEME_ID;
 }

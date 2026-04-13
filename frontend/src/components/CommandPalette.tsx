@@ -246,7 +246,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
+    [send, dispatch, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
   );
 
   // Determine effective mode: if query starts with '!' override to quick-commands,
@@ -450,10 +450,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
 
   return (
     <div
+      className="anim-fade-in"
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
+        backgroundColor: 'rgba(0,0,0,0.42)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'center',
@@ -463,16 +466,19 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       onClick={onClose}
     >
       <div
+        className="anim-scale-in"
         style={{
-          backgroundColor: 'var(--bg-raised)',
-          border: '1px solid var(--border-default)',
+          backgroundColor: 'var(--bg-glass)',
+          backdropFilter: 'blur(18px)',
+          WebkitBackdropFilter: 'blur(18px)',
+          border: '1px solid var(--glass-border)',
           borderRadius: 12,
           width: 560,
           maxHeight: '60vh',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
+          boxShadow: 'var(--shadow-overlay), var(--glow-accent)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -495,13 +501,15 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
           onKeyDown={handleKeyDown}
           placeholder={placeholderText}
           style={{
-            padding: '12px 16px',
-            backgroundColor: 'var(--bg-surface)',
+            padding: '14px 18px',
+            backgroundColor: 'transparent',
             border: 'none',
-            borderBottom: '1px solid var(--border-default)',
+            borderBottom: '1px solid var(--glass-border)',
             color: 'var(--text-primary)',
-            fontSize: 16,
-            fontFamily: 'monospace',
+            fontSize: 15,
+            fontFamily: 'var(--font-display)',
+            fontWeight: 400,
+            letterSpacing: '0.01em',
             outline: 'none',
           }}
         />

@@ -1,0 +1,126 @@
+/* Motion language for Terminal Engine.
+ * Principle: responsive spring — fast in, ease-out heavy, GPU-only properties.
+ * All keyframes respect `prefers-reduced-motion`.
+ */
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes glow-pulse {
+    0%, 100% {
+      box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.10);
+      opacity: 0.85;
+    }
+    50% {
+      box-shadow: 0 0 22px rgba(var(--accent-primary-rgb), 0.28);
+      opacity: 1;
+    }
+  }
+
+  @keyframes soft-pulse {
+    0%, 100% { opacity: 0.65; }
+    50%      { opacity: 1; }
+  }
+
+  @keyframes check-pop {
+    0%   { transform: scale(0); }
+    60%  { transform: scale(1.2); }
+    100% { transform: scale(1); }
+  }
+
+  @keyframes slide-down {
+    from { opacity: 0; max-height: 0; }
+    to   { opacity: 1; max-height: 400px; }
+  }
+
+  @keyframes caret-blink {
+    0%, 55%  { opacity: 1; }
+    60%, 100% { opacity: 0.25; }
+  }
+
+  @keyframes sparkle-burst {
+    0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+    100% { opacity: 0; transform: translate(var(--dx, 20px), var(--dy, -14px)) scale(0.4); }
+  }
+
+  @keyframes chevron-nudge {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(4px); }
+  }
+
+  @keyframes shimmer {
+    0%   { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }
+
+  /* Reusable helpers */
+  .anim-fade-in-up {
+    animation: fade-in-up 180ms var(--ease-out-expo) both;
+  }
+  .anim-fade-in {
+    animation: fade-in 160ms var(--ease-out-soft) both;
+  }
+  .anim-scale-in {
+    animation: scale-in 200ms var(--ease-out-back) both;
+  }
+  .anim-glow-pulse {
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+  .anim-soft-pulse {
+    animation: soft-pulse 1.4s ease-in-out infinite;
+  }
+  .anim-check-pop {
+    animation: check-pop 260ms var(--ease-out-back) both;
+  }
+  .anim-chevron-nudge {
+    animation: chevron-nudge 1.6s ease-in-out infinite;
+  }
+  .anim-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--bg-raised) 0%,
+      var(--bg-overlay) 50%,
+      var(--bg-raised) 100%
+    );
+    background-size: 200px 100%;
+    animation: shimmer 1.4s linear infinite;
+  }
+
+  /* Staggered entrance (set --i on the element) */
+  .stagger-in {
+    animation: fade-in-up 220ms var(--ease-out-expo) both;
+    animation-delay: calc(var(--i, 0) * 40ms);
+  }
+}
+
+/* Reduced-motion fallback: no movement, just visible. */
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade-in-up,
+  .anim-fade-in,
+  .anim-scale-in,
+  .stagger-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .anim-glow-pulse,
+  .anim-soft-pulse,
+  .anim-check-pop,
+  .anim-chevron-nudge,
+  .anim-shimmer {
+    animation: none;
+  }
+}

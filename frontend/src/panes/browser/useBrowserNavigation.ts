@@ -28,7 +28,7 @@ export function useBrowserNavigation() {
    */
   const openRemoteUrl = useCallback((remoteUrl: string) => {
     // Convert git remote URLs (ssh/git protocol) to HTTPS for browser
-    let webUrl = remoteUrl
+    const webUrl = remoteUrl
       .replace(/^git@github\.com:/, 'https://github.com/')
       .replace(/^git@gitlab\.com:/, 'https://gitlab.com/')
       .replace(/\.git$/, '');

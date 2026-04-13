@@ -48,6 +48,15 @@ function installGlobalListener() {
 // Global map: paneId → sessionId. Survives React remounts (e.g., after pane split).
 const paneSessionMap = new Map<string, string>();
 
+/** Minimal subset of xterm.js Terminal we use here. */
+interface XTermHandle {
+  write: (data: string) => void;
+  dispose: () => void;
+  clear?: () => void;
+  focus?: () => void;
+  options?: { theme?: unknown };
+}
+
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
   const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
@@ -72,7 +81,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   const [sessionState, setSessionState] = useState<SessionState>(existingSessionId ? 'active' : 'idle');
   const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
+  const xtermRef = useRef<XTermHandle | null>(null);
 
   // Ref to hold current sessionId for use inside closures that can't track state
   const sessionIdRef = useRef<string | null>(null);
@@ -104,9 +113,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
 
     const initXterm = async () => {
       try {
-        // @ts-ignore — xterm is a peer dep loaded at runtime
         const { Terminal } = await import('xterm');
-        // @ts-ignore
         const { FitAddon } = await import('@xterm/addon-fit');
         if (disposed || !termRef.current) return;
 
@@ -170,7 +177,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Update xterm theme when CSS variables change (theme switch)
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const term = xtermRef.current as any;
+      const term = xtermRef.current;
       if (term?.options) {
         term.options.theme = getTermTheme();
       }
@@ -182,7 +189,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Focus xterm when this pane becomes focused (for keyboard navigation)
   useEffect(() => {
     if (focused && xtermRef.current) {
-      (xtermRef.current as any).focus?.();
+      xtermRef.current.focus?.();
     }
   }, [focused]);
 
@@ -217,7 +224,9 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     if (sshConfig) {
       cmd.ssh = sshConfig;
     }
-    send(cmd as any);
+    // cmd is structurally an AppCommand for CreateTerminalSession — the
+    // optional `ssh` field isn't on every variant, hence the unknown cast.
+    send(cmd as unknown as Parameters<typeof send>[0]);
     waitForSession(workspaceId).then((sid) => {
       paneSessionMap.set(pane.id, sid);
       setSessionId(sid);
@@ -242,12 +251,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         // Detect a shell prompt return after a git command.
         // The git pattern must appear as a command (after a prompt character),
         // not merely in output text — we check for a prompt prefix before "git".
-        const gitCmdPattern = /(?:^|[\$%>❯]\s+)git\s+(?:add|commit|checkout|switch|merge|rebase|stash|pull|push|reset|revert|cherry-pick|branch|restore|rm|mv|tag)\b/m;
+        const gitCmdPattern = /(?:^|[$%>❯]\s+)git\s+(?:add|commit|checkout|switch|merge|rebase|stash|pull|push|reset|revert|cherry-pick|branch|restore|rm|mv|tag)\b/m;
         // A prompt appearing at the end of the latest chunk signals command completion
-        const promptReturnPattern = /[\$%>❯]\s*$/;
+        const promptReturnPattern = /[$%>❯]\s*$/;
 
         if (
           gitCmdPattern.test(recentOutputRef.current) &&
+          // eslint-disable-next-line no-control-regex
           promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())
         ) {
           if (gitRefreshTimerRef.current) clearTimeout(gitRefreshTimerRef.current);
@@ -258,6 +268,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         }
 
         // Notify user when prompt returns in an unfocused pane
+        // eslint-disable-next-line no-control-regex
         if (!focusedRef.current && promptReturnPattern.test(event.data.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').trimEnd())) {
           const notificationsEnabled = localStorage.getItem('terminal:notifications') !== 'false';
           if (notificationsEnabled) {
@@ -278,6 +289,8 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     };
     window.addEventListener('terminal-event', handler);
     return () => window.removeEventListener('terminal-event', handler);
+    // pane.id and pane.label are stable per component instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // Listen for quick-command run events — only the focused pane handles them
@@ -298,18 +311,31 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   useEffect(() => {
     if (sessionId && xtermLoaded) {
       const timer = setTimeout(() => {
-        const term = xtermRef.current as any;
+        const term = xtermRef.current;
         if (term) {
           // Clear xterm screen
           if (term.clear) term.clear();
           else if (term.write) term.write('\x1b[2J\x1b[H');
+          // Show a small teal banner above the first prompt — only for local shells.
+          // Suppressed for SSH to avoid clobbering the remote MOTD. Respects opt-out.
+          const bannerEnabled = localStorage.getItem('terminal:banner') !== 'false';
+          if (bannerEnabled && !sshConfig && term.write) {
+            // ANSI: 38;2;R;G;B sets 24-bit fg color. Teal = 78,205,196.
+            const teal = '\x1b[38;2;78;205;196m';
+            const dim = '\x1b[38;2;139;143;163m';
+            const reset = '\x1b[0m';
+            const banner =
+              `${teal} ▸ Terminal Engine${reset}${dim}  ready${reset}\r\n` +
+              `${dim} ⌘K commands · ⌘/ shortcuts${reset}\r\n\r\n`;
+            term.write(banner);
+          }
           // Send Enter to PTY to trigger a fresh prompt
           sendRef.current({ type: 'WriteTerminalInput', session_id: sessionId, data: '\n' });
         }
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [sessionId, xtermLoaded]);
+  }, [sessionId, xtermLoaded, sshConfig]);
 
   const handleReconnect = () => {
     paneSessionMap.delete(pane.id);
@@ -333,20 +359,31 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             zIndex: 10,
           }}
         >
-          <span style={{ color: 'var(--accent-error)', fontFamily: 'monospace', fontSize: 14 }}>
-            Session lost
+          <span
+            style={{
+              color: 'var(--accent-error)',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 600,
+              fontSize: 14,
+              letterSpacing: '0.01em',
+            }}
+          >
+            session lost
           </span>
           <button
             onClick={handleReconnect}
             style={{
-              padding: '8px 16px',
+              padding: '8px 18px',
               backgroundColor: 'var(--accent-primary)',
-              color: 'var(--bg-surface)',
+              color: 'var(--bg-base)',
               border: 'none',
-              borderRadius: 4,
+              borderRadius: 5,
               cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontWeight: 'bold',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 12,
+              letterSpacing: '0.02em',
+              boxShadow: 'var(--glow-accent)',
             }}
           >
             Reconnect
@@ -360,16 +397,32 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           style={{
             flex: 1,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            gap: 10,
             color: 'var(--text-muted)',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-display)',
             fontSize: 13,
+            letterSpacing: '0.01em',
           }}
         >
-          {sessionState === 'creating'
-            ? (sshConfig ? `Connecting to ${sshConfig.username}@${sshConfig.host}...` : 'Starting terminal...')
-            : 'Terminal'}
+          <span
+            aria-hidden="true"
+            style={{
+              display: 'inline-block',
+              width: 8,
+              height: 16,
+              background: 'var(--accent-primary)',
+              borderRadius: 1,
+              animation: 'glow-pulse 1.4s ease-in-out infinite',
+            }}
+          />
+          <span>
+            {sessionState === 'creating'
+              ? (sshConfig ? `connecting to ${sshConfig.username}@${sshConfig.host}...` : 'starting terminal...')
+              : 'terminal'}
+          </span>
         </div>
       )}
     </div>
