@@ -25,15 +25,20 @@ export function ActivityBar({ onLayoutPreset }: ActivityBarProps) {
   const active = state.activeSidebarView;
 
   const iconStyle = (isActive: boolean): React.CSSProperties => ({
-    width: 36,
-    height: 36,
+    width: 32,
+    height: 32,
+    margin: '2px 4px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    borderLeft: isActive ? '2px solid var(--accent-primary)' : '2px solid transparent',
-    color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
-    transition: 'color 120ms ease',
+    borderRadius: 6,
+    color: isActive ? 'var(--accent-primary)' : 'var(--text-muted)',
+    backgroundColor: isActive ? 'var(--accent-primary-15)' : 'transparent',
+    boxShadow: isActive ? 'var(--glow-accent)' : 'none',
+    transition:
+      'color 180ms var(--ease-out-expo), background-color 200ms var(--ease-out-expo), ' +
+      'transform 180ms var(--ease-out-expo), box-shadow 200ms var(--ease-out-expo)',
   });
 
   return (
@@ -60,16 +65,28 @@ export function ActivityBar({ onLayoutPreset }: ActivityBarProps) {
               else dispatch({ type: 'SET_SIDEBAR_VIEW', view });
             }}
             style={iconStyle(isActive)}
-            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
-            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = 'var(--text-muted)'; }}
+            onMouseEnter={(e) => {
+              if (!isActive) {
+                e.currentTarget.style.color = 'var(--text-primary)';
+                e.currentTarget.style.backgroundColor = 'var(--accent-primary-08)';
+                e.currentTarget.style.transform = 'scale(1.06)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isActive) {
+                e.currentTarget.style.color = 'var(--text-muted)';
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.transform = 'scale(1)';
+              }
+            }}
           >
-            <Icon size={18} strokeWidth={1.5} />
+            <Icon size={18} strokeWidth={1.75} />
           </div>
         );
       })}
 
       {/* Separator */}
-      <div style={{ width: 20, height: 1, backgroundColor: 'var(--border-default)', margin: '4px 0' }} />
+      <div style={{ width: 20, height: 1, backgroundColor: 'var(--border-default)', margin: '6px 0' }} />
 
       {/* Layout preset icons */}
       {layoutIcons.map(({ preset, label, Icon }) => (
@@ -78,10 +95,18 @@ export function ActivityBar({ onLayoutPreset }: ActivityBarProps) {
           title={label}
           onClick={() => onLayoutPreset?.(preset)}
           style={iconStyle(false)}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--text-primary)';
+            e.currentTarget.style.backgroundColor = 'var(--accent-primary-08)';
+            e.currentTarget.style.transform = 'scale(1.06)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--text-muted)';
+            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.transform = 'scale(1)';
+          }}
         >
-          <Icon size={18} strokeWidth={1.5} />
+          <Icon size={18} strokeWidth={1.75} />
         </div>
       ))}
     </div>

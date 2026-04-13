@@ -151,9 +151,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
         {exitCode !== null && (
           <div>
             <div style={labelStyle}>Exit Code</div>
-            <div style={{ color: exitCode === 0 ? 'var(--accent-primary)' : 'var(--accent-error)', fontWeight: 'bold' }}>
-              {exitCode}
-            </div>
+            <ExitCodeBadge code={exitCode} />
           </div>
         )}
         <div>
@@ -313,6 +311,80 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
   );
 }
 
+/** Exit-code badge with a subtle sparkle burst on success. */
+function ExitCodeBadge({ code }: { code: number }) {
+  const success = code === 0;
+  const color = success ? 'var(--accent-primary)' : 'var(--accent-error)';
+  const glow = success ? 'var(--glow-accent)' : 'var(--glow-error)';
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minWidth: 28,
+          padding: '2px 10px',
+          borderRadius: 10,
+          border: `1px solid ${color}`,
+          color,
+          fontFamily: 'var(--font-mono)',
+          fontWeight: 700,
+          fontSize: 12,
+          boxShadow: glow,
+          background: success ? 'var(--accent-primary-08)' : 'rgba(var(--accent-error-rgb), 0.08)',
+        }}
+      >
+        {code}
+      </span>
+      {success && <Sparkles />}
+    </div>
+  );
+}
+
+/** 6 tiny dots bursting outward on mount. GPU-only. */
+function Sparkles() {
+  const dots = [
+    { dx: '22px', dy: '-14px', color: 'var(--accent-primary)', size: 3, delay: 0 },
+    { dx: '-18px', dy: '-18px', color: '#fff', size: 2, delay: 40 },
+    { dx: '24px', dy: '10px', color: 'var(--accent-warn)', size: 3, delay: 80 },
+    { dx: '-22px', dy: '8px', color: 'var(--accent-primary)', size: 2, delay: 60 },
+    { dx: '4px', dy: '-22px', color: '#fff', size: 2, delay: 110 },
+    { dx: '8px', dy: '20px', color: 'var(--accent-primary)', size: 2, delay: 140 },
+  ];
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        display: 'block',
+      }}
+    >
+      {dots.map((d, i) => (
+        <span
+          key={i}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: d.size,
+            height: d.size,
+            borderRadius: '50%',
+            background: d.color,
+            boxShadow: `0 0 6px ${d.color}`,
+            opacity: 0,
+            ['--dx' as string]: d.dx,
+            ['--dy' as string]: d.dy,
+            animation: `sparkle-burst 720ms var(--ease-out-expo) ${d.delay}ms forwards`,
+          } as React.CSSProperties}
+        />
+      ))}
+    </span>
+  );
+}
+
 function DiffStatBar({ insertions, deletions }: { insertions: number; deletions: number }) {
   const total = insertions + deletions;
   if (total === 0) return null;
@@ -337,7 +409,8 @@ function DiffStatBar({ insertions, deletions }: { insertions: number; deletions:
           style={{
             width: `${insPercent}%`,
             backgroundColor: 'var(--accent-primary)',
-            transition: 'width 0.3s ease',
+            boxShadow: 'inset 0 0 6px rgba(var(--accent-primary-rgb), 0.4)',
+            transition: 'width 320ms var(--ease-out-expo)',
           }}
         />
       )}
@@ -346,7 +419,8 @@ function DiffStatBar({ insertions, deletions }: { insertions: number; deletions:
           style={{
             width: `${delPercent}%`,
             backgroundColor: 'var(--accent-error)',
-            transition: 'width 0.3s ease',
+            boxShadow: 'inset 0 0 6px rgba(var(--accent-error-rgb), 0.4)',
+            transition: 'width 320ms var(--ease-out-expo)',
           }}
         />
       )}

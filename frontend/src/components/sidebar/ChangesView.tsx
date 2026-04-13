@@ -16,21 +16,49 @@ function getStatusChar(status: FileStatus): string {
 
 function getStatusBadgeStyle(status: FileStatus): React.CSSProperties {
   const base: React.CSSProperties = {
-    width: 14,
-    height: 14,
-    borderRadius: 2,
+    minWidth: 18,
+    height: 16,
+    padding: '0 5px',
+    borderRadius: 8,
     fontSize: 9,
-    fontWeight: 'bold',
+    fontWeight: 700,
+    letterSpacing: '0.04em',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    transition: 'transform 150ms var(--ease-out-back)',
   };
-  if (status === 'Added') return { ...base, backgroundColor: 'rgba(78,205,196,0.18)', color: 'var(--accent-primary)' };
-  if (status === 'Modified') return { ...base, backgroundColor: 'rgba(240,165,0,0.18)', color: 'var(--accent-warn)' };
-  if (status === 'Deleted') return { ...base, backgroundColor: 'rgba(255,107,107,0.18)', color: 'var(--accent-error)' };
-  if (typeof status === 'object' && 'Renamed' in status) return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
-  return { ...base, backgroundColor: 'rgba(136,136,136,0.18)', color: 'var(--text-muted)' };
+  if (status === 'Added') return {
+    ...base,
+    backgroundColor: 'var(--accent-primary-15)',
+    color: 'var(--accent-primary)',
+    border: '1px solid rgba(var(--accent-primary-rgb), 0.35)',
+  };
+  if (status === 'Modified') return {
+    ...base,
+    backgroundColor: 'rgba(var(--accent-warn-rgb), 0.15)',
+    color: 'var(--accent-warn)',
+    border: '1px solid rgba(var(--accent-warn-rgb), 0.35)',
+  };
+  if (status === 'Deleted') return {
+    ...base,
+    backgroundColor: 'rgba(var(--accent-error-rgb), 0.15)',
+    color: 'var(--accent-error)',
+    border: '1px solid rgba(var(--accent-error-rgb), 0.35)',
+  };
+  if (typeof status === 'object' && 'Renamed' in status) return {
+    ...base,
+    backgroundColor: 'rgba(136,136,136,0.14)',
+    color: 'var(--text-secondary)',
+    border: '1px solid var(--border-default)',
+  };
+  return {
+    ...base,
+    backgroundColor: 'rgba(136,136,136,0.14)',
+    color: 'var(--text-muted)',
+    border: '1px solid var(--border-default)',
+  };
 }
 
 function isRunActive(state: { type: string }): boolean {
@@ -53,11 +81,13 @@ const contextBannerStyle: React.CSSProperties = {
 };
 
 const sectionHeaderStyle: React.CSSProperties = {
-  padding: '4px 12px 2px',
+  padding: '8px 12px 4px',
   fontSize: 10,
+  fontFamily: 'var(--font-display)',
+  fontWeight: 600,
   color: 'var(--text-muted)',
   textTransform: 'uppercase',
-  letterSpacing: '0.5px',
+  letterSpacing: '0.1em',
 };
 
 const fileRowBaseStyle: React.CSSProperties = {
@@ -145,7 +175,14 @@ function FileRow({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <span style={getStatusBadgeStyle(file.status)}>{getStatusChar(file.status)}</span>
+      <span
+        style={{
+          ...getStatusBadgeStyle(file.status),
+          transform: hover ? 'scale(1.12)' : 'scale(1)',
+        }}
+      >
+        {getStatusChar(file.status)}
+      </span>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }}>
         {file.path}
       </span>

@@ -68,39 +68,45 @@ function PaneHeader({ kind, label, focused, paneIndex, canClose, onSplitH, onSpl
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        height: 'var(--pane-header-height, 28px)',
+        height: 'var(--pane-header-height, 32px)',
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingLeft: focused ? 7 : 10,
+        paddingLeft: focused ? 9 : 12,
         paddingRight: 6,
         userSelect: 'none',
         backgroundColor: focused ? 'var(--bg-overlay)' : 'var(--bg-surface)',
         borderBottom: focused
-          ? '2px solid var(--accent-primary)'
+          ? '1px solid var(--accent-primary)'
           : '1px solid var(--border-default)',
         borderLeft: focused ? '3px solid var(--accent-primary)' : '3px solid transparent',
-        boxShadow: focused ? 'inset 0 -2px 0 var(--accent-primary)' : 'none',
+        boxShadow: focused
+          ? 'inset 0 -2px 0 var(--accent-primary), var(--glow-accent)'
+          : 'none',
         boxSizing: 'border-box',
+        transition: 'background-color 160ms var(--ease-out-expo), box-shadow 200ms var(--ease-out-expo), border-color 160ms',
       }}
     >
       <span
         style={{
-          fontSize: 'var(--font-size-chrome, 11px)',
-          letterSpacing: '0.02em',
-          textTransform: 'uppercase',
+          fontFamily: 'var(--font-display)',
+          fontSize: 'var(--font-size-label, 12px)',
+          fontWeight: 600,
+          letterSpacing: '0.01em',
           display: 'flex',
           alignItems: 'center',
-          gap: 5,
+          gap: 8,
         }}
       >
         <span style={{
           color: focused ? 'var(--accent-primary, #4ecdc4)' : 'var(--text-muted, #888)',
-          fontWeight: focused ? 700 : 400,
+          fontWeight: 700,
           fontSize: '10px',
-          minWidth: 12,
+          fontFamily: 'var(--font-mono)',
+          minWidth: 14,
           textAlign: 'center',
+          transition: 'color 160ms',
         }}>{paneIndex}</span>
         {editing ? (
           <input
@@ -118,17 +124,21 @@ function PaneHeader({ kind, label, focused, paneIndex, canClose, onSplitH, onSpl
               border: 'none',
               borderBottom: '1px solid var(--accent-primary)',
               color: 'var(--text-primary)',
-              fontSize: 'var(--font-size-chrome, 11px)',
-              fontFamily: 'monospace',
+              fontSize: 'var(--font-size-label, 12px)',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 600,
               outline: 'none',
-              width: 120,
-              textTransform: 'uppercase',
-              letterSpacing: '0.02em',
+              width: 140,
+              letterSpacing: '0.01em',
             }}
           />
         ) : (
           <span
-            style={{ color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-muted, #888)', cursor: 'text' }}
+            style={{
+              color: focused ? 'var(--text-primary, #e0e0e0)' : 'var(--text-secondary, #aaa)',
+              cursor: 'text',
+              transition: 'color 160ms',
+            }}
             onDoubleClick={(e) => { e.stopPropagation(); startEdit(); }}
           >
             {displayLabel}
@@ -486,10 +496,16 @@ export function PaneRenderer({
             cursor: sp.isHorizontal ? 'col-resize' : 'row-resize',
             zIndex: 20,
             backgroundColor: 'transparent',
-            transition: 'background-color 150ms',
+            transition: 'background-color 160ms var(--ease-out-expo), box-shadow 160ms var(--ease-out-expo)',
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(78, 205, 196, 0.3)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'var(--accent-primary-25)';
+            e.currentTarget.style.boxShadow = 'var(--glow-accent)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.boxShadow = 'none';
+          }}
           onMouseDown={(e) => {
             e.preventDefault();
             const container = containerRef.current;

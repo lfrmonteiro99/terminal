@@ -303,13 +303,26 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           // Clear xterm screen
           if (term.clear) term.clear();
           else if (term.write) term.write('\x1b[2J\x1b[H');
+          // Show a small teal banner above the first prompt — only for local shells.
+          // Suppressed for SSH to avoid clobbering the remote MOTD. Respects opt-out.
+          const bannerEnabled = localStorage.getItem('terminal:banner') !== 'false';
+          if (bannerEnabled && !sshConfig && term.write) {
+            // ANSI: 38;2;R;G;B sets 24-bit fg color. Teal = 78,205,196.
+            const teal = '\x1b[38;2;78;205;196m';
+            const dim = '\x1b[38;2;139;143;163m';
+            const reset = '\x1b[0m';
+            const banner =
+              `${teal} ▸ Terminal Engine${reset}${dim}  ready${reset}\r\n` +
+              `${dim} ⌘K commands · ⌘/ shortcuts${reset}\r\n\r\n`;
+            term.write(banner);
+          }
           // Send Enter to PTY to trigger a fresh prompt
           sendRef.current({ type: 'WriteTerminalInput', session_id: sessionId, data: '\n' });
         }
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [sessionId, xtermLoaded]);
+  }, [sessionId, xtermLoaded, sshConfig]);
 
   const handleReconnect = () => {
     paneSessionMap.delete(pane.id);
@@ -333,20 +346,31 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             zIndex: 10,
           }}
         >
-          <span style={{ color: 'var(--accent-error)', fontFamily: 'monospace', fontSize: 14 }}>
-            Session lost
+          <span
+            style={{
+              color: 'var(--accent-error)',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 600,
+              fontSize: 14,
+              letterSpacing: '0.01em',
+            }}
+          >
+            session lost
           </span>
           <button
             onClick={handleReconnect}
             style={{
-              padding: '8px 16px',
+              padding: '8px 18px',
               backgroundColor: 'var(--accent-primary)',
-              color: 'var(--bg-surface)',
+              color: 'var(--bg-base)',
               border: 'none',
-              borderRadius: 4,
+              borderRadius: 5,
               cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontWeight: 'bold',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 12,
+              letterSpacing: '0.02em',
+              boxShadow: 'var(--glow-accent)',
             }}
           >
             Reconnect
@@ -360,16 +384,32 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           style={{
             flex: 1,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            gap: 10,
             color: 'var(--text-muted)',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-display)',
             fontSize: 13,
+            letterSpacing: '0.01em',
           }}
         >
-          {sessionState === 'creating'
-            ? (sshConfig ? `Connecting to ${sshConfig.username}@${sshConfig.host}...` : 'Starting terminal...')
-            : 'Terminal'}
+          <span
+            aria-hidden="true"
+            style={{
+              display: 'inline-block',
+              width: 8,
+              height: 16,
+              background: 'var(--accent-primary)',
+              borderRadius: 1,
+              animation: 'glow-pulse 1.4s ease-in-out infinite',
+            }}
+          />
+          <span>
+            {sessionState === 'creating'
+              ? (sshConfig ? `connecting to ${sshConfig.username}@${sshConfig.host}...` : 'starting terminal...')
+              : 'terminal'}
+          </span>
         </div>
       )}
     </div>
