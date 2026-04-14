@@ -32,6 +32,13 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+/// Serialize an event, returning a fallback error JSON on failure.
+fn event_json(event: &AppEvent) -> String {
+    serde_json::to_string(event).unwrap_or_else(|e| {
+        format!(r#"{{"type":"Error","code":"SERIALIZATION","message":"{}"}}"#, e)
+    })
+}
+
 async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     let (mut sender, mut receiver) = socket.split();
     info!("New WebSocket connection, awaiting auth...");
@@ -47,34 +54,31 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
             info!("Auth message received: {}", &*text);
             match serde_json::from_str::<AppCommand>(&*text) {
                 Ok(AppCommand::Auth { token }) if token == state.auth_token => {
-                    let resp = serde_json::to_string(&AppEvent::AuthSuccess).unwrap();
+                    let resp = event_json(&AppEvent::AuthSuccess);
                     let _ = sender.send(Message::Text(resp.into())).await;
                     true
                 }
                 Ok(AppCommand::Auth { .. }) => {
                     warn!("Auth failed: token mismatch");
-                    let resp = serde_json::to_string(&AppEvent::AuthFailed {
+                    let resp = event_json(&AppEvent::AuthFailed {
                         reason: "Invalid token".into(),
-                    })
-                    .unwrap();
+                    });
                     let _ = sender.send(Message::Text(resp.into())).await;
                     false
                 }
                 Ok(other) => {
                     warn!("Auth failed: expected Auth command, got {:?}", other);
-                    let resp = serde_json::to_string(&AppEvent::AuthFailed {
+                    let resp = event_json(&AppEvent::AuthFailed {
                         reason: "Expected Auth command".into(),
-                    })
-                    .unwrap();
+                    });
                     let _ = sender.send(Message::Text(resp.into())).await;
                     false
                 }
                 Err(e) => {
                     warn!("Auth failed: could not parse message: {}", e);
-                    let resp = serde_json::to_string(&AppEvent::AuthFailed {
+                    let resp = event_json(&AppEvent::AuthFailed {
                         reason: "Invalid token".into(),
-                    })
-                    .unwrap();
+                    });
                     let _ = sender.send(Message::Text(resp.into())).await;
                     false
                 }
@@ -145,7 +149,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     // Forward individual responses back to this client
     let response_task = tokio::spawn(async move {
         while let Some(event) = response_rx.recv().await {
-            let msg = serde_json::to_string(&event).unwrap();
+            let msg = event_json(&event);
             let mut s = sender_clone2.lock().await;
             if s.send(Message::Text(msg.into())).await.is_err() {
                 break;
@@ -158,7 +162,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
             Ok(Message::Text(text)) => {
                 match serde_json::from_str::<AppCommand>(&text) {
                     Ok(AppCommand::Ping) => {
-                        let pong = serde_json::to_string(&AppEvent::Pong).unwrap();
+                        let pong = event_json(&AppEvent::Pong);
                         let mut s = sender.lock().await;
                         let _ = s.send(Message::Text(pong.into())).await;
                     }
@@ -170,11 +174,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                     }
                     Err(e) => {
                         warn!("Invalid command from client: {}", e);
-                        let err = serde_json::to_string(&AppEvent::Error {
+                        let err = event_json(&AppEvent::Error {
                             code: "INVALID_COMMAND".into(),
                             message: e.to_string(),
-                        })
-                        .unwrap();
+                        });
                         let mut s = sender.lock().await;
                         let _ = s.send(Message::Text(err.into())).await;
                     }
@@ -198,4 +201,128 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     send_task.abort();
     response_task.abort();
     info!("Client connection closed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TungMessage;
+
+    /// Spin up a test server with a known token.
+    /// Returns (port, token).
+    async fn start_test_server() -> (u16, String) {
+        let token = "test-secret-token".to_string();
+        let (event_tx, _) = broadcast::channel::<String>(16);
+        // command_tx that simply drops all messages
+        let (command_tx, _command_rx) =
+            mpsc::channel::<(AppCommand, mpsc::Sender<AppEvent>)>(16);
+
+        let state = Arc::new(DaemonState {
+            auth_token: token.clone(),
+            event_tx,
+            command_tx,
+        });
+
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        (port, token)
+    }
+
+    async fn connect(port: u16) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+        let url = format!("ws://127.0.0.1:{}/ws", port);
+        let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        ws
+    }
+
+    fn auth_msg(token: &str) -> TungMessage {
+        let cmd = serde_json::to_string(&AppCommand::Auth { token: token.to_string() }).unwrap();
+        TungMessage::Text(cmd.into())
+    }
+
+    async fn recv_text(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> String {
+        loop {
+            match ws.next().await.unwrap().unwrap() {
+                TungMessage::Text(t) => return t.to_string(),
+                TungMessage::Ping(_) | TungMessage::Pong(_) => continue,
+                other => panic!("unexpected message: {:?}", other),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_valid_token_succeeds() {
+        let (port, token) = start_test_server().await;
+        let mut ws = connect(port).await;
+
+        ws.send(auth_msg(&token)).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "AuthSuccess", "expected AuthSuccess, got: {}", resp);
+    }
+
+    #[tokio::test]
+    async fn auth_invalid_token_fails() {
+        let (port, _) = start_test_server().await;
+        let mut ws = connect(port).await;
+
+        ws.send(auth_msg("wrong-token")).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "AuthFailed", "expected AuthFailed, got: {}", resp);
+    }
+
+    #[tokio::test]
+    async fn auth_malformed_json_fails() {
+        let (port, _) = start_test_server().await;
+        let mut ws = connect(port).await;
+
+        ws.send(TungMessage::Text("this is not json!!!".into())).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "AuthFailed", "expected AuthFailed, got: {}", resp);
+    }
+
+    #[tokio::test]
+    async fn auth_wrong_command_type_fails() {
+        let (port, _) = start_test_server().await;
+        let mut ws = connect(port).await;
+
+        // Send Ping instead of Auth
+        let ping_msg = serde_json::to_string(&AppCommand::Ping).unwrap();
+        ws.send(TungMessage::Text(ping_msg.into())).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "AuthFailed", "expected AuthFailed, got: {}", resp);
+    }
+
+    #[tokio::test]
+    async fn post_auth_invalid_command_returns_error() {
+        let (port, token) = start_test_server().await;
+        let mut ws = connect(port).await;
+
+        // Authenticate first
+        ws.send(auth_msg(&token)).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "AuthSuccess");
+
+        // Send garbage post-auth
+        ws.send(TungMessage::Text("garbage command".into())).await.unwrap();
+        let resp = recv_text(&mut ws).await;
+
+        let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(event["type"], "Error", "expected Error, got: {}", resp);
+        assert_eq!(event["code"], "INVALID_COMMAND");
+    }
 }

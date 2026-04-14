@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use terminal_core::models::*;
 use tokio::process::Command;
 use tracing::debug;
+use crate::safety::validate_git_ref;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -252,12 +253,14 @@ pub async fn list_branches(cwd: &Path) -> Result<(Vec<BranchInfo>, Option<String
 }
 
 pub async fn branch_delete(cwd: &Path, name: &str, force: bool) -> Result<()> {
+    validate_git_ref(name).map_err(GitError::CommandFailed)?;
     let flag = if force { "-D" } else { "-d" };
     run_git(cwd, &["branch", flag, name]).await?;
     Ok(())
 }
 
 pub async fn merge_branch(cwd: &Path, branch: &str) -> Result<MergeResult> {
+    validate_git_ref(branch).map_err(GitError::CommandFailed)?;
     match run_git(cwd, &["merge", "--no-edit", branch]).await {
         Ok(stdout) => {
             if stdout.contains("Fast-forward") {
@@ -617,12 +620,17 @@ pub async fn create_commit(cwd: &Path, message: &str) -> Result<String> {
 
 /// Checkout an existing branch.
 pub async fn checkout_branch(cwd: &Path, name: &str) -> Result<()> {
+    validate_git_ref(name).map_err(GitError::CommandFailed)?;
     run_git(cwd, &["checkout", name]).await?;
     Ok(())
 }
 
 /// Create a new branch, optionally from a base ref.
 pub async fn create_branch(cwd: &Path, name: &str, from: Option<&str>) -> Result<()> {
+    validate_git_ref(name).map_err(GitError::CommandFailed)?;
+    if let Some(b) = from {
+        validate_git_ref(b).map_err(GitError::CommandFailed)?;
+    }
     match from {
         Some(base) => run_git(cwd, &["checkout", "-b", name, base]).await?,
         None => run_git(cwd, &["checkout", "-b", name]).await?,
@@ -656,6 +664,8 @@ pub async fn working_dir_file_diff(cwd: &Path, file_path: &Path) -> Result<Strin
 
 /// Push a branch to a remote. Returns the branch name that was pushed.
 pub async fn push_branch(cwd: &Path, remote: &str, branch: &str) -> Result<String> {
+    validate_git_ref(remote).map_err(GitError::CommandFailed)?;
+    validate_git_ref(branch).map_err(GitError::CommandFailed)?;
     let output = run_git(cwd, &["push", remote, branch]).await?;
     let actual_branch = current_branch(cwd).await?.unwrap_or_else(|| branch.to_string());
     Ok(actual_branch)
@@ -663,6 +673,10 @@ pub async fn push_branch(cwd: &Path, remote: &str, branch: &str) -> Result<Strin
 
 /// Pull from a remote (git pull remote branch). Returns approximate commit count applied.
 pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Result<usize> {
+    validate_git_ref(remote).map_err(GitError::CommandFailed)?;
+    if let Some(b) = branch {
+        validate_git_ref(b).map_err(GitError::CommandFailed)?;
+    }
     let before_head = head_oid(cwd).await.unwrap_or_default();
     if let Some(b) = branch {
         run_git(cwd, &["pull", remote, b]).await?;
@@ -681,6 +695,7 @@ pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Resu
 
 /// Fetch a remote.
 pub async fn fetch_remote(cwd: &Path, remote: &str) -> Result<()> {
+    validate_git_ref(remote).map_err(GitError::CommandFailed)?;
     run_git(cwd, &["fetch", remote]).await?;
     Ok(())
 }
@@ -1148,5 +1163,63 @@ mod tests {
             .await
             .expect("stash_show_file_diff");
         assert!(!file_diff.is_empty(), "file diff should not be empty");
+    }
+
+    // --- Safety tests ---
+
+    #[tokio::test]
+    async fn push_branch_rejects_shell_metacharacters() {
+        let repo = init_test_repo();
+        let result = push_branch(repo.path(), "; rm -rf /", "main").await;
+        assert!(result.is_err(), "Should reject shell metacharacters in remote");
+    }
+
+    #[tokio::test]
+    async fn push_branch_rejects_flag_injection() {
+        let repo = init_test_repo();
+        let result = push_branch(repo.path(), "origin", "--force").await;
+        assert!(result.is_err(), "Should reject flag injection in branch");
+    }
+
+    #[tokio::test]
+    async fn checkout_branch_rejects_flag_injection() {
+        let repo = init_test_repo();
+        let result = checkout_branch(repo.path(), "--force").await;
+        assert!(result.is_err(), "Should reject flag injection");
+    }
+
+    #[tokio::test]
+    async fn create_branch_rejects_shell_metacharacters() {
+        let repo = init_test_repo();
+        let result = create_branch(repo.path(), "branch$(whoami)", None).await;
+        assert!(result.is_err(), "Should reject shell metacharacters");
+    }
+
+    #[tokio::test]
+    async fn create_branch_rejects_whitespace() {
+        let repo = init_test_repo();
+        let result = create_branch(repo.path(), "branch name", None).await;
+        assert!(result.is_err(), "Should reject whitespace in branch name");
+    }
+
+    #[tokio::test]
+    async fn merge_branch_rejects_flag_injection() {
+        let repo = init_test_repo();
+        let result = merge_branch(repo.path(), "--abort").await;
+        assert!(result.is_err(), "Should reject flag injection");
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_rejects_metacharacters() {
+        let repo = init_test_repo();
+        let result = fetch_remote(repo.path(), "; cat /etc/passwd").await;
+        assert!(result.is_err(), "Should reject shell metacharacters");
+    }
+
+    #[tokio::test]
+    async fn branch_delete_rejects_flag_injection() {
+        let repo = init_test_repo();
+        let result = branch_delete(repo.path(), "--all", false).await;
+        assert!(result.is_err(), "Should reject flag injection");
     }
 }

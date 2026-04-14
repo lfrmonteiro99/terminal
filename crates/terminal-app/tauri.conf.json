@@ -34,7 +34,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "identifier": "com.terminal.engine",
     "shortDescription": "AI-powered terminal workspace",
     "longDescription": "Terminal Engine — a terminal multiplexer with AI assistance, git integration, and split panes.",
     "category": "DeveloperTool",

@@ -2,6 +2,7 @@ use crate::claude_runner::{output_file_path, RunnerEvent};
 use crate::daemon_context::{ActiveRun, DaemonContext};
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
+use crate::safety::broadcast_event;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,16 +47,30 @@ impl Dispatcher {
                 let limit = max_bytes.unwrap_or(1_048_576u64); // 1 MB default
 
                 // Resolve against active project root when path is relative
+                let project_root = self.find_active_project_root().await;
                 let resolved: PathBuf = {
                     let p = PathBuf::from(&path);
                     if p.is_absolute() {
                         p
-                    } else if let Some(root) = self.find_active_project_root().await {
+                    } else if let Some(ref root) = project_root {
                         root.join(&p)
                     } else {
                         p
                     }
                 };
+
+                // Validate path stays within project root (if we have one)
+                if let Some(ref root) = project_root {
+                    if let Err(e) = crate::safety::validate_path(root, &resolved) {
+                        let _ = reply_tx
+                            .send(AppEvent::FileReadError {
+                                path,
+                                error: e,
+                            })
+                            .await;
+                        return;
+                    }
+                }
 
                 match tokio::fs::metadata(&resolved).await {
                     Err(e) => {
@@ -1339,7 +1354,20 @@ impl Dispatcher {
             let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
 
             // Create .terminal-worktrees/ dir
-            if let Err(e) = tokio::fs::create_dir_all(wt_path.parent().unwrap()).await {
+            let wt_parent = match wt_path.parent() {
+                Some(p) => p,
+                None => {
+                    self.context.concurrency.lock().await.remove(&project_root);
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "IO_ERROR".into(),
+                            message: "Invalid worktree path: no parent directory".into(),
+                        })
+                        .await;
+                    return;
+                }
+            };
+            if let Err(e) = tokio::fs::create_dir_all(wt_parent).await {
                 self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
@@ -1476,8 +1504,7 @@ impl Dispatcher {
                                             line,
                                             line_number,
                                         };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &evt);
                                     }
                                     Some(RunnerEvent::StderrLine(line)) => {
                                         line_number += 1;
@@ -1492,8 +1519,7 @@ impl Dispatcher {
                                             line: format!("[stderr] {}", line),
                                             line_number,
                                         };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &evt);
                                     }
                                     Some(RunnerEvent::BlockingDetected(question)) => {
                                         let evt = AppEvent::RunBlocking {
@@ -1501,8 +1527,7 @@ impl Dispatcher {
                                             question: question.clone(),
                                             context: vec![],
                                         };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &evt);
                                         let state_evt = AppEvent::RunStateChanged {
                                             run_id,
                                             new_state: RunState::WaitingInput {
@@ -1510,8 +1535,7 @@ impl Dispatcher {
                                                 context: vec![],
                                             },
                                         };
-                                        let json = serde_json::to_string(&state_evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &state_evt);
                                     }
                                     Some(RunnerEvent::MalformedOutput { partial }) => {
                                         warn!("Malformed output for run {}: {}", run_id, partial);
@@ -1522,8 +1546,7 @@ impl Dispatcher {
                                             error: e,
                                             phase: FailPhase::Execution,
                                         };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &evt);
                                         break;
                                     }
                                     Some(RunnerEvent::ProcessExited { .. }) => {
@@ -1579,8 +1602,7 @@ impl Dispatcher {
                                             summary,
                                             diff_stat: run_diff_stat.clone(),
                                         };
-                                        let json = serde_json::to_string(&evt).unwrap();
-                                        let _ = event_tx.send(json);
+                                        broadcast_event(&event_tx, &evt);
 
                                         // Persist completed run
                                         let completed_run = Run {
@@ -1613,8 +1635,7 @@ impl Dispatcher {
                                     info!("Cancelling run {}: {}", run_id, reason);
                                     let _ = child.kill().await;
                                     let evt = AppEvent::RunCancelled { run_id };
-                                    let json = serde_json::to_string(&evt).unwrap();
-                                    let _ = event_tx.send(json);
+                                    broadcast_event(&event_tx, &evt);
                                     break;
                                 }
                             }
@@ -1626,8 +1647,7 @@ impl Dispatcher {
                                     error: "Run timed out".into(),
                                     phase: FailPhase::Execution,
                                 };
-                                let json = serde_json::to_string(&evt).unwrap();
-                                let _ = event_tx.send(json);
+                                broadcast_event(&event_tx, &evt);
                                 break;
                             }
                         }
@@ -1745,4 +1765,42 @@ fn detect_language(path: &PathBuf) -> String {
         })
         .unwrap_or("plaintext")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::safety::validate_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn readfile_path_traversal_blocked() {
+        let root = PathBuf::from("/home/user/project");
+        let attack = PathBuf::from("../../etc/passwd");
+        assert!(validate_path(&root, &attack).is_err());
+    }
+
+    #[test]
+    fn readfile_absolute_outside_root_blocked() {
+        let root = PathBuf::from("/home/user/project");
+        let attack = PathBuf::from("/etc/shadow");
+        assert!(validate_path(&root, &attack).is_err());
+    }
+
+    #[test]
+    fn readfile_normal_relative_path_allowed() {
+        let root = PathBuf::from("/home/user/project");
+        let normal = PathBuf::from("src/main.rs");
+        let result = validate_path(&root, &normal);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), root.join("src/main.rs"));
+    }
+
+    #[test]
+    fn readfile_dotdot_within_root_still_valid() {
+        let root = PathBuf::from("/home/user/project");
+        let tricky = PathBuf::from("src/../Cargo.toml");
+        let result = validate_path(&root, &tricky);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), root.join("Cargo.toml"));
+    }
 }

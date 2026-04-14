@@ -48,6 +48,10 @@ impl ClaudeRunner {
         _mode: &RunMode,
         working_dir: &Path,
     ) -> Result<(mpsc::Receiver<RunnerEvent>, mpsc::Sender<String>, Child), String> {
+        if prompt.trim().is_empty() {
+            return Err("Cannot start run with empty prompt".into());
+        }
+
         let full_prompt = format!("{}\n\n{}", delimiter_preamble(), prompt);
 
         let mut child = Command::new(&self.config.claude_binary)
@@ -147,4 +151,73 @@ impl ClaudeRunner {
 /// Get the output file path for a given run.
 pub fn output_file_path(data_dir: &Path, run_id: &Uuid) -> PathBuf {
     data_dir.join("runs").join(run_id.to_string()).join("output.jsonl")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminal_core::config::{DaemonConfig, DaemonMode};
+    use terminal_core::models::RunMode;
+    use std::path::PathBuf;
+
+    fn test_config() -> DaemonConfig {
+        DaemonConfig {
+            claude_binary: "echo".to_string(), // safe dummy binary
+            mode: DaemonMode::Embedded,
+            data_dir: PathBuf::from("/tmp/test-daemon"),
+            ..DaemonConfig::default()
+        }
+    }
+
+    #[test]
+    fn empty_prompt_rejected() {
+        let runner = ClaudeRunner::new(test_config());
+        let result = runner.spawn(
+            Uuid::new_v4(),
+            "",
+            &RunMode::Free,
+            &PathBuf::from("/tmp"),
+        );
+        assert!(result.is_err(), "Empty prompt should be rejected");
+        assert!(result.unwrap_err().contains("empty"), "Error should mention empty prompt");
+    }
+
+    #[test]
+    fn whitespace_only_prompt_rejected() {
+        let runner = ClaudeRunner::new(test_config());
+        let result = runner.spawn(
+            Uuid::new_v4(),
+            "   \n\t  ",
+            &RunMode::Free,
+            &PathBuf::from("/tmp"),
+        );
+        assert!(result.is_err(), "Whitespace-only prompt should be rejected");
+    }
+
+    #[tokio::test]
+    async fn normal_prompt_accepted() {
+        let runner = ClaudeRunner::new(test_config());
+        let result = runner.spawn(
+            Uuid::new_v4(),
+            "Fix the bug in auth.rs",
+            &RunMode::Free,
+            &PathBuf::from("/tmp"),
+        );
+        assert!(result.is_ok(), "Normal prompt should be accepted: {:?}", result.err());
+    }
+
+    #[test]
+    fn spawn_error_on_missing_binary() {
+        let mut config = test_config();
+        config.claude_binary = "/nonexistent/binary/path".to_string();
+        let runner = ClaudeRunner::new(config);
+        let result = runner.spawn(
+            Uuid::new_v4(),
+            "hello",
+            &RunMode::Free,
+            &PathBuf::from("/tmp"),
+        );
+        assert!(result.is_err(), "Missing binary should return error");
+        assert!(result.unwrap_err().contains("spawn"), "Error should mention spawn failure");
+    }
 }
