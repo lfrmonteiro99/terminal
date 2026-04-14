@@ -40,17 +40,34 @@ A desktop application for managing AI coding sessions with git-integrated sandbo
 - **JSON persistence**: Sessions, runs, and worktree metadata stored as atomic JSON files (`write .tmp` → `rename`). Daemon recovers gracefully from crashes.
 - **Dirty working directory detection**: Before starting a run, the daemon checks for uncommitted changes and warns the user — since the worktree is created from HEAD, uncommitted work would be invisible to the AI.
 
-## Quick Start (Docker)
+## Quick Start
 
-The only prerequisite is **Docker** with **Docker Compose**.
+Two scripts cover the two audiences:
+
+| Goal | Command | Requires |
+|------|---------|----------|
+| Run the stack locally (dev/onboarding) | `./run.sh` | Docker + Compose v2 |
+| Build a native installer for end users | `./release.sh` | Rust 1.88+, Node 20+, platform build deps |
 
 ```bash
 git clone https://github.com/lfrmonteiro99/terminal.git
 cd terminal
+./run.sh
+```
+
+Starts daemon (`:3000`) + frontend (`:5173`), waits for health, opens your browser. Run `./run.sh --help` for the full flag list (`--clean`, `--logs`, `stop`, `status`).
+
+For a shippable desktop app (no Docker, double-click to launch), use `./release.sh` — see [Native Desktop App](#native-desktop-app-tauri) below.
+
+### Under the hood (Docker)
+
+`./run.sh` is a wrapper around `docker compose up`. If you prefer raw commands:
+
+```bash
 docker compose up
 ```
 
-That's it. This starts:
+This starts:
 - **Daemon** at `http://localhost:3000` (Rust binary + git)
 - **Frontend** at `http://localhost:5173` (Vite dev server, proxies WebSocket to daemon)
 
@@ -100,11 +117,10 @@ This starts the Vite dev server and the Tauri window simultaneously. The embedde
 ### Build
 
 ```bash
-cd crates/terminal-app
-cargo tauri build
+./release.sh
 ```
 
-Produces `.exe` and `.msi` in `target/release/bundle/`.
+Wraps `cargo tauri build` and collects the platform artifacts into `./release/<os-arch>-v<version>/`. Linux produces `.deb` + `.AppImage`; macOS produces `.dmg`; Windows produces `.msi`. Cross-compilation is not supported — run on each target host (typically via GitHub Actions matrix).
 
 ### How It Works
 

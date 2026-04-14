@@ -3,3 +3,10 @@ __pycache__/
 
 # Rust / Cargo
 /target/
+
+# Release artifacts produced by ./release.sh
+/release/
+
+# Tooling scratch
+/.playwright-mcp/
+/docs/superpowers/
