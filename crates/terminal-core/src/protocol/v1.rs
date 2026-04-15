@@ -1,8 +1,8 @@
 use crate::models::{
-    BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
-    FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
-    RunMode, RunState, RunSummary, SearchMatch, SessionSummary, SshConfig, StashEntry,
-    TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
+    AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
+    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot,
+    RestorableTerminalSession, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
+    SshConfig, StashEntry, TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -30,6 +30,10 @@ pub enum AppCommand {
         mode: RunMode,
         #[serde(default)]
         skip_dirty_check: bool,
+        /// Autonomy level for this run (defaults to `Autonomous` if the
+        /// client omits the field — keeps legacy requests working).
+        #[serde(default)]
+        autonomy: AutonomyLevel,
     },
     CancelRun {
         run_id: Uuid,
@@ -579,6 +583,46 @@ mod tests {
     }
 
     #[test]
+    fn start_run_with_autonomy_field_roundtrip() {
+        let cmd = AppCommand::StartRun {
+            session_id: Uuid::new_v4(),
+            prompt: "do the thing".into(),
+            mode: RunMode::Free,
+            skip_dirty_check: false,
+            autonomy: AutonomyLevel::ReviewPlan,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"autonomy\":\"ReviewPlan\""));
+        let back: AppCommand = serde_json::from_str(&json).unwrap();
+        match back {
+            AppCommand::StartRun { autonomy, .. } => {
+                assert_eq!(autonomy, AutonomyLevel::ReviewPlan);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn start_run_without_autonomy_defaults_to_autonomous() {
+        // Old client payload that predates the autonomy field.
+        let legacy_json = serde_json::json!({
+            "type": "StartRun",
+            "session_id": Uuid::new_v4(),
+            "prompt": "hi",
+            "mode": "Free",
+        })
+        .to_string();
+        let cmd: AppCommand = serde_json::from_str(&legacy_json).unwrap();
+        match cmd {
+            AppCommand::StartRun { autonomy, skip_dirty_check, .. } => {
+                assert_eq!(autonomy, AutonomyLevel::Autonomous);
+                assert!(!skip_dirty_check);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn run_tool_use_event_roundtrip() {
         let evt = AppEvent::RunToolUse {
             run_id: Uuid::new_v4(),
@@ -674,6 +718,7 @@ mod tests {
                 }),
                 started_at: chrono::Utc::now(),
                 ended_at: Some(chrono::Utc::now()),
+                autonomy: AutonomyLevel::default(),
             },
             diff_stat: Some(DiffStat {
                 files_changed: 2,

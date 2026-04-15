@@ -162,6 +162,27 @@ pub enum RunMode {
     Strict,
 }
 
+/// How much autonomy the run has over the worktree.
+///
+/// - `Autonomous`: Claude is free to edit files, run bash, etc. Because runs
+///   execute inside an isolated git worktree, the user can still review and
+///   revert at the end. Maps to `--permission-mode bypassPermissions`.
+/// - `ReviewPlan`: Claude produces a plan describing what it *would* do but
+///   does not execute any edit/write/bash tools. The UI surfaces an
+///   "Approve & execute" button that fires a fresh autonomous run with the
+///   same prompt. Maps to `--permission-mode plan`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum AutonomyLevel {
+    Autonomous,
+    ReviewPlan,
+}
+
+impl Default for AutonomyLevel {
+    fn default() -> Self {
+        AutonomyLevel::Autonomous
+    }
+}
+
 // --- Output ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +210,9 @@ pub struct Run {
     pub session_id: Uuid,
     pub branch: String,
     pub mode: RunMode,
+    /// User-facing autonomy choice. Absent in old persisted runs → Autonomous.
+    #[serde(default)]
+    pub autonomy: AutonomyLevel,
     pub state: RunState,
     pub prompt: String,
     pub provided_files: Vec<PathBuf>,
@@ -235,6 +259,10 @@ pub struct RunSummary {
     pub diff_stat: Option<DiffStat>,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Autonomy mode this run was executed under. Lets the UI decide whether
+    /// to show the "Approve & execute" follow-up after a plan run.
+    #[serde(default)]
+    pub autonomy: AutonomyLevel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

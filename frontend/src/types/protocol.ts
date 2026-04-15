@@ -58,8 +58,18 @@ export type RunState =
   | { type: 'Cancelled'; reason: string };
 
 export type PauseReason = 'BlockingQuestion' | 'SupervisorIntervention' | 'PolicyViolation';
-export type FailPhase = 'Preparation' | 'Execution' | 'Parsing' | 'Cleanup';
+export type FailPhase = 'Preflight' | 'Preparation' | 'Execution' | 'Parsing' | 'Cleanup';
 export type RunMode = 'Free' | 'Guided' | 'Strict';
+
+/**
+ * Autonomy level for an AI run.
+ *
+ * - `Autonomous`: Claude runs freely inside the worktree; user reviews the
+ *   final diff and decides merge/revert.
+ * - `ReviewPlan`: Claude produces a plan but does not execute edits/bash;
+ *   user clicks "Approve & execute" to spawn a follow-up autonomous run.
+ */
+export type AutonomyLevel = 'Autonomous' | 'ReviewPlan';
 
 export interface RunSummary {
   id: string;
@@ -69,6 +79,27 @@ export interface RunSummary {
   started_at: string;
   ended_at: string | null;
   diff_stat: DiffStat | null;
+  autonomy?: AutonomyLevel;
+}
+
+export interface RunMetrics {
+  num_turns: number;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface ToolCall {
+  tool_id: string;
+  tool_name: string;
+  input_preview: string;
+  status: 'pending' | 'ok' | 'error';
+  result_preview?: string;
+}
+
+export interface PreflightError {
+  reason: string;
+  suggestion: string;
 }
 
 // --- Git Types (Phase 2) ---
@@ -161,7 +192,7 @@ export type AppCommand =
   | { type: 'StartSession'; project_root: string }
   | { type: 'EndSession'; session_id: string }
   | { type: 'ListSessions' }
-  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean }
+  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel }
   | { type: 'CancelRun'; run_id: string; reason: string }
   | { type: 'RespondToBlocking'; run_id: string; response: string }
   | { type: 'GetRunStatus'; run_id: string }
@@ -237,6 +268,10 @@ export type AppEvent =
   | { type: 'RunMergeConflict'; run_id: string; conflict_paths: string[] }
   | { type: 'RunFailed'; run_id: string; error: string; phase: FailPhase }
   | { type: 'RunCancelled'; run_id: string }
+  | { type: 'RunToolUse'; run_id: string; tool_id: string; tool_name: string; tool_input_preview: string }
+  | { type: 'RunToolResult'; run_id: string; tool_id: string; is_error: boolean; preview: string }
+  | { type: 'RunMetrics'; run_id: string; num_turns: number; cost_usd: number; input_tokens: number; output_tokens: number }
+  | { type: 'RunPreflightFailed'; run_id: string; reason: string; suggestion: string }
   | { type: 'SessionStarted'; session: SessionSummary }
   | { type: 'SessionEnded'; session_id: string }
   | { type: 'SessionList'; sessions: SessionSummary[] }

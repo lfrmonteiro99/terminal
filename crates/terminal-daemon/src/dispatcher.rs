@@ -322,6 +322,7 @@ impl Dispatcher {
                                 diff_stat: None,
                                 started_at: run.started_at,
                                 ended_at: run.ended_at,
+                                autonomy: run.autonomy,
                             });
                         }
 
@@ -336,6 +337,7 @@ impl Dispatcher {
                                     diff_stat: None,
                                     started_at: active.run.started_at,
                                     ended_at: active.run.ended_at,
+                                    autonomy: active.run.autonomy,
                                 });
                             }
                         }
@@ -388,8 +390,9 @@ impl Dispatcher {
                 prompt,
                 mode,
                 skip_dirty_check,
+                autonomy,
             } => {
-                self.do_start_run(session_id, prompt, mode, skip_dirty_check, reply_tx).await;
+                self.do_start_run(session_id, prompt, mode, autonomy, skip_dirty_check, reply_tx).await;
             }
 
             AppCommand::CancelRun { run_id, reason } => {
@@ -709,8 +712,9 @@ impl Dispatcher {
                     return;
                 }
 
-                // Stash succeeded -- proceed with start run, skipping dirty check
-                self.do_start_run(session_id, prompt, mode, true, reply_tx).await;
+                // Stash succeeded -- proceed with start run, skipping dirty check.
+                // Stash-and-run flows default to Autonomous (legacy behaviour).
+                self.do_start_run(session_id, prompt, mode, AutonomyLevel::default(), true, reply_tx).await;
             }
 
             AppCommand::ListStashes => {
@@ -1221,6 +1225,7 @@ impl Dispatcher {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
+        autonomy: AutonomyLevel,
         skip_dirty_check: bool,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
@@ -1411,6 +1416,7 @@ impl Dispatcher {
             session_id,
             branch: branch_name.clone(),
             mode: mode.clone(),
+            autonomy,
             state: RunState::Preparing,
             prompt: prompt.clone(),
             provided_files: vec![],
@@ -1471,7 +1477,7 @@ impl Dispatcher {
         }
 
         // Spawn claude process in actual_working_dir (worktree if git)
-        match self.context.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
+        match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
             Ok((mut event_rx, stdin_tx, mut child)) => {
                 let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
 
@@ -1501,6 +1507,7 @@ impl Dispatcher {
                 let worktree_path_clone = worktree_path.clone();
                 let is_git_run = is_git;
                 let run_started_at = run.started_at;
+                let autonomy_clone = autonomy;
 
                 tokio::spawn(async move {
                     let mut line_number: usize = 0;
@@ -1713,6 +1720,7 @@ impl Dispatcher {
                                             modified_file_count: modified_files_list.len(),
                                             diff_stat: run_diff_stat.clone(),
                                             started_at: run_started_at,
+                                            autonomy: autonomy_clone,
                                             ended_at: Some(chrono::Utc::now()),
                                         };
                                         let evt = AppEvent::RunCompleted {
@@ -1728,6 +1736,7 @@ impl Dispatcher {
                                             session_id,
                                             branch: branch_name_clone.clone(),
                                             mode,
+                                            autonomy: autonomy_clone,
                                             state: RunState::Completed { exit_code },
                                             prompt,
                                             provided_files: vec![],

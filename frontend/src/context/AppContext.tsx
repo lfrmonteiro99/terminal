@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, RepoStatus, RunMode, RunState, RunSummary, SessionSummary, StashEntry } from '../types/protocol';
+import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 
 // --- State ---
 
@@ -36,6 +36,14 @@ export interface AppState {
   commitHistory: CommitEntry[];
   explorerTree: Map<string, FileTreeEntry[]>;
   diffPanel: { open: boolean; mode: 'split' | 'overlay' | 'inline'; file: string | null; diff: string | null; stat: DiffStat | null };
+
+  // AI run structured events (TERMINAL-055)
+  /** Tool calls for the active run, keyed by tool_id. Cleared when a new run starts. */
+  runToolCalls: Map<string, ToolCall>;
+  /** Final metrics for the active/last run, populated when the result event arrives. */
+  runMetrics: RunMetrics | null;
+  /** Preflight error surfaced when the Claude binary is missing/unauthenticated. */
+  preflightError: PreflightError | null;
 }
 
 const initialState: AppState = {
@@ -71,6 +79,9 @@ const initialState: AppState = {
     diff: null,
     stat: null,
   },
+  runToolCalls: new Map(),
+  runMetrics: null,
+  preflightError: null,
 };
 
 // --- Actions ---
@@ -83,6 +94,7 @@ type Action =
   | { type: 'CLEAR_ERROR' }
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
+  | { type: 'DISMISS_PREFLIGHT' }
   | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
@@ -111,6 +123,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'DISMISS_DIRTY_WARNING':
       return { ...state, dirtyWarning: null };
+
+    case 'DISMISS_PREFLIGHT':
+      return { ...state, preflightError: null };
 
     case 'SET_SIDEBAR_VIEW':
       return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
@@ -171,14 +186,24 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, sessions };
         }
 
-        case 'RunStateChanged':
+        case 'RunStateChanged': {
+          // When a new run begins (or we're switching to a different run),
+          // clear per-run accumulated state so the UI doesn't show stale
+          // tool calls / metrics from an earlier run.
+          const switchingRun = state.activeRun !== event.run_id;
+          const startingFresh =
+            switchingRun && (event.new_state.type === 'Preparing' || event.new_state.type === 'Running');
           return {
             ...state,
             activeRun: event.run_id,
             runState: event.new_state,
-            // Clear blocking when transitioning back to Running
             blocking: event.new_state.type === 'Running' ? null : state.blocking,
+            runToolCalls: startingFresh ? new Map() : state.runToolCalls,
+            runMetrics: startingFresh ? null : state.runMetrics,
+            preflightError: startingFresh ? null : state.preflightError,
+            outputLines: startingFresh ? [] : state.outputLines,
           };
+        }
 
         case 'RunOutput': {
           const lines = [...state.outputLines, event.line];
@@ -340,6 +365,52 @@ function reducer(state: AppState, action: Action): AppState {
 
         case 'BranchChanged':
           return { ...state, repoStatus: state.repoStatus ? { ...state.repoStatus, branch: event.name } : null };
+
+        // --- AI run structured events (TERMINAL-055) ---
+
+        case 'RunToolUse': {
+          if (event.run_id !== state.activeRun) return state;
+          const next = new Map(state.runToolCalls);
+          next.set(event.tool_id, {
+            tool_id: event.tool_id,
+            tool_name: event.tool_name,
+            input_preview: event.tool_input_preview,
+            status: 'pending',
+          });
+          return { ...state, runToolCalls: next };
+        }
+
+        case 'RunToolResult': {
+          if (event.run_id !== state.activeRun) return state;
+          const existing = state.runToolCalls.get(event.tool_id);
+          if (!existing) return state;
+          const next = new Map(state.runToolCalls);
+          next.set(event.tool_id, {
+            ...existing,
+            status: event.is_error ? 'error' : 'ok',
+            result_preview: event.preview,
+          });
+          return { ...state, runToolCalls: next };
+        }
+
+        case 'RunMetrics': {
+          return {
+            ...state,
+            runMetrics: {
+              num_turns: event.num_turns,
+              cost_usd: event.cost_usd,
+              input_tokens: event.input_tokens,
+              output_tokens: event.output_tokens,
+            },
+          };
+        }
+
+        case 'RunPreflightFailed': {
+          return {
+            ...state,
+            preflightError: { reason: event.reason, suggestion: event.suggestion },
+          };
+        }
 
         default:
           return state;

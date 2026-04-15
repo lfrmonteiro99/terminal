@@ -19,7 +19,7 @@ use crate::parser::{ParseEvent, StreamParser};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use terminal_core::config::DaemonConfig;
-use terminal_core::models::RunMode;
+use terminal_core::models::{AutonomyLevel, RunMode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -72,8 +72,17 @@ pub enum RunnerEvent {
 /// What to pass to `claude --permission-mode`. Mirrors Claude Code's CLI.
 #[derive(Debug, Clone, Copy)]
 enum PermissionMode {
+    /// `--permission-mode bypassPermissions` + `--dangerously-skip-permissions`.
+    /// Claude executes every tool without prompting. Safe inside a worktree.
     BypassAll,
+    /// `--permission-mode acceptEdits`. Auto-approves Edit/Write; prompts for
+    /// Bash. Currently unused in the UI path (kept for potential Guided mode).
     AcceptEdits,
+    /// `--permission-mode plan`. Claude writes a plan without executing any
+    /// edits/bash. Powers the "ReviewPlan" autonomy level.
+    Plan,
+    /// `--permission-mode default`. Prompts for every tool. Not usable
+    /// headless; reserved for future interactive modes.
     Default,
 }
 
@@ -82,18 +91,27 @@ impl PermissionMode {
         match self {
             PermissionMode::BypassAll => "bypassPermissions",
             PermissionMode::AcceptEdits => "acceptEdits",
+            PermissionMode::Plan => "plan",
             PermissionMode::Default => "default",
         }
     }
 }
 
-/// Map `RunMode` to a permission strategy. Runs execute in an isolated
-/// worktree, so `Free` bypassing permissions is safe by construction.
-fn permission_mode_for(mode: &RunMode) -> PermissionMode {
-    match mode {
-        RunMode::Free => PermissionMode::BypassAll,
-        RunMode::Guided => PermissionMode::AcceptEdits,
-        RunMode::Strict => PermissionMode::Default,
+/// Translate the user-facing `AutonomyLevel` (paired with the legacy
+/// `RunMode` for edge cases) into the exact permission flags we pass to the
+/// Claude Code CLI. Autonomy takes priority; RunMode is only consulted when
+/// autonomy is `Autonomous` and the caller picked a non-default RunMode.
+fn permission_mode_for(mode: &RunMode, autonomy: AutonomyLevel) -> PermissionMode {
+    match autonomy {
+        AutonomyLevel::ReviewPlan => PermissionMode::Plan,
+        AutonomyLevel::Autonomous => match mode {
+            RunMode::Free => PermissionMode::BypassAll,
+            RunMode::Guided => PermissionMode::AcceptEdits,
+            // Strict + Autonomous shouldn't happen via the new UI, but if a
+            // legacy client sends it, fall back to the default permission
+            // mode rather than silently escalating privileges.
+            RunMode::Strict => PermissionMode::Default,
+        },
     }
 }
 
@@ -161,6 +179,7 @@ impl ClaudeRunner {
         run_id: Uuid,
         prompt: &str,
         mode: &RunMode,
+        autonomy: AutonomyLevel,
         working_dir: &Path,
     ) -> Result<(mpsc::Receiver<RunnerEvent>, mpsc::Sender<String>, Child), String> {
         // Reject empty / whitespace-only prompts before we touch the CLI.
@@ -169,7 +188,7 @@ impl ClaudeRunner {
             return Err("Cannot start run with empty prompt".into());
         }
 
-        let perm = permission_mode_for(mode);
+        let perm = permission_mode_for(mode, autonomy);
 
         // Headless JSONL stream. `--verbose` is required alongside
         // `--output-format stream-json` for Claude to emit every event.
@@ -341,16 +360,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn permission_mode_mapping_covers_all_run_modes() {
-        assert!(matches!(permission_mode_for(&RunMode::Free), PermissionMode::BypassAll));
-        assert!(matches!(permission_mode_for(&RunMode::Guided), PermissionMode::AcceptEdits));
-        assert!(matches!(permission_mode_for(&RunMode::Strict), PermissionMode::Default));
+    fn autonomous_run_modes_map_to_expected_permissions() {
+        assert!(matches!(
+            permission_mode_for(&RunMode::Free, AutonomyLevel::Autonomous),
+            PermissionMode::BypassAll
+        ));
+        assert!(matches!(
+            permission_mode_for(&RunMode::Guided, AutonomyLevel::Autonomous),
+            PermissionMode::AcceptEdits
+        ));
+        assert!(matches!(
+            permission_mode_for(&RunMode::Strict, AutonomyLevel::Autonomous),
+            PermissionMode::Default
+        ));
+    }
+
+    #[test]
+    fn review_plan_autonomy_forces_plan_mode_regardless_of_run_mode() {
+        for mode in [RunMode::Free, RunMode::Guided, RunMode::Strict] {
+            assert!(matches!(
+                permission_mode_for(&mode, AutonomyLevel::ReviewPlan),
+                PermissionMode::Plan
+            ));
+        }
     }
 
     #[test]
     fn permission_mode_cli_values_match_claude_cli() {
         assert_eq!(PermissionMode::BypassAll.cli_value(), "bypassPermissions");
         assert_eq!(PermissionMode::AcceptEdits.cli_value(), "acceptEdits");
+        assert_eq!(PermissionMode::Plan.cli_value(), "plan");
         assert_eq!(PermissionMode::Default.cli_value(), "default");
     }
 
@@ -370,7 +409,7 @@ mod tests {
         cfg.claude_binary = "echo".into();
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "", &RunMode::Free, Path::new("/tmp"))
+            .spawn(Uuid::new_v4(), "", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
     }
@@ -381,7 +420,7 @@ mod tests {
         cfg.claude_binary = "echo".into();
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "   \n\t  ", &RunMode::Free, Path::new("/tmp"))
+            .spawn(Uuid::new_v4(), "   \n\t  ", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
     }
