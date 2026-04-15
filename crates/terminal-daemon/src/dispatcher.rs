@@ -1440,6 +1440,36 @@ impl Dispatcher {
 
         drop(sessions); // Release lock before spawning
 
+        // Pre-flight: verify the Claude binary works before spawning a run.
+        // Surfaces "not installed / not authenticated" as a structured event
+        // instead of a cryptic spawn error that appears for ~1s and stops.
+        if let Err(pf) = self.context.runner.preflight().await {
+            self.broadcast(&AppEvent::RunPreflightFailed {
+                run_id,
+                reason: pf.reason.clone(),
+                suggestion: pf.suggestion.clone(),
+            });
+            self.broadcast(&AppEvent::RunFailed {
+                run_id,
+                error: pf.reason,
+                phase: FailPhase::Preflight,
+            });
+            // Persist the failure so it appears in run history.
+            let failed_run = Run {
+                state: RunState::Failed {
+                    error: pf.suggestion,
+                    phase: FailPhase::Preflight,
+                },
+                ended_at: Some(chrono::Utc::now()),
+                last_modified: chrono::Utc::now(),
+                ..run.clone()
+            };
+            if let Err(e) = self.context.persistence.save_run(&failed_run) {
+                warn!("failed to persist preflight-failed run {}: {}", run_id, e);
+            }
+            return;
+        }
+
         // Spawn claude process in actual_working_dir (worktree if git)
         match self.context.runner.spawn(run_id, &prompt, &mode, &actual_working_dir) {
             Ok((mut event_rx, stdin_tx, mut child)) => {
@@ -1521,24 +1551,112 @@ impl Dispatcher {
                                         };
                                         broadcast_event(&event_tx, &evt);
                                     }
-                                    Some(RunnerEvent::BlockingDetected(question)) => {
-                                        let evt = AppEvent::RunBlocking {
+                                    Some(RunnerEvent::AssistantText(text)) => {
+                                        // Assistant text is the "normal" model output
+                                        // that used to come out as raw stdout. Keep
+                                        // streaming it through RunOutput so existing
+                                        // UI continues to render it unchanged.
+                                        line_number += 1;
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                text.as_bytes(),
+                                            ).await;
+                                        }
+                                        let evt = AppEvent::RunOutput {
                                             run_id,
-                                            question: question.clone(),
-                                            context: vec![],
+                                            line: text.trim_end_matches('\n').to_string(),
+                                            line_number,
                                         };
                                         broadcast_event(&event_tx, &evt);
-                                        let state_evt = AppEvent::RunStateChanged {
-                                            run_id,
-                                            new_state: RunState::WaitingInput {
-                                                question,
-                                                context: vec![],
-                                            },
-                                        };
-                                        broadcast_event(&event_tx, &state_evt);
                                     }
-                                    Some(RunnerEvent::MalformedOutput { partial }) => {
-                                        warn!("Malformed output for run {}: {}", run_id, partial);
+                                    Some(RunnerEvent::ToolUse { id, name, input_preview }) => {
+                                        // Log as a text line for persistence + legacy UI,
+                                        // and emit a structured event for rich rendering.
+                                        line_number += 1;
+                                        let log_line = format!("▸ tool: {name} {input_preview}");
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                format!("{}\n", log_line).as_bytes(),
+                                            ).await;
+                                        }
+                                        let out_evt = AppEvent::RunOutput {
+                                            run_id,
+                                            line: log_line,
+                                            line_number,
+                                        };
+                                        broadcast_event(&event_tx, &out_evt);
+                                        let tool_evt = AppEvent::RunToolUse {
+                                            run_id,
+                                            tool_id: id,
+                                            tool_name: name,
+                                            tool_input_preview: input_preview,
+                                        };
+                                        broadcast_event(&event_tx, &tool_evt);
+                                    }
+                                    Some(RunnerEvent::ToolResult { tool_use_id, is_error, preview }) => {
+                                        line_number += 1;
+                                        let tag = if is_error { "error" } else { "ok" };
+                                        let log_line = format!("◂ tool result [{tag}]: {preview}");
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                format!("{}\n", log_line).as_bytes(),
+                                            ).await;
+                                        }
+                                        let out_evt = AppEvent::RunOutput {
+                                            run_id,
+                                            line: log_line,
+                                            line_number,
+                                        };
+                                        broadcast_event(&event_tx, &out_evt);
+                                        let result_evt = AppEvent::RunToolResult {
+                                            run_id,
+                                            tool_id: tool_use_id,
+                                            is_error,
+                                            preview,
+                                        };
+                                        broadcast_event(&event_tx, &result_evt);
+                                    }
+                                    Some(RunnerEvent::SessionInit { model, session_id }) => {
+                                        // Log session metadata as a single RunOutput
+                                        // line. No dedicated protocol event yet.
+                                        line_number += 1;
+                                        let log_line = format!(
+                                            "session init: model={} session_id={}",
+                                            model.as_deref().unwrap_or("?"),
+                                            session_id.as_deref().unwrap_or("?"),
+                                        );
+                                        if let Some(ref mut f) = output_file {
+                                            let _ = tokio::io::AsyncWriteExt::write_all(
+                                                f,
+                                                format!("{}\n", log_line).as_bytes(),
+                                            ).await;
+                                        }
+                                        let evt = AppEvent::RunOutput { run_id, line: log_line, line_number };
+                                        broadcast_event(&event_tx, &evt);
+                                    }
+                                    Some(RunnerEvent::Metrics { num_turns, cost_usd, input_tokens, output_tokens }) => {
+                                        let evt = AppEvent::RunMetrics {
+                                            run_id,
+                                            num_turns,
+                                            cost_usd,
+                                            input_tokens,
+                                            output_tokens,
+                                        };
+                                        broadcast_event(&event_tx, &evt);
+                                    }
+                                    Some(RunnerEvent::Preflight { reason, suggestion }) => {
+                                        // Runner shouldn't emit this at stream time
+                                        // (preflight runs before spawn), but forward
+                                        // defensively if it does.
+                                        let evt = AppEvent::RunPreflightFailed {
+                                            run_id,
+                                            reason,
+                                            suggestion,
+                                        };
+                                        broadcast_event(&event_tx, &evt);
                                     }
                                     Some(RunnerEvent::SpawnError(e)) => {
                                         let evt = AppEvent::RunFailed {

@@ -148,6 +148,7 @@ pub enum PauseReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FailPhase {
+    Preflight,
     Preparation,
     Execution,
     Parsing,
