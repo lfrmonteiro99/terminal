@@ -1,8 +1,8 @@
 use crate::models::{
-    BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase, FileChange, FileStatus,
-    FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot, RestorableTerminalSession,
-    RunMode, RunState, RunSummary, SearchMatch, SessionSummary, SshConfig, StashEntry,
-    TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
+    AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
+    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot,
+    RestorableTerminalSession, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
+    SshConfig, StashEntry, TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -30,6 +30,10 @@ pub enum AppCommand {
         mode: RunMode,
         #[serde(default)]
         skip_dirty_check: bool,
+        /// Autonomy level for this run (defaults to `Autonomous` if the
+        /// client omits the field — keeps legacy requests working).
+        #[serde(default)]
+        autonomy: AutonomyLevel,
     },
     CancelRun {
         run_id: Uuid,
@@ -236,6 +240,39 @@ pub enum AppEvent {
     },
     RunCancelled {
         run_id: Uuid,
+    },
+
+    // Structured stream events (Claude Code stream-json)
+    /// A tool invocation (Edit / Write / Bash / Read / Grep / ...) started.
+    /// `tool_input_preview` is a short one-line summary for UI display;
+    /// the full input is available in the raw output log.
+    RunToolUse {
+        run_id: Uuid,
+        tool_id: String,
+        tool_name: String,
+        tool_input_preview: String,
+    },
+    /// Result of a previously-announced tool invocation.
+    RunToolResult {
+        run_id: Uuid,
+        tool_id: String,
+        is_error: bool,
+        preview: String,
+    },
+    /// Usage metrics reported at run completion.
+    RunMetrics {
+        run_id: Uuid,
+        num_turns: u32,
+        cost_usd: f64,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    /// Claude binary is missing, unauthenticated, or otherwise unusable.
+    /// Emitted before any run is spawned.
+    RunPreflightFailed {
+        run_id: Uuid,
+        reason: String,
+        suggestion: String,
     },
 
     // Git results (Phase 2)
@@ -546,6 +583,109 @@ mod tests {
     }
 
     #[test]
+    fn start_run_with_autonomy_field_roundtrip() {
+        let cmd = AppCommand::StartRun {
+            session_id: Uuid::new_v4(),
+            prompt: "do the thing".into(),
+            mode: RunMode::Free,
+            skip_dirty_check: false,
+            autonomy: AutonomyLevel::ReviewPlan,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"autonomy\":\"ReviewPlan\""));
+        let back: AppCommand = serde_json::from_str(&json).unwrap();
+        match back {
+            AppCommand::StartRun { autonomy, .. } => {
+                assert_eq!(autonomy, AutonomyLevel::ReviewPlan);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn start_run_without_autonomy_defaults_to_autonomous() {
+        // Old client payload that predates the autonomy field.
+        let legacy_json = serde_json::json!({
+            "type": "StartRun",
+            "session_id": Uuid::new_v4(),
+            "prompt": "hi",
+            "mode": "Free",
+        })
+        .to_string();
+        let cmd: AppCommand = serde_json::from_str(&legacy_json).unwrap();
+        match cmd {
+            AppCommand::StartRun { autonomy, skip_dirty_check, .. } => {
+                assert_eq!(autonomy, AutonomyLevel::Autonomous);
+                assert!(!skip_dirty_check);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn run_tool_use_event_roundtrip() {
+        let evt = AppEvent::RunToolUse {
+            run_id: Uuid::new_v4(),
+            tool_id: "toolu_01".into(),
+            tool_name: "Edit".into(),
+            tool_input_preview: "src/main.rs".into(),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"RunToolUse\""));
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::RunToolUse { tool_name, .. } => assert_eq!(tool_name, "Edit"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn run_tool_result_event_roundtrip() {
+        let evt = AppEvent::RunToolResult {
+            run_id: Uuid::new_v4(),
+            tool_id: "toolu_01".into(),
+            is_error: false,
+            preview: "ok".into(),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn run_metrics_event_roundtrip() {
+        let evt = AppEvent::RunMetrics {
+            run_id: Uuid::new_v4(),
+            num_turns: 3,
+            cost_usd: 0.042,
+            input_tokens: 1000,
+            output_tokens: 500,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::RunMetrics { num_turns, cost_usd, input_tokens, output_tokens, .. } => {
+                assert_eq!(num_turns, 3);
+                assert!((cost_usd - 0.042).abs() < 1e-9);
+                assert_eq!(input_tokens, 1000);
+                assert_eq!(output_tokens, 500);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn run_preflight_failed_event_roundtrip() {
+        let evt = AppEvent::RunPreflightFailed {
+            run_id: Uuid::new_v4(),
+            reason: "claude binary not found".into(),
+            suggestion: "install Claude Code and ensure `claude` is on PATH".into(),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"RunPreflightFailed\""));
+        let _: AppEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
     fn run_merged_event_roundtrip() {
         let evt = AppEvent::RunMerged {
             run_id: Uuid::new_v4(),
@@ -578,6 +718,7 @@ mod tests {
                 }),
                 started_at: chrono::Utc::now(),
                 ended_at: Some(chrono::Utc::now()),
+                autonomy: AutonomyLevel::default(),
             },
             diff_stat: Some(DiffStat {
                 files_changed: 2,

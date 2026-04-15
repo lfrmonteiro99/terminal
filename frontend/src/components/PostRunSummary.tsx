@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Eye, Zap } from 'lucide-react';
 import { useAppState } from '../context/AppContext.tsx';
 
 interface PostRunSummaryProps {
@@ -6,6 +7,20 @@ interface PostRunSummaryProps {
   onGetDiff: (runId: string) => void;
   onMerge: (runId: string) => void;
   onRevert: (runId: string) => void;
+  /** Fired when the user approves a plan-mode run and wants to execute it. */
+  onApprovePlan?: (originalPrompt: string) => void;
+}
+
+function formatCost(usd: number): string {
+  if (usd === 0) return 'free';
+  if (usd < 0.01) return `<$0.01`;
+  return `$${usd.toFixed(usd < 1 ? 3 : 2)}`;
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 function formatDuration(startedAt: string, endedAt: string | null): string {
@@ -76,7 +91,7 @@ const mutedButton: React.CSSProperties = {
   color: 'var(--text-primary)',
 };
 
-export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunSummaryProps) {
+export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApprovePlan }: PostRunSummaryProps) {
   const state = useAppState();
   const [showDiff, setShowDiff] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
@@ -143,7 +158,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
       </div>
 
       {/* Duration and Exit Code */}
-      <div style={{ display: 'flex', gap: 24, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
           <div style={labelStyle}>Duration</div>
           <div>{formatDuration(run.started_at, run.ended_at)}</div>
@@ -169,7 +184,100 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert }: PostRunS
             {run.state.type}
           </div>
         </div>
+        {run.autonomy && (
+          <div>
+            <div style={labelStyle}>Mode</div>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                color: run.autonomy === 'ReviewPlan' ? 'var(--accent-info)' : 'var(--accent-primary)',
+                fontFamily: 'var(--font-display)',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {run.autonomy === 'ReviewPlan' ? <Eye size={12} strokeWidth={2} /> : <Zap size={12} strokeWidth={2} />}
+              {run.autonomy === 'ReviewPlan' ? 'Plan' : 'Autonomous'}
+            </div>
+          </div>
+        )}
+        {state.runMetrics && (
+          <>
+            <div>
+              <div style={labelStyle}>Turns</div>
+              <div style={{ fontFamily: 'var(--font-mono)' }}>{state.runMetrics.num_turns}</div>
+            </div>
+            <div>
+              <div style={labelStyle}>Cost</div>
+              <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-warn)' }}>
+                {formatCost(state.runMetrics.cost_usd)}
+              </div>
+            </div>
+            <div>
+              <div style={labelStyle}>Tokens</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>in </span>
+                {formatTokens(state.runMetrics.input_tokens)}
+                <span style={{ color: 'var(--text-muted)' }}> · </span>
+                <span style={{ color: 'var(--text-secondary)' }}>out </span>
+                {formatTokens(state.runMetrics.output_tokens)}
+              </div>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Approve & execute (plan runs only, when completed successfully) */}
+      {run.autonomy === 'ReviewPlan'
+        && run.state.type === 'Completed'
+        && exitCode === 0
+        && onApprovePlan && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: 12,
+              borderRadius: 8,
+              border: '1px solid rgba(var(--accent-primary-rgb), 0.35)',
+              background: 'var(--accent-primary-08)',
+              boxShadow: 'var(--glow-accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <Eye size={16} strokeWidth={2} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+            <div style={{ flex: 1, fontFamily: 'var(--font-display)', fontSize: 12, color: 'var(--text-primary)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Plan ready for review</div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                no files were modified — approve to run the same prompt autonomously
+              </div>
+            </div>
+            <button
+              onClick={() => onApprovePlan(run.prompt_preview)}
+              style={{
+                padding: '8px 14px',
+                background: 'var(--accent-primary)',
+                color: 'var(--bg-base)',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontFamily: 'var(--font-display)',
+                fontWeight: 700,
+                fontSize: 12,
+                letterSpacing: '0.02em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                boxShadow: 'var(--glow-accent-strong)',
+              }}
+            >
+              <Zap size={13} strokeWidth={2} />
+              Approve &amp; execute
+            </button>
+          </div>
+        )}
 
       {/* DiffStat */}
       <div style={sectionStyle}>

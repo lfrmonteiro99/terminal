@@ -453,6 +453,7 @@ mod tests {
             session_id,
             branch: "llm/test".into(),
             mode: RunMode::Free,
+            autonomy: terminal_core::models::AutonomyLevel::default(),
             state,
             prompt: "do something".into(),
             provided_files: vec![],

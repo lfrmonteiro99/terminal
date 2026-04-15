@@ -47,7 +47,8 @@ impl Default for DaemonConfig {
             data_dir: std::env::var("TERMINAL_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| home.join(".terminal-daemon")),
-            claude_binary: "claude".into(),
+            claude_binary: std::env::var("TERMINAL_CLAUDE_BINARY")
+                .unwrap_or_else(|_| "claude".into()),
         }
     }
 }
