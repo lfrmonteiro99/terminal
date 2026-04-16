@@ -276,7 +276,7 @@ impl PtyManager {
     }
 
     /// Resize the PTY window via TIOCSWINSZ ioctl on the master fd.
-    pub async fn resize(&self, session_id: Uuid, cols: u16, rows: u16) {
+    pub async fn resize(&self, session_id: Uuid, cols: u16, rows: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().await;
         if let Some(session) = sessions.get(&session_id) {
             let ws = nix::libc::winsize {
@@ -285,10 +285,16 @@ impl PtyManager {
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             };
-            unsafe {
-                nix::libc::ioctl(session.master_raw_fd, nix::libc::TIOCSWINSZ, &ws);
+            let rc = unsafe { nix::libc::ioctl(session.master_raw_fd, nix::libc::TIOCSWINSZ, &ws) };
+            if rc != 0 {
+                let err = std::io::Error::last_os_error();
+                tracing::warn!("PTY resize ioctl failed for session {}: {}", session_id, err);
+                return Err(format!("ioctl TIOCSWINSZ failed: {}", err));
             }
             info!("PTY session {} resized to {}x{}", session_id, cols, rows);
+            Ok(())
+        } else {
+            Err(format!("Session {} not found", session_id))
         }
     }
 

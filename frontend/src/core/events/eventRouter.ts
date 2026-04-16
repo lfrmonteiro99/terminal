@@ -106,14 +106,32 @@ export class EventRouter {
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'UPSERT_RUN', run: event.summary });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunFailed':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
+        break;
+      case 'RunToolUse':
+        dispatch({
+          type: 'APPEND_TOOL_CALL',
+          call: { tool_id: event.tool_id, tool_name: event.tool_name, input_preview: event.tool_input_preview, status: 'pending' },
+        });
+        break;
+      case 'RunToolResult':
+        dispatch({ type: 'UPDATE_TOOL_RESULT', toolId: event.tool_id, isError: event.is_error, preview: event.preview });
+        break;
+      case 'RunMetrics':
+        dispatch({
+          type: 'SET_RUN_METRICS',
+          metrics: { num_turns: event.num_turns, cost_usd: event.cost_usd, input_tokens: event.input_tokens, output_tokens: event.output_tokens },
+        });
         break;
       case 'RunCancelled':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunList':
         dispatch({ type: 'SET_RUNS', runs: event.runs });
@@ -150,9 +168,6 @@ export class EventRouter {
       case 'FileDiffResult':
         dispatch({ type: 'SET_DIFF_CONTENT', file: event.file_path, diff: event.diff, stat: event.stat });
         break;
-      case 'RepoStatusResult':
-        dispatch({ type: 'SET_REPO_STATUS', status: event.status });
-        break;
       case 'CommitHistoryResult':
         dispatch({ type: 'SET_COMMIT_HISTORY', commits: event.commits });
         break;
@@ -182,6 +197,44 @@ export class EventRouter {
         break;
       case 'ConflictResolved':
         dispatch({ type: 'REMOVE_CONFLICT', filePath: event.file_path });
+        break;
+      case 'RestorableTerminalSessions':
+        dispatch({ type: 'SET_RESTORABLE_SESSIONS', sessions: event.sessions });
+        break;
+      case 'TerminalSessionRestored':
+        dispatch({ type: 'REMOVE_RESTORABLE_SESSION', sessionId: event.previous_session_id });
+        dispatch({
+          type: 'ADD_TERMINAL_SESSION',
+          session: {
+            session_id: event.new_session_id,
+            workspace_id: event.workspace_id,
+            shell: '',
+            cwd: event.cwd,
+            created_at: new Date().toISOString(),
+            last_active_at: new Date().toISOString(),
+          },
+        });
+        break;
+      case 'TerminalSessionRestoreFailed':
+        dispatch({ type: 'SET_GIT_ERROR', error: `Restore failed: ${event.reason}` });
+        break;
+      case 'RepoStatusResult':
+        dispatch({ type: 'SET_REPO_STATUS', status: event.status });
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: 'refresh' });
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: 'commit' });
+        break;
+      case 'CommitCreated':
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: 'commit' });
+        break;
+      case 'PushCompleted':
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: 'push' });
+        break;
+      case 'PullCompleted':
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: 'pull' });
+        break;
+      case 'GitOperationFailed':
+        dispatch({ type: 'SET_GIT_ERROR', error: `${event.operation} failed: ${event.reason}` });
+        dispatch({ type: 'GIT_IN_FLIGHT_REMOVE', key: event.operation });
         break;
     }
   }

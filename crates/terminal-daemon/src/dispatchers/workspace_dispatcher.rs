@@ -1,6 +1,6 @@
 // Workspace domain dispatcher (M1-04, M1-05)
 
-use crate::daemon_context::DaemonContext;
+use crate::daemon_context::{ClientId, DaemonContext};
 use std::sync::Arc;
 use terminal_core::models::{PaneLayout, Workspace, WorkspaceSummary};
 use terminal_core::protocol::v1::{AppCommand, AppEvent};
@@ -17,7 +17,8 @@ impl WorkspaceDispatcher {
         Self { ctx }
     }
 
-    pub async fn handle(&self, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+    pub async fn handle(&self, client_id: ClientId, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+        let _ = client_id; // used in ActivateWorkspace; suppressed for others
         match cmd {
             AppCommand::ListWorkspaces => {
                 let workspaces = self.ctx.workspaces.lock().await;
@@ -87,7 +88,7 @@ impl WorkspaceDispatcher {
             AppCommand::ActivateWorkspace { workspace_id } => {
                 let exists = self.ctx.workspaces.lock().await.contains_key(&workspace_id);
                 if exists {
-                    *self.ctx.active_workspace_id.lock().await = Some(workspace_id);
+                    self.ctx.active_workspace_ids.lock().await.insert(client_id, workspace_id);
                     self.ctx.broadcast(&AppEvent::WorkspaceActivated { workspace_id });
                     let _ = reply_tx
                         .send(AppEvent::WorkspaceActivated { workspace_id })

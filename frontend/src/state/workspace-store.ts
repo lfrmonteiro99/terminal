@@ -7,12 +7,15 @@ import type {
   FileChange,
   FileTreeEntry,
   MergeConflictFile,
+  RunMetrics,
   RunMode,
   RunState,
   RunSummary,
   StashEntry,
+  TerminalSessionSummary,
+  ToolCall,
+  RestorableTerminalSession,
 } from '../types/protocol';
-import type { TerminalSessionSummary } from '../types/protocol';
 
 export interface WorkspaceStore {
   workspaceId: string;
@@ -52,6 +55,17 @@ export interface WorkspaceStore {
 
   // Merge conflicts (M5-05)
   mergeConflicts: MergeConflictFile[];
+
+  // Run metrics and tool calls (M10)
+  runMetrics: RunMetrics | null;
+  runToolCalls: ToolCall[];
+
+  // Restorable terminal sessions (C4c)
+  restorableSessions: RestorableTerminalSession[];
+
+  // In-flight git operations (M9) — key: 'stage:<path>' | 'commit' | 'push' | 'pull' | 'refresh'
+  gitInFlight: Set<string>;
+  gitError: string | null;
 }
 
 export interface RepoStatus {
@@ -97,6 +111,11 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     },
     terminalSessions: new Map(),
     mergeConflicts: [],
+    runMetrics: null,
+    runToolCalls: [],
+    restorableSessions: [],
+    gitInFlight: new Set(),
+    gitError: null,
   };
 }
 
@@ -135,7 +154,16 @@ export type WorkspaceAction =
   | { type: 'REMOVE_TERMINAL_SESSION'; sessionId: string }
   | { type: 'SET_TERMINAL_SESSIONS'; sessions: TerminalSessionSummary[] }
   | { type: 'SET_MERGE_CONFLICTS'; files: MergeConflictFile[] }
-  | { type: 'REMOVE_CONFLICT'; filePath: string };
+  | { type: 'REMOVE_CONFLICT'; filePath: string }
+  | { type: 'SET_RUN_METRICS'; metrics: RunMetrics }
+  | { type: 'APPEND_TOOL_CALL'; call: ToolCall }
+  | { type: 'UPDATE_TOOL_RESULT'; toolId: string; isError: boolean; preview: string }
+  | { type: 'CLEAR_RUN_METRICS' }
+  | { type: 'SET_RESTORABLE_SESSIONS'; sessions: RestorableTerminalSession[] }
+  | { type: 'REMOVE_RESTORABLE_SESSION'; sessionId: string }
+  | { type: 'GIT_IN_FLIGHT_ADD'; key: string }
+  | { type: 'GIT_IN_FLIGHT_REMOVE'; key: string }
+  | { type: 'SET_GIT_ERROR'; error: string | null };
 
 export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction): WorkspaceStore {
   switch (action.type) {
@@ -291,6 +319,48 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
         ...state,
         mergeConflicts: state.mergeConflicts.filter((f) => f.path !== action.filePath),
       };
+
+    case 'SET_RUN_METRICS':
+      return { ...state, runMetrics: action.metrics };
+
+    case 'APPEND_TOOL_CALL':
+      return { ...state, runToolCalls: [...state.runToolCalls, action.call] };
+
+    case 'UPDATE_TOOL_RESULT': {
+      const runToolCalls = state.runToolCalls.map((tc) =>
+        tc.tool_id === action.toolId
+          ? { ...tc, status: action.isError ? 'error' as const : 'ok' as const, result_preview: action.preview }
+          : tc,
+      );
+      return { ...state, runToolCalls };
+    }
+
+    case 'CLEAR_RUN_METRICS':
+      return { ...state, runMetrics: null, runToolCalls: [] };
+
+    case 'SET_RESTORABLE_SESSIONS':
+      return { ...state, restorableSessions: action.sessions };
+
+    case 'REMOVE_RESTORABLE_SESSION':
+      return {
+        ...state,
+        restorableSessions: state.restorableSessions.filter((s) => s.session_id !== action.sessionId),
+      };
+
+    case 'GIT_IN_FLIGHT_ADD': {
+      const gitInFlight = new Set(state.gitInFlight);
+      gitInFlight.add(action.key);
+      return { ...state, gitInFlight };
+    }
+
+    case 'GIT_IN_FLIGHT_REMOVE': {
+      const gitInFlight = new Set(state.gitInFlight);
+      gitInFlight.delete(action.key);
+      return { ...state, gitInFlight };
+    }
+
+    case 'SET_GIT_ERROR':
+      return { ...state, gitError: action.error };
 
     default:
       return state;

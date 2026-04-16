@@ -77,6 +77,11 @@ pub enum AppCommand {
         stash_message: String,
     },
 
+    // Stash mutations (M4)
+    PopStash { index: usize },
+    ApplyStash { index: usize },
+    DropStash { index: usize },
+
     // Branch operations
     ListBranches,
 
@@ -306,6 +311,8 @@ pub enum AppEvent {
         diff: String,
         stat: Option<DiffStat>,
     },
+    StashApplied { index: usize, had_conflicts: bool },
+    StashDropped { index: usize },
     DirtyState {
         status: DirtyStatus,
     },
@@ -1058,5 +1065,68 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"type\":\"PushBranch\""));
         let _: AppCommand = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn pop_stash_command_roundtrip() {
+        let cmd = AppCommand::PopStash { index: 1 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"PopStash\""));
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::PopStash { index } => assert_eq!(index, 1),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn apply_stash_command_roundtrip() {
+        let cmd = AppCommand::ApplyStash { index: 2 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"ApplyStash\""));
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::ApplyStash { index } => assert_eq!(index, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn drop_stash_command_roundtrip() {
+        let cmd = AppCommand::DropStash { index: 0 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"DropStash\""));
+        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppCommand::DropStash { index } => assert_eq!(index, 0),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn stash_applied_event_roundtrip() {
+        let evt = AppEvent::StashApplied { index: 1, had_conflicts: true };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"StashApplied\""));
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::StashApplied { index, had_conflicts } => {
+                assert_eq!(index, 1);
+                assert!(had_conflicts);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn stash_dropped_event_roundtrip() {
+        let evt = AppEvent::StashDropped { index: 3 };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"StashDropped\""));
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            AppEvent::StashDropped { index } => assert_eq!(index, 3),
+            _ => panic!("wrong variant"),
+        }
     }
 }

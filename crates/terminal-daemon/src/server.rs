@@ -1,3 +1,4 @@
+use crate::daemon_context::ClientId;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -16,7 +17,7 @@ use tracing::{error, info, warn};
 pub struct DaemonState {
     pub auth_token: String,
     pub event_tx: broadcast::Sender<String>,
-    pub command_tx: mpsc::Sender<(AppCommand, mpsc::Sender<AppEvent>)>,
+    pub command_tx: mpsc::Sender<(ClientId, AppCommand, mpsc::Sender<AppEvent>)>,
 }
 
 pub fn build_router(state: Arc<DaemonState>) -> Router {
@@ -40,8 +41,9 @@ fn event_json(event: &AppEvent) -> String {
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
+    let client_id = ClientId::new();
     let (mut sender, mut receiver) = socket.split();
-    info!("New WebSocket connection, awaiting auth...");
+    info!("New WebSocket connection ({:?}), awaiting auth...", client_id);
 
     // Step 1: Auth handshake — first message must be Auth command
     let authed = match tokio::time::timeout(
@@ -168,7 +170,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                     }
                     Ok(cmd) => {
                         let cmd = cmd.sanitize();
-                        if let Err(e) = state.command_tx.send((cmd, response_tx.clone())).await {
+                        if let Err(e) = state.command_tx.send((client_id, cmd, response_tx.clone())).await {
                             error!("Failed to forward command: {}", e);
                         }
                     }
@@ -216,7 +218,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel::<String>(16);
         // command_tx that simply drops all messages
         let (command_tx, _command_rx) =
-            mpsc::channel::<(AppCommand, mpsc::Sender<AppEvent>)>(16);
+            mpsc::channel::<(ClientId, AppCommand, mpsc::Sender<AppEvent>)>(16);
 
         let state = Arc::new(DaemonState {
             auth_token: token.clone(),

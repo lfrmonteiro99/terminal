@@ -13,6 +13,7 @@ function NavButton({ onClick, title, children }: { onClick: () => void; title: s
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       title={title}
+      aria-label={title}
       style={{
         width: 28,
         height: 28,

@@ -12,6 +12,17 @@ use terminal_core::protocol::v1::AppEvent;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use uuid::Uuid;
 
+/// Opaque identifier for a connected WebSocket client.
+/// Generated per-connection in server.rs and threaded through the command channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClientId(pub Uuid);
+
+impl ClientId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
 /// Internal state for tracking active runs.
 pub struct ActiveRun {
     #[allow(dead_code)]
@@ -32,8 +43,8 @@ pub struct DaemonContext {
     pub runner: Arc<ClaudeRunner>,
     /// Workspaces registry (M1-05)
     pub workspaces: Arc<Mutex<HashMap<Uuid, Workspace>>>,
-    /// Active workspace id per client (simplified: global for now)
-    pub active_workspace_id: Arc<Mutex<Option<Uuid>>>,
+    /// Active workspace id per client (keyed by ClientId)
+    pub active_workspace_ids: Arc<Mutex<HashMap<ClientId, Uuid>>>,
     /// Workspace-scoped broadcast channels (M1-05)
     pub workspace_channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
 }
@@ -54,7 +65,7 @@ impl DaemonContext {
             concurrency: Arc::new(Mutex::new(HashMap::new())),
             runner,
             workspaces: Arc::new(Mutex::new(HashMap::new())),
-            active_workspace_id: Arc::new(Mutex::new(None)),
+            active_workspace_ids: Arc::new(Mutex::new(HashMap::new())),
             workspace_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }

@@ -61,18 +61,44 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
   const send = useSend();
   const state = useAppState();
   const [hoverPath, setHoverPath] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [stagingPath, setStagingPath] = useState<string | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
 
   useEffect(() => {
     send({ type: 'GetRepoStatus' });
     send({ type: 'GetChangedFiles', mode: 'working' });
   }, [send]);
 
+  // Clear error when new status arrives and pick up git errors from global state
+  useEffect(() => {
+    if (state.repoStatus) setRefreshing(false);
+  }, [state.repoStatus]);
+
+  // Surface GitOperationFailed from global error state
+  useEffect(() => {
+    if (state.error?.includes('failed:')) {
+      setGitError(state.error);
+      setStagingPath(null);
+    }
+  }, [state.error]);
+
   const files = state.changedFiles?.files ?? [];
   const repoStatus = state.repoStatus;
 
   const refresh = () => {
+    setRefreshing(true);
+    setGitError(null);
     send({ type: 'GetRepoStatus' });
     send({ type: 'GetChangedFiles', mode: 'working' });
+  };
+
+  const handleStage = (path: string) => {
+    setStagingPath(path);
+    setGitError(null);
+    send({ type: 'StageFile', path });
+    // Clear staging indicator when status refreshes
+    setTimeout(() => setStagingPath(null), 3000);
   };
 
   return (
@@ -86,6 +112,32 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
         color: 'var(--text-primary)',
       }}
     >
+      {/* Error banner */}
+      {gitError && (
+        <div
+          role="alert"
+          style={{
+            padding: '6px 12px',
+            backgroundColor: 'rgba(var(--accent-error-rgb), 0.12)',
+            borderBottom: '1px solid rgba(var(--accent-error-rgb), 0.3)',
+            color: 'var(--accent-error)',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>{gitError}</span>
+          <button
+            onClick={() => setGitError(null)}
+            aria-label="Dismiss error"
+            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px', fontSize: 14, lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div
         style={{
@@ -119,6 +171,8 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
         <button
           onClick={refresh}
           title="Refresh"
+          aria-label="Refresh repository status"
+          disabled={refreshing}
           style={{
             marginLeft: 'auto',
             display: 'inline-flex',
@@ -126,28 +180,31 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
             gap: 4,
             background: 'transparent',
             border: '1px solid var(--border-default)',
-            color: 'var(--text-muted)',
+            color: refreshing ? 'var(--accent-primary)' : 'var(--text-muted)',
             borderRadius: 5,
             padding: '3px 9px',
-            cursor: 'pointer',
+            cursor: refreshing ? 'wait' : 'pointer',
             fontFamily: 'var(--font-display)',
             fontSize: 11,
             fontWeight: 500,
             transition: 'color 140ms, border-color 140ms, background 140ms',
+            opacity: refreshing ? 0.7 : 1,
           }}
           onMouseEnter={(e) => {
+            if (refreshing) return;
             e.currentTarget.style.color = 'var(--accent-primary)';
             e.currentTarget.style.borderColor = 'var(--accent-primary)';
             e.currentTarget.style.background = 'var(--accent-primary-08)';
           }}
           onMouseLeave={(e) => {
+            if (refreshing) return;
             e.currentTarget.style.color = 'var(--text-muted)';
             e.currentTarget.style.borderColor = 'var(--border-default)';
             e.currentTarget.style.background = 'transparent';
           }}
         >
-          <RotateCw size={11} strokeWidth={1.75} />
-          Refresh
+          <RotateCw size={11} strokeWidth={1.75} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+          {refreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
@@ -192,29 +249,32 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
                   {pathStr}
                 </span>
                 <button
-                  onClick={() => send({ type: 'StageFile', path: pathStr })}
+                  onClick={() => handleStage(pathStr)}
+                  aria-label={`Stage ${pathStr}`}
+                  disabled={stagingPath === pathStr}
                   style={{
                     background: 'transparent',
                     border: '1px solid var(--accent-primary)',
                     color: 'var(--accent-primary)',
                     borderRadius: 4,
                     padding: '2px 10px',
-                    cursor: 'pointer',
+                    cursor: stagingPath === pathStr ? 'wait' : 'pointer',
                     fontFamily: 'var(--font-display)',
                     fontSize: 10,
                     fontWeight: 600,
                     letterSpacing: '0.02em',
-                    opacity: isHover ? 1 : 0.7,
+                    opacity: stagingPath === pathStr ? 0.5 : (isHover ? 1 : 0.7),
                     transition: 'opacity 120ms, background 120ms',
                   }}
                   onMouseEnter={(e) => {
+                    if (stagingPath === pathStr) return;
                     e.currentTarget.style.background = 'var(--accent-primary-08)';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = 'transparent';
                   }}
                 >
-                  Stage
+                  {stagingPath === pathStr ? '...' : 'Stage'}
                 </button>
               </div>
             );
@@ -223,7 +283,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
       </div>
 
       {/* Commit bar */}
-      <CommitBar onCommit={(msg) => send({ type: 'CreateCommit', message: msg })} />
+      <CommitBar onCommit={(msg) => { setGitError(null); send({ type: 'CreateCommit', message: msg }); }} />
     </div>
   );
 }
@@ -231,6 +291,7 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
 function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
   const [msg, setMsg] = React.useState('');
   const [focused, setFocused] = React.useState(false);
+  const [committing, setCommitting] = React.useState(false);
 
   return (
     <div
@@ -247,8 +308,10 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
         onChange={(e) => setMsg(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && msg.trim()) { onCommit(msg.trim()); setMsg(''); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && msg.trim() && !committing) { setCommitting(true); onCommit(msg.trim()); setMsg(''); setTimeout(() => setCommitting(false), 3000); } }}
         placeholder="commit message..."
+        aria-label="Commit message"
+        disabled={committing}
         style={{
           flex: 1,
           backgroundColor: 'var(--bg-raised)',
@@ -264,8 +327,9 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
         }}
       />
       <button
-        onClick={() => { if (msg.trim()) { onCommit(msg.trim()); setMsg(''); } }}
-        disabled={!msg.trim()}
+        onClick={() => { if (msg.trim() && !committing) { setCommitting(true); onCommit(msg.trim()); setMsg(''); setTimeout(() => setCommitting(false), 3000); } }}
+        disabled={!msg.trim() || committing}
+        aria-label="Create commit"
         style={{
           backgroundColor: msg.trim() ? 'var(--accent-primary)' : 'var(--bg-overlay)',
           color: msg.trim() ? 'var(--bg-base)' : 'var(--text-muted)',

@@ -119,10 +119,10 @@ Key domain groups:
 
 | Milestone | Issues | Status |
 |-----------|--------|--------|
-| M1 Foundation | #12, #15, #19, #24, #28 | ✅ Implemented |
+| M1 Foundation | #12, #15, #19, #24, #28 | ⚠️ Partial (#24 per-client workspace tracking pending #99) |
 | M2 Panes | #10, #11, #13, #18, #22 | ✅ Implemented |
 | M3 Modes | #14, #16, #17 | ✅ Implemented |
-| M4 Terminal | #20, #21, #23, #26, #27, #38 | ✅ Implemented |
+| M4 Terminal | #20, #21, #23, #26, #27, #38 | ⚠️ Partial (#38 restore affordance pending #96) |
 | M5 Git | #25, #29, #30, #36, #37 | ✅ Implemented |
 | M6 Browser | #31, #32 | ✅ Implemented |
 | M7 Polish | #33, #34, #35 | ✅ Implemented |

@@ -508,6 +508,35 @@ pub async fn stash_push(cwd: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Apply a stash by index (git stash apply stash@{N}).
+pub async fn stash_apply(cwd: &Path, index: usize) -> Result<bool> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "apply", &stash_ref]).await;
+    match output {
+        Ok(_) => Ok(false), // no conflicts
+        Err(GitError::CommandFailed(msg)) if msg.contains("CONFLICT") => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// Pop a stash by index (git stash pop stash@{N}).
+pub async fn stash_pop(cwd: &Path, index: usize) -> Result<bool> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "pop", &stash_ref]).await;
+    match output {
+        Ok(_) => Ok(false), // no conflicts
+        Err(GitError::CommandFailed(msg)) if msg.contains("CONFLICT") => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// Drop a stash by index (git stash drop stash@{N}).
+pub async fn stash_drop(cwd: &Path, index: usize) -> Result<()> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    run_git(cwd, &["stash", "drop", &stash_ref]).await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar operations (Phase 3)
 // ---------------------------------------------------------------------------
@@ -666,7 +695,7 @@ pub async fn working_dir_file_diff(cwd: &Path, file_path: &Path) -> Result<Strin
 pub async fn push_branch(cwd: &Path, remote: &str, branch: &str) -> Result<String> {
     validate_git_ref(remote).map_err(GitError::CommandFailed)?;
     validate_git_ref(branch).map_err(GitError::CommandFailed)?;
-    let output = run_git(cwd, &["push", remote, branch]).await?;
+    let _output = run_git(cwd, &["push", remote, branch]).await?;
     let actual_branch = current_branch(cwd).await?.unwrap_or_else(|| branch.to_string());
     Ok(actual_branch)
 }
@@ -677,13 +706,13 @@ pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Resu
     if let Some(b) = branch {
         validate_git_ref(b).map_err(GitError::CommandFailed)?;
     }
-    let before_head = head_oid(cwd).await.unwrap_or_default();
+    let before_head = head_oid(cwd).await?;
     if let Some(b) = branch {
         run_git(cwd, &["pull", remote, b]).await?;
     } else {
         run_git(cwd, &["pull", remote]).await?;
     }
-    let after_head = head_oid(cwd).await.unwrap_or_default();
+    let after_head = head_oid(cwd).await?;
     if before_head == after_head {
         return Ok(0);
     }
@@ -706,7 +735,8 @@ pub async fn list_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictFile>> 
     let mut conflicts = Vec::new();
     for line in output.lines() {
         let path = std::path::PathBuf::from(line.trim());
-        let content = std::fs::read_to_string(cwd.join(&path)).unwrap_or_default();
+        let content = std::fs::read_to_string(cwd.join(&path))
+            .map_err(|e| GitError::CommandFailed(format!("Cannot read conflict file {:?}: {}", path, e)))?;
         // Parse ours / theirs from conflict markers
         let (ours, theirs) = parse_conflict_sections(&content);
         conflicts.push(MergeConflictFile { path, ours, theirs, base: None });

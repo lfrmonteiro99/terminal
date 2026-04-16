@@ -185,6 +185,15 @@ export interface SessionSummary {
   started_at: string;
 }
 
+// --- SSH Config ---
+
+export interface SshConfig {
+  host: string;
+  port: number;
+  username: string;
+  identity_file?: string;
+}
+
 // --- Commands (Client -> Daemon) ---
 
 export type AppCommand =
@@ -207,6 +216,9 @@ export type AppCommand =
   | { type: 'GetStashFiles'; stash_index: number }
   | { type: 'GetStashDiff'; stash_index: number; file_path: string | null }
   | { type: 'CheckDirtyState' }
+  | { type: 'PopStash'; index: number }
+  | { type: 'ApplyStash'; index: number }
+  | { type: 'DropStash'; index: number }
   | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string }
   // Phase 3: Sidebar commands
   | { type: 'ListDirectory'; path: string }
@@ -226,7 +238,7 @@ export type AppCommand =
   | { type: 'CloseWorkspace'; workspace_id: string }
   | { type: 'ActivateWorkspace'; workspace_id: string }
   // PTY commands (M4-01)
-  | { type: 'CreateTerminalSession'; workspace_id: string; shell?: string; cwd?: string; env?: [string, string][] }
+  | { type: 'CreateTerminalSession'; workspace_id: string; shell?: string; cwd?: string; env?: [string, string][]; ssh?: SshConfig }
   | { type: 'CloseTerminalSession'; session_id: string }
   | { type: 'WriteTerminalInput'; session_id: string; data: string }
   | { type: 'ResizeTerminal'; session_id: string; cols: number; rows: number }
@@ -283,6 +295,8 @@ export type AppEvent =
   | { type: 'StashList'; stashes: StashEntry[] }
   | { type: 'StashFiles'; stash_index: number; files: FileChange[] }
   | { type: 'StashDiff'; stash_index: number; diff: string; stat: DiffStat | null }
+  | { type: 'StashApplied'; index: number; had_conflicts: boolean }
+  | { type: 'StashDropped'; index: number }
   | { type: 'DirtyState'; status: DirtyStatus }
   | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode }
   // Phase 3: Sidebar events

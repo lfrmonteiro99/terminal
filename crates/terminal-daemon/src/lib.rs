@@ -10,6 +10,7 @@ pub mod safety;
 pub mod search_engine;
 pub mod server;
 
+use crate::daemon_context::ClientId;
 use crate::persistence::Persistence;
 use dispatcher::Dispatcher;
 use rand::Rng;
@@ -66,8 +67,9 @@ pub async fn start_server(
     // Event broadcast channel
     let (event_tx, _) = broadcast::channel::<String>(256);
 
-    // Command channel (from WS clients to dispatcher)
-    let (command_tx, mut command_rx) = mpsc::channel(64);
+    // Command channel (from WS clients to dispatcher) — (ClientId, command, reply)
+    let (command_tx, mut command_rx) =
+        mpsc::channel::<(ClientId, terminal_core::protocol::v1::AppCommand, mpsc::Sender<terminal_core::protocol::v1::AppEvent>)>(64);
 
     let state = Arc::new(DaemonState {
         auth_token: token.clone(),
@@ -114,8 +116,8 @@ pub async fn start_server(
         persistence.clone(),
     ));
     tokio::spawn(async move {
-        while let Some((cmd, reply_tx)) = command_rx.recv().await {
-            dispatcher.handle(cmd, reply_tx).await;
+        while let Some((client_id, cmd, reply_tx)) = command_rx.recv().await {
+            dispatcher.handle(client_id, cmd, reply_tx).await;
         }
     });
 
