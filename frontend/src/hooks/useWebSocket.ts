@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppCommand, AppEvent } from '../types/protocol';
+import { debug } from '../util/log';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
@@ -19,20 +20,20 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
     if (!url) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    console.log('[WS] Connecting to', url);
+    debug('[WS] Connecting to', url);
     setStatus('connecting');
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('[WS] Connected, sending auth');
+      debug('[WS] Connected, sending auth');
       setStatus('authenticating');
       ws.send(JSON.stringify({ type: 'Auth', token }));
     };
 
     ws.onmessage = (event) => {
-      if (import.meta.env.DEV && !event.data.includes('TerminalOutput')) {
-        console.log('[WS] Received:', event.data);
+      if (!event.data.includes('TerminalOutput')) {
+        debug('[WS] Received:', event.data);
       }
       try {
         const data: AppEvent = JSON.parse(event.data);
@@ -52,7 +53,7 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
     };
 
     ws.onclose = (ev) => {
-      console.log('[WS] Closed:', ev.code, ev.reason);
+      debug('[WS] Closed:', ev.code, ev.reason);
       setStatus('disconnected');
       wsRef.current = null;
       // Auto-reconnect after 3s (only if url is valid)

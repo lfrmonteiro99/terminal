@@ -12,7 +12,7 @@ use terminal_core::protocol::v1::AppEvent;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc, Mutex};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 use crate::safety::broadcast_event;
 
@@ -276,20 +276,28 @@ impl PtyManager {
     }
 
     /// Resize the PTY window via TIOCSWINSZ ioctl on the master fd.
-    pub async fn resize(&self, session_id: Uuid, cols: u16, rows: u16) {
+    pub async fn resize(&self, session_id: Uuid, cols: u16, rows: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(&session_id) {
-            let ws = nix::libc::winsize {
-                ws_row: rows,
-                ws_col: cols,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            };
-            unsafe {
-                nix::libc::ioctl(session.master_raw_fd, nix::libc::TIOCSWINSZ, &ws);
-            }
-            info!("PTY session {} resized to {}x{}", session_id, cols, rows);
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("session not found: {}", session_id))?;
+
+        let ws = nix::libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        let rc = unsafe { nix::libc::ioctl(session.master_raw_fd, nix::libc::TIOCSWINSZ, &ws) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            warn!("PTY session {} resize failed: {}", session_id, err);
+            return Err(format!("ioctl TIOCSWINSZ failed: {}", err));
         }
+
+        info!("PTY session {} resized to {}x{}", session_id, cols, rows);
+        Ok(())
     }
 
     /// Close a PTY session.

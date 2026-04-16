@@ -3,7 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
-    FailPhase, Run, RunState, Session, TerminalSessionMeta, WorktreeMeta,
+    FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta, Workspace,
+    WorktreeMeta,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -38,6 +39,7 @@ impl Persistence {
         fs::create_dir_all(base_dir.join("runs"))?;
         fs::create_dir_all(base_dir.join("worktrees"))?;
         fs::create_dir_all(base_dir.join("terminals"))?;
+        fs::create_dir_all(base_dir.join("workspaces"))?;
         Ok(Self { base_dir })
     }
 
@@ -103,6 +105,65 @@ impl Persistence {
             fs::remove_file(&path)?;
         }
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspaces
+    // -----------------------------------------------------------------------
+
+    pub fn save_workspace(&self, ws: &Workspace) -> Result<()> {
+        let path = self.base_dir.join("workspaces").join(format!("{}.json", ws.id));
+        let data = serde_json::to_string_pretty(ws)?;
+        Self::atomic_write(&path, data.as_bytes())
+    }
+
+    pub fn load_workspace(&self, id: Uuid) -> Result<Option<Workspace>> {
+        let path = self.base_dir.join("workspaces").join(format!("{}.json", id));
+        match fs::read_to_string(&path) {
+            Ok(data) => {
+                let ws: Workspace = serde_json::from_str(&data)?;
+                Ok(Some(ws))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<Workspace>> {
+        let dir = self.base_dir.join("workspaces");
+        let mut workspaces = Vec::new();
+
+        if !dir.exists() {
+            return Ok(workspaces);
+        }
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<Workspace>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(ws) => workspaces.push(ws),
+                Err(e) => {
+                    warn!("Failed to parse workspace file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        Ok(workspaces)
+    }
+
+    pub fn delete_workspace(&self, id: Uuid) -> Result<()> {
+        let path = self.base_dir.join("workspaces").join(format!("{}.json", id));
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -380,6 +441,21 @@ impl Persistence {
             }
         }
         Ok(metas)
+    }
+
+    pub fn list_terminal_sessions(&self, workspace_id: Uuid) -> Result<Vec<RestorableTerminalSession>> {
+        let metas = self.list_terminal_metas()?;
+        let sessions: Vec<RestorableTerminalSession> = metas
+            .into_iter()
+            .filter(|m| m.workspace_id == workspace_id)
+            .map(|m| RestorableTerminalSession {
+                session_id: m.session_id,
+                pane_id: m.pane_id,
+                cwd: m.cwd,
+                last_active_at: m.last_active_at,
+            })
+            .collect();
+        Ok(sessions)
     }
 
     pub fn delete_terminal_meta(&self, session_id: Uuid) -> Result<()> {
