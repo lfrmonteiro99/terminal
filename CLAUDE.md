@@ -103,7 +103,7 @@ Key domain groups:
 - **Git operations**: Pure CLI via `tokio::process::Command`. No libgit2.
 - **Persistence**: Atomic JSON writes (`.tmp` → rename). Crash recovery on startup. Subdirs: `sessions/`, `runs/`, `worktrees/`, `terminals/`.
 - **Error handling**: `Result<T, Box<dyn Error + Send + Sync>>` at boundaries. `thiserror` for typed errors. No `unwrap()` in `start_server()`.
-- **PTY sessions**: Subprocess with piped stdin/stdout. No true PTY (`ioctl(TIOCSWINSZ)`) in current implementation. Linux `/proc/<pid>/cwd` for cwd tracking.
+- **PTY sessions**: Real PTY via openpty(2). Terminal resize via `ioctl(TIOCSWINSZ)`. Linux `/proc/<pid>/cwd` for cwd tracking.
 
 ## Conventions
 

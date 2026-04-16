@@ -865,78 +865,76 @@ impl Dispatcher {
             // --- Sidebar commands (Phase 3) ---
 
             AppCommand::ListDirectory { path } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    let full_path = root.join(&path);
-                    match crate::git_engine::list_directory(&full_path).await {
-                        Ok(entries) => {
-                            let _ = reply_tx
-                                .send(AppEvent::DirectoryListing { path, entries })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "LIST_DIR_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let full_path = root.join(&path);
+                match crate::git_engine::list_directory(&full_path).await {
+                    Ok(entries) => {
+                        let _ = reply_tx
+                            .send(AppEvent::DirectoryListing { path, entries })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "LIST_DIR_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::GetChangedFiles { mode, run_id } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    let result: std::result::Result<Vec<FileChange>, String> = if mode == "working" {
-                        match crate::git_engine::working_dir_status(&root).await {
-                            Ok(s) => {
-                                let mut files: Vec<FileChange> = s
-                                    .staged
-                                    .into_iter()
-                                    .map(|f| FileChange {
-                                        path: f.path,
-                                        status: f.status,
-                                    })
-                                    .collect();
-                                files.extend(s.unstaged.into_iter().map(|f| FileChange {
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let result: std::result::Result<Vec<FileChange>, String> = if mode == "working" {
+                    match crate::git_engine::working_dir_status(&root).await {
+                        Ok(s) => {
+                            let mut files: Vec<FileChange> = s
+                                .staged
+                                .into_iter()
+                                .map(|f| FileChange {
                                     path: f.path,
                                     status: f.status,
-                                }));
-                                Ok(files)
-                            }
-                            Err(e) => Err(e.to_string()),
+                                })
+                                .collect();
+                            files.extend(s.unstaged.into_iter().map(|f| FileChange {
+                                path: f.path,
+                                status: f.status,
+                            }));
+                            Ok(files)
                         }
-                    } else if let Some(rid) = run_id {
-                        match self.context.persistence.load_worktree_meta(rid) {
-                            Ok(meta) => {
-                                crate::git_engine::changed_files(&root, &meta.base_head, "HEAD")
-                                    .await
-                                    .map_err(|e| e.to_string())
-                            }
-                            Err(e) => Err(format!("worktree meta: {}", e)),
+                        Err(e) => Err(e.to_string()),
+                    }
+                } else if let Some(rid) = run_id {
+                    match self.context.persistence.load_worktree_meta(rid) {
+                        Ok(meta) => {
+                            crate::git_engine::changed_files(&root, &meta.base_head, "HEAD")
+                                .await
+                                .map_err(|e| e.to_string())
                         }
-                    } else {
-                        Ok(vec![])
-                    };
+                        Err(e) => Err(format!("worktree meta: {}", e)),
+                    }
+                } else {
+                    Ok(vec![])
+                };
 
-                    match result {
-                        Ok(files) => {
-                            let _ = reply_tx
-                                .send(AppEvent::ChangedFilesList {
-                                    mode,
-                                    run_id,
-                                    files,
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "CHANGED_FILES_FAILED".into(),
-                                    message: e,
-                                })
-                                .await;
-                        }
+                match result {
+                    Ok(files) => {
+                        let _ = reply_tx
+                            .send(AppEvent::ChangedFilesList {
+                                mode,
+                                run_id,
+                                files,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "CHANGED_FILES_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
                     }
                 }
             }
@@ -946,80 +944,77 @@ impl Dispatcher {
                 mode,
                 run_id,
             } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    let result: std::result::Result<String, String> = if mode == "working" {
-                        crate::git_engine::working_dir_file_diff(&root, &file_path)
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let result: std::result::Result<String, String> = if mode == "working" {
+                    crate::git_engine::working_dir_file_diff(&root, &file_path)
+                        .await
+                        .map_err(|e| e.to_string())
+                } else if let Some(rid) = run_id {
+                    match self.context.persistence.load_worktree_meta(rid) {
+                        Ok(meta) => crate::git_engine::diff_full(&root, &meta.base_head, "HEAD")
                             .await
-                            .map_err(|e| e.to_string())
-                    } else if let Some(rid) = run_id {
-                        match self.context.persistence.load_worktree_meta(rid) {
-                            Ok(meta) => crate::git_engine::diff_full(&root, &meta.base_head, "HEAD")
-                                .await
-                                .map_err(|e| e.to_string()),
-                            Err(e) => Err(format!("worktree meta: {}", e)),
-                        }
-                    } else {
-                        Ok(String::new())
-                    };
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(format!("worktree meta: {}", e)),
+                    }
+                } else {
+                    Ok(String::new())
+                };
 
-                    match result {
-                        Ok(diff) => {
-                            let _ = reply_tx
-                                .send(AppEvent::FileDiffResult {
-                                    file_path,
-                                    diff,
-                                    stat: None,
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "FILE_DIFF_FAILED".into(),
-                                    message: e,
-                                })
-                                .await;
-                        }
+                match result {
+                    Ok(diff) => {
+                        let _ = reply_tx
+                            .send(AppEvent::FileDiffResult {
+                                file_path,
+                                diff,
+                                stat: None,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "FILE_DIFF_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::GetRepoStatus => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::repo_status_snapshot(&root).await {
-                        Ok(status) => {
-                            let _ = reply_tx
-                                .send(AppEvent::RepoStatusResult { status })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "REPO_STATUS_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::repo_status_snapshot(&root).await {
+                    Ok(status) => {
+                        let _ = reply_tx
+                            .send(AppEvent::RepoStatusResult { status })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "REPO_STATUS_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::GetCommitHistory { limit } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::commit_history(&root, limit).await {
-                        Ok(commits) => {
-                            let _ = reply_tx
-                                .send(AppEvent::CommitHistoryResult { commits })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "COMMIT_HISTORY_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::commit_history(&root, limit).await {
+                    Ok(commits) => {
+                        let _ = reply_tx
+                            .send(AppEvent::CommitHistoryResult { commits })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "COMMIT_HISTORY_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
@@ -1033,10 +1028,10 @@ impl Dispatcher {
                             message: e.to_string(),
                         })
                         .await;
-                    return;
-                }
-                if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
-                    let _ = reply_tx.send(AppEvent::RepoStatusResult { status }).await;
+                } else if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
+                    let _ = reply_tx
+                        .send(AppEvent::RepoStatusResult { status })
+                        .await;
                 }
             }
 
@@ -1045,93 +1040,89 @@ impl Dispatcher {
                 if let Err(e) = crate::git_engine::unstage_file(&root, &path).await {
                     let _ = reply_tx
                         .send(AppEvent::Error {
-                            code: "UNSTAGE_FAILED".into(),
-                            message: e.to_string(),
+                                code: "UNSTAGE_FAILED".into(),
+                                message: e.to_string(),
                         })
                         .await;
-                    return;
-                }
-                if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
-                    let _ = reply_tx.send(AppEvent::RepoStatusResult { status }).await;
+                } else if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
+                    let _ = reply_tx
+                        .send(AppEvent::RepoStatusResult { status })
+                        .await;
                 }
             }
 
             AppCommand::CreateCommit { message } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::create_commit(&root, &message).await {
-                        Ok(hash) => {
-                            let _ = reply_tx
-                                .send(AppEvent::CommitCreated { hash })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "COMMIT_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::create_commit(&root, &message).await {
+                    Ok(hash) => {
+                        let _ = reply_tx
+                            .send(AppEvent::CommitCreated { hash })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "COMMIT_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::ListBranches => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::list_branches(&root).await {
-                        Ok((branches, current)) => {
-                            let _ = reply_tx
-                                .send(AppEvent::BranchList { branches, current })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "GIT_ERROR".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::list_branches(&root).await {
+                    Ok((branches, current)) => {
+                        let _ = reply_tx
+                            .send(AppEvent::BranchList { branches, current })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "GIT_ERROR".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::CheckoutBranch { name } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::checkout_branch(&root, &name).await {
-                        Ok(()) => {
-                            let _ = reply_tx
-                                .send(AppEvent::BranchChanged { name })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "CHECKOUT_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::checkout_branch(&root, &name).await {
+                    Ok(()) => {
+                        let _ = reply_tx
+                            .send(AppEvent::BranchChanged { name })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "CHECKOUT_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::CreateBranch { name, from } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::create_branch(&root, &name, from.as_deref()).await {
-                        Ok(()) => {
-                            let _ = reply_tx
-                                .send(AppEvent::BranchChanged { name })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx
-                                .send(AppEvent::Error {
-                                    code: "CREATE_BRANCH_FAILED".into(),
-                                    message: e.to_string(),
-                                })
-                                .await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::create_branch(&root, &name, from.as_deref()).await {
+                    Ok(()) => {
+                        let _ = reply_tx
+                            .send(AppEvent::BranchChanged { name })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "CREATE_BRANCH_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
@@ -1189,13 +1180,16 @@ impl Dispatcher {
             }
 
             AppCommand::ResizeTerminal { session_id, cols, rows } => {
-                if let Err(e) = self.pty_manager.resize(session_id, cols, rows).await {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "PTY_RESIZE_FAILED".into(),
-                            message: e,
-                        })
-                        .await;
+                match self.pty_manager.resize(session_id, cols, rows).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "RESIZE_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
+                    }
                 }
             }
 
@@ -1258,8 +1252,15 @@ impl Dispatcher {
             }
 
             AppCommand::ListRestoredTerminalSessions { workspace_id } => {
-                let sessions = match self.context.persistence.list_terminal_sessions(workspace_id) {
-                    Ok(s) => s,
+                match self.context.persistence.list_terminal_sessions(workspace_id) {
+                    Ok(sessions) => {
+                        let _ = reply_tx
+                            .send(AppEvent::RestorableTerminalSessions {
+                                workspace_id,
+                                sessions,
+                            })
+                            .await;
+                    }
                     Err(e) => {
                         let _ = reply_tx
                             .send(AppEvent::Error {
@@ -1267,12 +1268,8 @@ impl Dispatcher {
                                 message: format!("Failed to list terminal sessions: {}", e),
                             })
                             .await;
-                        return;
                     }
-                };
-                let _ = reply_tx
-                    .send(AppEvent::RestorableTerminalSessions { workspace_id, sessions })
-                    .await;
+                }
             }
 
             // --- Stash mutations (M4) ---

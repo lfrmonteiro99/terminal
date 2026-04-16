@@ -195,6 +195,7 @@ pub async fn diff_full(cwd: &Path, base: &str, head: &str) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 pub async fn worktree_add(cwd: &Path, path: &Path, branch: &str) -> Result<()> {
+    validate_git_ref(branch).map_err(GitError::CommandFailed)?;
     let path_str = path.to_string_lossy();
     run_git(cwd, &["worktree", "add", &path_str, "-b", branch]).await?;
     Ok(())
@@ -695,7 +696,7 @@ pub async fn working_dir_file_diff(cwd: &Path, file_path: &Path) -> Result<Strin
 pub async fn push_branch(cwd: &Path, remote: &str, branch: &str) -> Result<String> {
     validate_git_ref(remote).map_err(GitError::CommandFailed)?;
     validate_git_ref(branch).map_err(GitError::CommandFailed)?;
-    let _output = run_git(cwd, &["push", remote, branch]).await?;
+    let _ = run_git(cwd, &["push", remote, branch]).await?;
     let actual_branch = current_branch(cwd).await?.unwrap_or_else(|| branch.to_string());
     Ok(actual_branch)
 }
@@ -706,20 +707,30 @@ pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Resu
     if let Some(b) = branch {
         validate_git_ref(b).map_err(GitError::CommandFailed)?;
     }
-    let before_head = head_oid(cwd).await?;
+
+    // Try to get HEAD before pull, but don't fail if repo has no commits yet (unborn HEAD)
+    let before_head = head_oid(cwd).await.ok();
+
     if let Some(b) = branch {
         run_git(cwd, &["pull", remote, b]).await?;
     } else {
         run_git(cwd, &["pull", remote]).await?;
     }
-    let after_head = head_oid(cwd).await?;
-    if before_head == after_head {
-        return Ok(0);
+
+    // Only compute diff if we had a valid HEAD before
+    if let Some(before) = before_head {
+        let after_head = head_oid(cwd).await?;
+        if before == after_head {
+            return Ok(0);
+        }
+        let count_str = run_git(cwd, &["rev-list", "--count", &format!("{}..{}", before, after_head)])
+            .await
+            .unwrap_or_else(|_| "0".into());
+        Ok(count_str.trim().parse().unwrap_or(0))
+    } else {
+        // Fresh repo bootstrap: can't compute commit count, return 0
+        Ok(0)
     }
-    let count_str = run_git(cwd, &["rev-list", "--count", &format!("{}..{}", before_head, after_head)])
-        .await
-        .unwrap_or_else(|_| "0".into());
-    Ok(count_str.trim().parse().unwrap_or(0))
 }
 
 /// Fetch a remote.
@@ -735,11 +746,19 @@ pub async fn list_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictFile>> 
     let mut conflicts = Vec::new();
     for line in output.lines() {
         let path = std::path::PathBuf::from(line.trim());
-        let content = std::fs::read_to_string(cwd.join(&path))
-            .map_err(|e| GitError::CommandFailed(format!("Cannot read conflict file {:?}: {}", path, e)))?;
-        // Parse ours / theirs from conflict markers
-        let (ours, theirs) = parse_conflict_sections(&content);
-        conflicts.push(MergeConflictFile { path, ours, theirs, base: None });
+        match std::fs::read_to_string(cwd.join(&path)) {
+            Ok(content) => {
+                let (ours, theirs) = parse_conflict_sections(&content);
+                conflicts.push(MergeConflictFile { path, ours, theirs, base: None });
+            }
+            Err(e) => {
+                return Err(GitError::CommandFailed(format!(
+                    "Cannot read conflict file {}: {}",
+                    path.display(),
+                    e
+                )));
+            }
+        }
     }
     Ok(conflicts)
 }

@@ -224,7 +224,8 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
 
   // Step 1: On mount, check for restorable sessions before creating a new one
   useEffect(() => {
-    if (sessionState.tag !== 'idle' || sshConfig) return; // SSH sessions have no restore
+    if (sessionState.tag !== 'idle') return;
+    if (sshConfig) { setSessionState({ tag: 'creating' }); return; } // SSH sessions skip restore check
     installGlobalListener();
     setSessionState({ tag: 'checking-restorable' });
     send({ type: 'ListRestoredTerminalSessions', workspace_id: workspaceId });
@@ -242,13 +243,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         if (sessions.length > 0) {
           setSessionState({ tag: 'restore-prompt', sessions });
         } else {
-          setSessionState({ tag: 'idle' });
+          setSessionState({ tag: 'creating' });
         }
       }
     };
     // Timeout: if no response in 3s, just proceed to creating
     const timer = setTimeout(() => {
-      if (!cancelled) setSessionState({ tag: 'idle' });
+      if (!cancelled) setSessionState({ tag: 'creating' });
     }, 3_000);
     window.addEventListener('terminal-event', handler);
     return () => {
