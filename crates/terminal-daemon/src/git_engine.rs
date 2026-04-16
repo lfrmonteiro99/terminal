@@ -678,20 +678,30 @@ pub async fn pull_branch(cwd: &Path, remote: &str, branch: Option<&str>) -> Resu
     if let Some(b) = branch {
         validate_git_ref(b).map_err(GitError::CommandFailed)?;
     }
-    let before_head = head_oid(cwd).await?;
+
+    // Try to get HEAD before pull, but don't fail if repo has no commits yet (unborn HEAD)
+    let before_head = head_oid(cwd).await.ok();
+
     if let Some(b) = branch {
         run_git(cwd, &["pull", remote, b]).await?;
     } else {
         run_git(cwd, &["pull", remote]).await?;
     }
-    let after_head = head_oid(cwd).await?;
-    if before_head == after_head {
-        return Ok(0);
+
+    // Only compute diff if we had a valid HEAD before
+    if let Some(before) = before_head {
+        let after_head = head_oid(cwd).await?;
+        if before == after_head {
+            return Ok(0);
+        }
+        let count_str = run_git(cwd, &["rev-list", "--count", &format!("{}..{}", before, after_head)])
+            .await
+            .unwrap_or_else(|_| "0".into());
+        Ok(count_str.trim().parse().unwrap_or(0))
+    } else {
+        // Fresh repo bootstrap: can't compute commit count, return 0
+        Ok(0)
     }
-    let count_str = run_git(cwd, &["rev-list", "--count", &format!("{}..{}", before_head, after_head)])
-        .await
-        .unwrap_or_else(|_| "0".into());
-    Ok(count_str.trim().parse().unwrap_or(0))
 }
 
 /// Fetch a remote.
