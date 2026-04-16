@@ -28,6 +28,15 @@ cd frontend && npm run build
 
 Rust MSRV: **1.88** (required by `time` crate). Dockerfiles use `rust:1.88-slim`.
 
+## Architecture & Contributor Docs
+
+Detailed platform documentation lives in `docs/`:
+- [Architecture](docs/architecture.md) | [Modes](docs/modes.md) | [Panes](docs/panes.md)
+- [Workspaces](docs/workspaces.md) | [UX](docs/ux-conventions.md) | [Keybindings](docs/keybindings.md)
+- [Naming](docs/naming-conventions.md)
+
+CLAUDE.md stays lean (build/test/conventions). Architecture detail lives in `docs/`.
+
 ## Architecture Overview
 
 ### Daemon Architecture
