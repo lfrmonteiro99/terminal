@@ -1,5 +1,10 @@
 # Terminal Engine — Project Instructions
 
+> **Long-form docs**: [`docs/architecture.md`](./docs/architecture.md) ·
+> [`docs/git-flow.md`](./docs/git-flow.md) ·
+> [`docs/next-steps.md`](./docs/next-steps.md) ·
+> [`docs/bin-cc.md`](./docs/bin-cc.md) (optional shell helper, not the app).
+
 ## Workspace
 
 Three crates in `crates/`:

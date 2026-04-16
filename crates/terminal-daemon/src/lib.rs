@@ -3,6 +3,7 @@ pub mod daemon_context;
 pub mod dispatcher;
 pub mod dispatchers;
 pub mod git_engine;
+pub mod guards;
 pub mod parser;
 pub mod persistence;
 pub mod pty;
@@ -69,10 +70,22 @@ pub async fn start_server(
     // Command channel (from WS clients to dispatcher)
     let (command_tx, mut command_rx) = mpsc::channel(64);
 
+    // Initialize persistence
+    let persistence = Arc::new(Persistence::new(config.data_dir.clone())?);
+
+    // Command dispatcher — constructed early so the WS handler can share its
+    // `active_workspaces` map (M5b, issue #100).
+    let dispatcher = Arc::new(Dispatcher::new(
+        config.clone(),
+        event_tx.clone(),
+        persistence.clone(),
+    ));
+
     let state = Arc::new(DaemonState {
         auth_token: token.clone(),
         event_tx: event_tx.clone(),
         command_tx,
+        active_workspaces: dispatcher.context().active_workspaces.clone(),
     });
 
     let app = build_router(state);
@@ -89,10 +102,7 @@ pub async fn start_server(
         tokio::fs::write(&port_path, actual_port.to_string()).await?;
     }
 
-    // Initialize persistence
-    let persistence = Arc::new(Persistence::new(config.data_dir.clone())?);
-
-    // Recovery on startup
+    // Recovery on startup — synchronous pass (metadata + run-state fixes).
     match persistence.recover() {
         Ok(report) => {
             if report.orphaned_runs > 0 || report.orphaned_worktrees > 0 {
@@ -107,15 +117,16 @@ pub async fn start_server(
         Err(e) => tracing::error!("Recovery failed: {}", e),
     }
 
-    // Command dispatcher
-    let dispatcher = Arc::new(Dispatcher::new(
-        config.clone(),
-        event_tx.clone(),
-        persistence.clone(),
-    ));
+    // Async pass: physically prune worktree directories whose metadata still
+    // exists but whose on-disk directory is gone (or the inverse). Keeps
+    // `git worktree list` clean across daemon restarts. See issue #86 (M17).
+    prune_orphan_worktrees_on_disk(&persistence).await;
+
+    // Startup recovery: re-hydrate persisted workspaces (C5b, issue #98).
+    dispatcher.recover_workspaces().await;
     tokio::spawn(async move {
-        while let Some((cmd, reply_tx)) = command_rx.recv().await {
-            dispatcher.handle(cmd, reply_tx).await;
+        while let Some((cmd, client_id, reply_tx)) = command_rx.recv().await {
+            dispatcher.handle(cmd, client_id, reply_tx).await;
         }
     });
 
@@ -138,4 +149,91 @@ pub async fn start_server(
         token,
         shutdown_tx: Some(shutdown_tx),
     })
+}
+
+/// Physically remove worktree directories whose metadata indicates they
+/// should be gone, and delete metadata whose worktree directory has been
+/// removed out-of-band. Best-effort: never fails startup.
+async fn prune_orphan_worktrees_on_disk(persistence: &Persistence) {
+    let metas = match persistence.list_worktree_metas() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("prune_orphan_worktrees_on_disk: list failed: {}", e);
+            return;
+        }
+    };
+
+    for (run_id, meta) in metas {
+        let dir_exists = meta.worktree_path.exists();
+        // Look up whether the run is still alive in the on-disk run record.
+        let run_terminal = match persistence.load_run(run_id) {
+            Ok(run) => run.state.is_terminal(),
+            // No run record at all — metadata is orphaned, safe to delete.
+            Err(_) => true,
+        };
+
+        if !dir_exists {
+            // Worktree dir gone but metadata lingered; drop the metadata.
+            if let Err(e) = persistence.delete_worktree_meta(run_id) {
+                tracing::warn!(
+                    "prune_orphan_worktrees_on_disk: delete meta {} failed: {}",
+                    run_id,
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "prune_orphan_worktrees_on_disk: removed stale metadata for missing worktree {:?}",
+                    meta.worktree_path
+                );
+            }
+            continue;
+        }
+
+        if run_terminal {
+            // Run is done but the worktree dir still exists — prune it.
+            let repo_root = meta
+                .repo_root
+                .clone()
+                .or_else(|| derive_repo_root_from_worktree(&meta.worktree_path));
+            if let Some(root) = repo_root {
+                if let Err(e) =
+                    crate::git_engine::worktree_remove(&root, &meta.worktree_path).await
+                {
+                    tracing::warn!(
+                        "prune_orphan_worktrees_on_disk: worktree_remove failed for {:?}: {}",
+                        meta.worktree_path,
+                        e
+                    );
+                } else {
+                    tracing::info!(
+                        "prune_orphan_worktrees_on_disk: pruned worktree {:?}",
+                        meta.worktree_path
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "prune_orphan_worktrees_on_disk: no repo_root for {:?}, skipping worktree_remove",
+                    meta.worktree_path
+                );
+            }
+            if let Err(e) = persistence.delete_worktree_meta(run_id) {
+                tracing::warn!(
+                    "prune_orphan_worktrees_on_disk: delete meta {} failed: {}",
+                    run_id,
+                    e
+                );
+            }
+        }
+    }
+}
+
+/// Derive the main repo root from a worktree path created under the
+/// convention `<repo_root>/.terminal-worktrees/<short_uuid>`. Returns None
+/// when the path doesn't match that layout.
+fn derive_repo_root_from_worktree(worktree_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let parent = worktree_path.parent()?;
+    if parent.file_name().and_then(|s| s.to_str()) != Some(".terminal-worktrees") {
+        return None;
+    }
+    parent.parent().map(|p| p.to_path_buf())
 }
