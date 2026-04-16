@@ -3,6 +3,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
+import { debug } from './util/log';
 import { ActivityBar } from './components/ActivityBar.tsx';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
@@ -316,7 +317,7 @@ function AppContent() {
     const detectAndConnect = async () => {
       // Check for Tauri runtime (injected by the native shell, not present in browsers)
       if (!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
-        console.log('[Browser] Tauri runtime not detected, using standalone mode');
+        debug('[Browser] Tauri runtime not detected, using standalone mode');
         setDaemonUrl('ws://127.0.0.1:3000/ws');
         setTauriMode(false);
         return;
@@ -324,26 +325,26 @@ function AppContent() {
 
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        console.log('[Tauri] API module resolved, polling for daemon...');
+        debug('[Tauri] API module resolved, polling for daemon...');
 
         for (let attempt = 0; attempt < 15; attempt++) {
           if (cancelled) return;
           try {
             const info = await invoke<{ port: number; token: string }>('get_daemon_info');
-            console.log('[Tauri] Daemon ready on port', info.port);
+            debug('[Tauri] Daemon ready on port', info.port);
             setDaemonUrl(`ws://127.0.0.1:${info.port}/ws`);
             setAuthToken(info.token);
             setTauriMode(true);
             return;
           } catch (e) {
-            console.log(`[Tauri] Attempt ${attempt + 1} failed:`, e);
+            debug(`[Tauri] Attempt ${attempt + 1} failed:`, e);
             await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
           }
         }
         console.error('[Tauri] Daemon did not become ready after 15 attempts');
         setTauriMode(true);
       } catch {
-        console.log('[Browser] Tauri API import failed, using standalone mode');
+        debug('[Browser] Tauri API import failed, using standalone mode');
         setDaemonUrl('ws://127.0.0.1:3000/ws');
         setTauriMode(false);
       }

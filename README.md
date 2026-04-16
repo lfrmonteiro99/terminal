@@ -144,6 +144,33 @@ docker compose run --rm frontend npx tsc --noEmit --skipLibCheck
 docker compose run --rm frontend npm run build
 ```
 
+## Configuration
+
+The daemon is configured via environment variables. This table lists all supported options:
+
+| Variable | Default | Scope | Description |
+|----------|---------|-------|-------------|
+| `TERMINAL_HOST` | `127.0.0.1` | Standalone / Native | Address to bind the WebSocket server to |
+| `TERMINAL_PORT` | `0` (random) | Standalone / Native | Port for the WebSocket server (0 = auto-assign) |
+| `TERMINAL_DATA_DIR` | `~/.terminal-daemon/` | Standalone / Native | Directory for persisted data (sessions, runs, worktrees) |
+| `TERMINAL_CLAUDE_BINARY` | `claude` | All | Path to or command for the Claude CLI binary |
+| `RUST_LOG` | `info` | All | Log level (trace, debug, info, warn, error) |
+
+### Examples
+
+```bash
+# Custom port and data directory
+TERMINAL_PORT=3001 TERMINAL_DATA_DIR=/tmp/terminal-data ./run.sh
+
+# Use a specific Claude binary
+TERMINAL_CLAUDE_BINARY=/usr/local/bin/claude cargo run -p terminal-daemon
+
+# Debug logging
+RUST_LOG=debug docker compose up
+```
+
+Note: The embedded Tauri app (native desktop) does not write these files to disk. Only the standalone daemon respects `TERMINAL_DATA_DIR`, `TERMINAL_HOST`, and `TERMINAL_PORT`.
+
 ## Local Development (without Docker)
 
 If you prefer running natively:
