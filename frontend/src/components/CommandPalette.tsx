@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSend } from '../context/SendContext';
-import { useAppDispatch } from '../context/AppContext';
+import { useAppDispatch, useAppState } from '../context/AppContext';
 import type { PaneLayout } from '../domain/pane/types';
 import type { BranchInfo } from '../types/protocol';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
@@ -52,7 +52,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
   const [saveName, setSaveName] = useState('');
   const [quickCmds, setQuickCmds] = useState<QuickCommand[]>([]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const branches = useAppState().branches;
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Reload snippets whenever we enter quick-commands mode
@@ -301,7 +301,6 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       setSelectedIndex(0);
       setMode('commands');
       setSaveName('');
-      setBranches([]);
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
@@ -320,15 +319,8 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
     }
   }, [effectiveMode, send]);
 
-  // Listen for BranchList events routed from App.tsx
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const event = (e as CustomEvent).detail;
-      setBranches(event.branches ?? []);
-    };
-    window.addEventListener('branch-list', handler);
-    return () => window.removeEventListener('branch-list', handler);
-  }, []);
+  // Branch list now arrives via the reducer (C3): `state.branches` is populated
+  // by the BranchList event handler in AppContext.
 
   const handleDeleteQuickCmd = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();

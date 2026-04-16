@@ -1,18 +1,47 @@
-// Per-workspace state — scoped to a single workspace (M1-02)
+// Per-workspace state — scoped to a single workspace (M1-02, C3)
 
 import type {
+  BranchInfo,
   CommitEntry,
   DiffStat,
   DirtyStatus,
   FileChange,
   FileTreeEntry,
   MergeConflictFile,
+  PreflightError,
+  RestorableTerminalSession,
+  RunMetrics,
   RunMode,
   RunState,
   RunSummary,
+  SearchMatch,
   StashEntry,
+  ToolCall,
 } from '../types/protocol';
 import type { TerminalSessionSummary } from '../types/protocol';
+
+export interface SearchResult {
+  query: string;
+  matches: SearchMatch[];
+  total_matches: number;
+  files_searched: number;
+  truncated: boolean;
+  duration_ms: number;
+}
+
+export interface FileViewerState {
+  path: string;
+  content?: string;
+  language?: string;
+  truncated?: boolean;
+  size_bytes?: number;
+  error?: string;
+}
+
+export interface GitToast {
+  kind: 'push' | 'pull' | 'fetch' | 'error';
+  message: string;
+}
 
 export interface WorkspaceStore {
   workspaceId: string;
@@ -28,11 +57,17 @@ export interface WorkspaceStore {
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
   mergeConflict: { runId: string; paths: string[] } | null;
 
+  // Run telemetry (TERMINAL-055)
+  runToolCalls: Map<string, ToolCall>;
+  runMetrics: RunMetrics | null;
+  preflightError: PreflightError | null;
+
   // Stash / dirty
   stashes: StashEntry[];
   stashFiles: Map<number, FileChange[]>;
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
   dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
+  dirtyState: DirtyStatus | null;
   stashDrawerOpen: boolean;
 
   // Sidebar layout
@@ -47,11 +82,21 @@ export interface WorkspaceStore {
   explorerTree: Map<string, FileTreeEntry[]>;
   diffPanel: { open: boolean; mode: 'split' | 'overlay' | 'inline'; file: string | null; diff: string | null; stat: DiffStat | null };
 
+  // Git branches
+  branches: BranchInfo[];
+  currentBranch: string | null;
+  gitToast: GitToast | null;
+
   // Terminal pane sessions
   terminalSessions: Map<string, TerminalSessionSummary>;
+  restorableTerminals: RestorableTerminalSession[];
 
   // Merge conflicts (M5-05)
   mergeConflicts: MergeConflictFile[];
+
+  // File viewer / search (TERMINAL-005/006)
+  fileViewer: FileViewerState | null;
+  searchResult: SearchResult | null;
 }
 
 export interface RepoStatus {
@@ -76,10 +121,14 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     selectedRun: null,
     diffCache: new Map(),
     mergeConflict: null,
+    runToolCalls: new Map(),
+    runMetrics: null,
+    preflightError: null,
     stashes: [],
     stashFiles: new Map(),
     stashDiffs: new Map(),
     dirtyWarning: null,
+    dirtyState: null,
     stashDrawerOpen: false,
     activeSidebarView: 'changes',
     sidebarCollapsed: false,
@@ -90,13 +139,22 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     explorerTree: new Map(),
     diffPanel: {
       open: false,
-      mode: (localStorage.getItem('diff-mode') as 'split' | 'overlay' | 'inline') || 'split',
+      mode:
+        (typeof localStorage !== 'undefined'
+          ? (localStorage.getItem('diff-mode') as 'split' | 'overlay' | 'inline')
+          : null) || 'split',
       file: null,
       diff: null,
       stat: null,
     },
+    branches: [],
+    currentBranch: null,
+    gitToast: null,
     terminalSessions: new Map(),
+    restorableTerminals: [],
     mergeConflicts: [],
+    fileViewer: null,
+    searchResult: null,
   };
 }
 
@@ -114,11 +172,16 @@ export type WorkspaceAction =
   | { type: 'SET_DIFF'; runId: string; stat: DiffStat; diff: string }
   | { type: 'SET_MERGE_CONFLICT'; runId: string; paths: string[] }
   | { type: 'CLEAR_MERGE_CONFLICT' }
+  | { type: 'ADD_TOOL_CALL'; runId: string; toolCall: ToolCall }
+  | { type: 'UPDATE_TOOL_RESULT'; runId: string; toolId: string; isError: boolean; resultPreview: string }
+  | { type: 'SET_RUN_METRICS'; runId: string; metrics: RunMetrics }
+  | { type: 'SET_PREFLIGHT_ERROR'; error: PreflightError | null }
   | { type: 'SET_STASHES'; stashes: StashEntry[] }
   | { type: 'SET_STASH_FILES'; stashIndex: number; files: FileChange[] }
   | { type: 'SET_STASH_DIFF'; stashIndex: number; diff: string; stat: DiffStat | null }
   | { type: 'SET_DIRTY_WARNING'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode }
   | { type: 'DISMISS_DIRTY_WARNING' }
+  | { type: 'SET_DIRTY_STATE'; status: DirtyStatus }
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'SET_SIDEBAR_VIEW'; view: WorkspaceStore['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
@@ -131,11 +194,25 @@ export type WorkspaceAction =
   | { type: 'CLOSE_DIFF' }
   | { type: 'SET_DIFF_CONTENT'; file: string; diff: string; stat: DiffStat | null }
   | { type: 'SET_DIFF_MODE'; mode: WorkspaceStore['diffPanel']['mode'] }
+  | { type: 'SET_BRANCH_NAME'; name: string }
+  | { type: 'SET_BRANCH_LIST'; branches: BranchInfo[]; current: string | null }
+  | { type: 'SET_GIT_TOAST'; toast: GitToast | null }
   | { type: 'ADD_TERMINAL_SESSION'; session: TerminalSessionSummary }
   | { type: 'REMOVE_TERMINAL_SESSION'; sessionId: string }
   | { type: 'SET_TERMINAL_SESSIONS'; sessions: TerminalSessionSummary[] }
+  | { type: 'SET_RESTORABLE_TERMINALS'; sessions: RestorableTerminalSession[] }
   | { type: 'SET_MERGE_CONFLICTS'; files: MergeConflictFile[] }
-  | { type: 'REMOVE_CONFLICT'; filePath: string };
+  | { type: 'REMOVE_CONFLICT'; filePath: string }
+  | {
+      type: 'SET_FILE_CONTENT';
+      path: string;
+      content: string;
+      language: string;
+      truncated: boolean;
+      sizeBytes: number;
+    }
+  | { type: 'SET_FILE_ERROR'; path: string; error: string }
+  | { type: 'SET_SEARCH_RESULTS'; result: SearchResult };
 
 export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction): WorkspaceStore {
   switch (action.type) {
@@ -192,6 +269,32 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
     case 'CLEAR_MERGE_CONFLICT':
       return { ...state, mergeConflict: null };
 
+    case 'ADD_TOOL_CALL': {
+      if (action.runId !== state.activeRun) return state;
+      const runToolCalls = new Map(state.runToolCalls);
+      runToolCalls.set(action.toolCall.tool_id, action.toolCall);
+      return { ...state, runToolCalls };
+    }
+
+    case 'UPDATE_TOOL_RESULT': {
+      if (action.runId !== state.activeRun) return state;
+      const existing = state.runToolCalls.get(action.toolId);
+      if (!existing) return state;
+      const runToolCalls = new Map(state.runToolCalls);
+      runToolCalls.set(action.toolId, {
+        ...existing,
+        status: action.isError ? 'error' : 'ok',
+        result_preview: action.resultPreview,
+      });
+      return { ...state, runToolCalls };
+    }
+
+    case 'SET_RUN_METRICS':
+      return { ...state, runMetrics: action.metrics };
+
+    case 'SET_PREFLIGHT_ERROR':
+      return { ...state, preflightError: action.error };
+
     case 'SET_STASHES':
       return { ...state, stashes: action.stashes };
 
@@ -220,6 +323,9 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
 
     case 'DISMISS_DIRTY_WARNING':
       return { ...state, dirtyWarning: null };
+
+    case 'SET_DIRTY_STATE':
+      return { ...state, dirtyState: action.status };
 
     case 'TOGGLE_STASH_DRAWER':
       return { ...state, stashDrawerOpen: !state.stashDrawerOpen };
@@ -265,6 +371,19 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
     case 'SET_DIFF_MODE':
       return { ...state, diffPanel: { ...state.diffPanel, mode: action.mode } };
 
+    case 'SET_BRANCH_NAME':
+      return {
+        ...state,
+        repoStatus: state.repoStatus ? { ...state.repoStatus, branch: action.name } : null,
+        currentBranch: action.name,
+      };
+
+    case 'SET_BRANCH_LIST':
+      return { ...state, branches: action.branches, currentBranch: action.current };
+
+    case 'SET_GIT_TOAST':
+      return { ...state, gitToast: action.toast };
+
     case 'ADD_TERMINAL_SESSION': {
       const terminalSessions = new Map(state.terminalSessions);
       terminalSessions.set(action.session.session_id, action.session);
@@ -283,6 +402,9 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
       return { ...state, terminalSessions };
     }
 
+    case 'SET_RESTORABLE_TERMINALS':
+      return { ...state, restorableTerminals: action.sessions };
+
     case 'SET_MERGE_CONFLICTS':
       return { ...state, mergeConflicts: action.files };
 
@@ -291,6 +413,24 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
         ...state,
         mergeConflicts: state.mergeConflicts.filter((f) => f.path !== action.filePath),
       };
+
+    case 'SET_FILE_CONTENT':
+      return {
+        ...state,
+        fileViewer: {
+          path: action.path,
+          content: action.content,
+          language: action.language,
+          truncated: action.truncated,
+          size_bytes: action.sizeBytes,
+        },
+      };
+
+    case 'SET_FILE_ERROR':
+      return { ...state, fileViewer: { path: action.path, error: action.error } };
+
+    case 'SET_SEARCH_RESULTS':
+      return { ...state, searchResult: action.result };
 
     default:
       return state;

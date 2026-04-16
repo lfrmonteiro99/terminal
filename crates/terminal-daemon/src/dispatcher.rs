@@ -1,5 +1,6 @@
 use crate::claude_runner::{output_file_path, RunnerEvent};
 use crate::daemon_context::{ActiveRun, DaemonContext};
+use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
 use crate::safety::broadcast_event;
@@ -25,7 +26,9 @@ impl Dispatcher {
         persistence: Arc<Persistence>,
     ) -> Self {
         let context = Arc::new(DaemonContext::new(config, event_tx.clone(), persistence));
-        let pty_manager = Arc::new(PtyManager::new(event_tx));
+        let pty_manager = Arc::new(
+            PtyManager::new(event_tx).with_workspace_channels(context.workspace_channels.clone()),
+        );
         Self { context, pty_manager }
     }
 
@@ -34,8 +37,43 @@ impl Dispatcher {
         self.context.broadcast(event);
     }
 
+    /// Load persisted workspaces from disk into the in-memory registry and
+    /// create a broadcast channel for each. Called once at startup (C5b,
+    /// issue #98).
+    pub async fn recover_workspaces(&self) {
+        let persisted = match self.context.persistence.list_workspaces() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("recover_workspaces: list failed: {}", e);
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+        let mut workspaces = self.context.workspaces.lock().await;
+        let mut channels = self.context.workspace_channels.lock().await;
+        for ws in persisted {
+            let id = ws.id;
+            channels.entry(id).or_insert_with(|| broadcast::channel(512).0);
+            workspaces.insert(id, ws);
+        }
+        info!("Recovered {} persisted workspace(s)", workspaces.len());
+    }
+
+    /// Borrow the shared daemon context (used by `server.rs` to reach
+    /// per-client state like `active_workspaces`).
+    pub fn context(&self) -> Arc<DaemonContext> {
+        self.context.clone()
+    }
+
     /// Handle a command and send response to the requesting client.
-    pub async fn handle(&self, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+    pub async fn handle(
+        &self,
+        cmd: AppCommand,
+        client_id: Uuid,
+        reply_tx: mpsc::Sender<AppEvent>,
+    ) {
         match cmd {
             AppCommand::Auth { .. } => {
                 // Auth is handled at the server level, not here
@@ -1127,7 +1165,7 @@ impl Dispatcher {
                 let dispatcher = crate::dispatchers::workspace_dispatcher::WorkspaceDispatcher::new(
                     self.context.clone(),
                 );
-                dispatcher.handle(cmd, reply_tx).await;
+                dispatcher.handle(cmd, client_id, reply_tx).await;
             }
 
             // --- PTY commands (M4-01) ---
@@ -1298,30 +1336,38 @@ impl Dispatcher {
         let mut base_head = String::new();
         let mut actual_working_dir = project_root.clone();
 
+        // RAII concurrency guard — dropped on early return, `forget()` once
+        // the supervisor task takes ownership of cleanup on successful spawn.
+        let mut concurrency_guard: Option<ConcurrencyGuard> = None;
+
         if is_git {
-            // Check concurrency: lock -> check -> insert -> unlock (no await gap)
+            // Concurrency guard (see crate::guards): removes the entry on
+            // any early return below without manual cleanup.
+            let guard = match ConcurrencyGuard::acquire(
+                self.context.concurrency.clone(),
+                project_root.clone(),
+                run_id,
+            )
+            .await
             {
-                let mut conc = self.context.concurrency.lock().await;
-                if let Some(existing_run_id) = conc.get(&project_root) {
+                Some(g) => g,
+                None => {
                     let _ = reply_tx
                         .send(AppEvent::Error {
                             code: "REPO_BUSY".into(),
                             message: format!(
-                                "Repository {} already has active run {}",
-                                project_root.display(),
-                                existing_run_id
+                                "Repository {} already has an active run",
+                                project_root.display()
                             ),
                         })
                         .await;
                     return;
                 }
-                conc.insert(project_root.clone(), run_id);
-            }
+            };
+            concurrency_guard = Some(guard);
 
             // Guard repo state
             if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
-                // Cleanup concurrency
-                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "GIT_STATE_ERROR".into(),
@@ -1341,8 +1387,6 @@ impl Dispatcher {
                     });
 
                 if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
-                    // Release concurrency lock before returning
-                    self.context.concurrency.lock().await.remove(&project_root);
                     // Send DirtyWarning event -- frontend will show modal
                     let _ = reply_tx
                         .send(AppEvent::DirtyWarning {
@@ -1360,7 +1404,6 @@ impl Dispatcher {
             match crate::git_engine::head_oid(&project_root).await {
                 Ok(oid) => base_head = oid,
                 Err(e) => {
-                    self.context.concurrency.lock().await.remove(&project_root);
                     let _ = reply_tx
                         .send(AppEvent::Error {
                             code: "GIT_ERROR".into(),
@@ -1381,7 +1424,6 @@ impl Dispatcher {
             let wt_parent = match wt_path.parent() {
                 Some(p) => p,
                 None => {
-                    self.context.concurrency.lock().await.remove(&project_root);
                     let _ = reply_tx
                         .send(AppEvent::Error {
                             code: "IO_ERROR".into(),
@@ -1392,7 +1434,6 @@ impl Dispatcher {
                 }
             };
             if let Err(e) = tokio::fs::create_dir_all(wt_parent).await {
-                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "IO_ERROR".into(),
@@ -1404,7 +1445,6 @@ impl Dispatcher {
 
             // Create worktree
             if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
-                self.context.concurrency.lock().await.remove(&project_root);
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "GIT_ERROR".into(),
@@ -1421,6 +1461,7 @@ impl Dispatcher {
                 base_head: base_head.clone(),
                 merge_base: base_head.clone(),
                 last_modified: chrono::Utc::now(),
+                repo_root: Some(project_root.clone()),
             };
             if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
                 warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
@@ -1495,9 +1536,14 @@ impl Dispatcher {
             return;
         }
 
-        // Spawn claude process in actual_working_dir (worktree if git)
+        // Spawn claude process in actual_working_dir (worktree if git).
+        // Ownership of the concurrency entry transfers to the supervisor task
+        // on success; `forget()` prevents the guard from clearing it on drop.
         match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
             Ok((mut event_rx, stdin_tx, mut child)) => {
+                if let Some(g) = concurrency_guard.take() {
+                    g.forget();
+                }
                 let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
 
                 let active_run = ActiveRun {
@@ -1824,9 +1870,9 @@ impl Dispatcher {
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.active_run = None;
                 }
-                // Cleanup concurrency and worktree on spawn failure
+                // Concurrency entry is released automatically when
+                // `concurrency_guard` drops at end of scope.
                 if is_git {
-                    self.context.concurrency.lock().await.remove(&project_root);
                     if let Some(ref wt_path) = worktree_path {
                         if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
                             warn!("Failed to cleanup worktree on spawn failure: {}", e);

@@ -1,24 +1,10 @@
 // FileViewerPane — read-only file viewer with line numbers (TERMINAL-005)
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 import { useSend } from '../../context/SendContext';
-
-interface FileContentEvent {
-  type: 'FileContent';
-  path: string;
-  content: string;
-  language: string;
-  truncated: boolean;
-  size_bytes: number;
-}
-
-interface FileReadErrorEvent {
-  type: 'FileReadError';
-  path: string;
-  error: string;
-}
+import { useAppState } from '../../context/AppContext';
 
 type State =
   | { status: 'empty' }
@@ -28,41 +14,32 @@ type State =
 
 export function FileViewerPane({ pane }: PaneProps) {
   const send = useSend();
-  const [state, setState] = useState<State>({ status: 'empty' });
-  const pathRef = useRef<string | null>(null);
+  const fileViewer = useAppState().fileViewer;
 
-  // Send ReadFile when resource_id changes
+  // Fire a ReadFile whenever the pane resource changes
   useEffect(() => {
     const path = pane.resource_id;
-    if (!path) {
-      setState({ status: 'empty' });
-      return;
-    }
-    pathRef.current = path;
-    setState({ status: 'loading', path });
+    if (!path) return;
     send({ type: 'ReadFile', path });
   }, [pane.resource_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Listen for file-viewer-event dispatched from App.tsx
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const event = (e as CustomEvent).detail as FileContentEvent | FileReadErrorEvent;
-      if (event.type === 'FileContent' && event.path === pathRef.current) {
-        setState({
-          status: 'loaded',
-          path: event.path,
-          content: event.content,
-          language: event.language,
-          truncated: event.truncated,
-          size_bytes: event.size_bytes,
-        });
-      } else if (event.type === 'FileReadError' && event.path === pathRef.current) {
-        setState({ status: 'error', path: event.path, error: event.error });
-      }
+  // Derive render state from the store. We only commit the server response
+  // when it matches this pane's resource — otherwise a concurrent viewer
+  // could clobber our view.
+  const state: State = useMemo(() => {
+    const path = pane.resource_id;
+    if (!path) return { status: 'empty' };
+    if (!fileViewer || fileViewer.path !== path) return { status: 'loading', path };
+    if ('error' in fileViewer) return { status: 'error', path, error: fileViewer.error };
+    return {
+      status: 'loaded',
+      path,
+      content: fileViewer.content,
+      language: fileViewer.language,
+      truncated: fileViewer.truncated,
+      size_bytes: fileViewer.size_bytes,
     };
-    window.addEventListener('file-viewer-event', handler);
-    return () => window.removeEventListener('file-viewer-event', handler);
-  }, []);
+  }, [pane.resource_id, fileViewer]);
 
   const containerStyle: React.CSSProperties = {
     flex: 1,

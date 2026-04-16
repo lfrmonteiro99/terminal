@@ -22,8 +22,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
-    environment:
-      - VITE_DAEMON_WS_URL=ws://daemon:3000/ws
+    # VITE_DAEMON_WS_URL was removed (#85): the frontend now resolves the WS
+    # URL at runtime via `resolveDaemonWsUrl()` — same-origin `/ws` by default,
+    # proxied in dev through Vite. Set `window.__TERMINAL_CONFIG__.wsUrl` if
+    # you need to point the built bundle at a different daemon.
     depends_on:
       - daemon
 
