@@ -1308,49 +1308,46 @@ impl Dispatcher {
             // --- Stash mutations (M4) ---
 
             AppCommand::PopStash { index } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::stash_pop(&root, index).await {
-                        Ok(had_conflicts) => {
-                            let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx.send(AppEvent::Error {
-                                code: "STASH_FAILED".into(),
-                                message: e.to_string(),
-                            }).await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::stash_pop(&root, index).await {
+                    Ok(had_conflicts) => {
+                        let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx.send(AppEvent::Error {
+                            code: "STASH_FAILED".into(),
+                            message: e.to_string(),
+                        }).await;
                     }
                 }
             }
 
             AppCommand::ApplyStash { index } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::stash_apply(&root, index).await {
-                        Ok(had_conflicts) => {
-                            let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx.send(AppEvent::Error {
-                                code: "STASH_FAILED".into(),
-                                message: e.to_string(),
-                            }).await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::stash_apply(&root, index).await {
+                    Ok(had_conflicts) => {
+                        let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx.send(AppEvent::Error {
+                            code: "STASH_FAILED".into(),
+                            message: e.to_string(),
+                        }).await;
                     }
                 }
             }
 
             AppCommand::DropStash { index } => {
-                if let Some(root) = self.find_active_project_root().await {
-                    match crate::git_engine::stash_drop(&root, index).await {
-                        Ok(()) => {
-                            let _ = reply_tx.send(AppEvent::StashDropped { index }).await;
-                        }
-                        Err(e) => {
-                            let _ = reply_tx.send(AppEvent::Error {
-                                code: "STASH_FAILED".into(),
-                                message: e.to_string(),
-                            }).await;
-                        }
+                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                match crate::git_engine::stash_drop(&root, index).await {
+                    Ok(()) => {
+                        let _ = reply_tx.send(AppEvent::StashDropped { index }).await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx.send(AppEvent::Error {
+                            code: "STASH_FAILED".into(),
+                            message: e.to_string(),
+                        }).await;
                     }
                 }
             }
