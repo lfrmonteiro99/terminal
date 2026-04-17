@@ -4,10 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Release tag to upload assets to (e.g. v0.1.4)'
-        required: true
 
 jobs:
   test:
@@ -113,10 +109,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Upload .deb and .AppImage to release
+      - name: Save artifacts (always available on the Actions run page)
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
           files: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
