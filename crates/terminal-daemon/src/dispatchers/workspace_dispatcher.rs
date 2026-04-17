@@ -72,7 +72,7 @@ impl WorkspaceDispatcher {
 
             AppCommand::CloseWorkspace { workspace_id } => {
                 let removed = self.ctx.workspaces.lock().await.remove(&workspace_id);
-                if removed.is_some() {
+                if let Some(ws) = removed {
                     // Remove workspace channel
                     self.ctx.workspace_channels.lock().await.remove(&workspace_id);
                     // Scrub every client's active pointer that targeted this one (M5b).
@@ -80,6 +80,11 @@ impl WorkspaceDispatcher {
                         let mut active = self.ctx.active_workspaces.lock().await;
                         active.retain(|_, wid| *wid != workspace_id);
                     }
+                    // Physically prune worktrees whose repo_root matches this
+                    // workspace (#86 M17). Previously the dirs were left on disk
+                    // until the next daemon restart, which could leak gigabytes
+                    // for long-lived installations.
+                    prune_workspace_worktrees(&self.ctx, &ws.root_path).await;
                     if let Err(e) = self.ctx.persistence.delete_workspace(workspace_id) {
                         warn!("Failed to delete persisted workspace {}: {}", workspace_id, e);
                     }
@@ -132,6 +137,57 @@ impl WorkspaceDispatcher {
             _ => {
                 warn!("WorkspaceDispatcher received non-workspace command");
             }
+        }
+    }
+}
+
+/// Remove every worktree dir whose metadata has a `repo_root` under the given
+/// workspace root, plus its metadata file. Best-effort: individual failures are
+/// logged but do not block workspace close. Shared with the startup prune pass
+/// in `lib.rs` in spirit, but scoped to one workspace.
+async fn prune_workspace_worktrees(ctx: &DaemonContext, workspace_root: &std::path::Path) {
+    let metas = match ctx.persistence.list_worktree_metas() {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("CloseWorkspace: list_worktree_metas failed: {}", e);
+            return;
+        }
+    };
+
+    // Canonicalize once so `/foo` and `/foo/` and `/./foo` all compare equal.
+    let canonical_ws = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+
+    for (run_id, meta) in metas {
+        let Some(repo_root) = meta.repo_root.as_ref() else {
+            continue;
+        };
+        let canonical_repo = repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| repo_root.clone());
+        if canonical_repo != canonical_ws {
+            continue;
+        }
+
+        if meta.worktree_path.exists() {
+            if let Err(e) =
+                crate::git_engine::worktree_remove(repo_root, &meta.worktree_path).await
+            {
+                warn!(
+                    "CloseWorkspace: worktree_remove failed for run {} ({:?}): {}",
+                    run_id, meta.worktree_path, e
+                );
+                // Fall through to metadata deletion anyway — otherwise a
+                // permanently-failing remove would leak the meta forever.
+            }
+        }
+
+        if let Err(e) = ctx.persistence.delete_worktree_meta(run_id) {
+            warn!(
+                "CloseWorkspace: delete_worktree_meta failed for run {}: {}",
+                run_id, e
+            );
         }
     }
 }

@@ -146,14 +146,23 @@ impl PtyManager {
         let master_raw = master_fd.as_raw_fd();
         let slave_raw = slave_fd.as_raw_fd();
 
-        // Set initial window size on master.
+        // Set initial window size on master. Failure is non-fatal (the subsequent
+        // resize from the frontend will correct it), but we log so silent
+        // misbehavior (e.g. tiny initial size) is diagnosable.
         let ws = nix::libc::winsize {
             ws_row: 40,
             ws_col: 120,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        unsafe { nix::libc::ioctl(master_raw, nix::libc::TIOCSWINSZ, &ws) };
+        let rc = unsafe { nix::libc::ioctl(master_raw, nix::libc::TIOCSWINSZ, &ws) };
+        if rc != 0 {
+            warn!(
+                "initial TIOCSWINSZ failed on master fd {}: {}",
+                master_raw,
+                std::io::Error::last_os_error()
+            );
+        }
 
         // Build the command. pre_exec sets up the child side of the PTY.
         let mut cmd = Command::new(&shell_path);

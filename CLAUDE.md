@@ -124,13 +124,16 @@ Key domain groups:
 
 | Milestone | Issues | Status |
 |-----------|--------|--------|
-| M1 Foundation | #12, #15, #19, #24, #28 | ⚠️ Partial (#24 per-client workspace tracking pending #99) |
+| M1 Foundation | #12, #15, #19, #24, #28 | ✅ Implemented (per-client active workspace landed via #99/#100/#101) |
 | M2 Panes | #10, #11, #13, #18, #22 | ✅ Implemented |
 | M3 Modes | #14, #16, #17 | ✅ Implemented |
-| M4 Terminal | #20, #21, #23, #26, #27, #38 | ⚠️ Partial (#38 restore affordance pending #96) |
-| M5 Git | #25, #29, #30, #36, #37 | ✅ Implemented |
+| M4 Terminal | #20, #21, #23, #26, #27, #38 | ✅ Implemented (restore API + UI landed via #94/#95/#96) |
+| M5 Git | #25, #29, #30, #36, #37 | ✅ Implemented (stash pop/apply/drop included) |
 | M6 Browser | #31, #32 | ✅ Implemented |
 | M7 Polish | #33, #34, #35 | ✅ Implemented |
+| M11 Build tooling | — | ✅ `Makefile`, `run.sh`, `release.sh` |
+| M14 Frontend tests | — | ✅ Vitest suite (stores, eventRouter, components) |
+| M16 Runtime WS URL | — | ✅ Resolved via `resolveDaemonWsUrl` |
 
 ## Commit Messages
 
