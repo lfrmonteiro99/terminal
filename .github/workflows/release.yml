@@ -55,6 +55,8 @@ jobs:
     name: Build Linux packages
     needs: test
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -110,5 +112,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            crates/terminal-app/target/release/bundle/deb/*.deb
-            crates/terminal-app/target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
