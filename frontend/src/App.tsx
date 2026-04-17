@@ -89,11 +89,17 @@ function AppContent() {
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
   const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
 
-  // Persist layout on every change
+  // Persist layout on every change — debounced because pane-resize drag emits
+  // a layout update per mousemove (potentially 60 Hz), and each
+  // `saveWorkspaceLayout` call is a synchronous localStorage write that grows
+  // more expensive as more workspaces accumulate. 200 ms of quiet is short
+  // enough that a crash loses at most one drag, but batches the dragging
+  // storm into a single write.
   useEffect(() => {
-    if (state.activeSession) {
+    if (!state.activeSession) return;
+    const handle = setTimeout(() => {
       saveWorkspaceLayout({
-        id: state.activeSession,
+        id: state.activeSession!,
         name: 'default',
         rootPath: projectRoot,
         mode: 'Terminal',
@@ -101,7 +107,8 @@ function AppContent() {
         focusedPaneId,
         savedAt: new Date().toISOString(),
       });
-    }
+    }, 200);
+    return () => clearTimeout(handle);
   }, [layout, focusedPaneId, state.activeSession, projectRoot]);
 
   // Restore layout when a session becomes active (or reset to default)

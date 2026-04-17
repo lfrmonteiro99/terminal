@@ -107,6 +107,25 @@ impl PtyManager {
 
         // Determine command path, args, and whether this is an SSH session.
         let (shell_path, extra_args, is_ssh, ssh_host_label) = if let Some(ref ssh_cfg) = ssh {
+            // Reject values that would be interpreted as OpenSSH flags.
+            // Without this, a crafted username like "-oProxyCommand=..." or a
+            // host starting with "-" turns into an argv element that ssh
+            // parses as a flag rather than a destination. The arg order
+            // (flags before the destination) partly mitigates this, but ssh
+            // still honors flag-shaped tokens anywhere before `--`; we prefer
+            // to fail explicitly.
+            if ssh_cfg.username.starts_with('-') {
+                return Err(format!(
+                    "SSH username '{}' looks like a flag — rejected",
+                    ssh_cfg.username
+                ));
+            }
+            if ssh_cfg.host.starts_with('-') {
+                return Err(format!(
+                    "SSH host '{}' looks like a flag — rejected",
+                    ssh_cfg.host
+                ));
+            }
             let mut args = vec![
                 "-p".to_string(),
                 ssh_cfg.port.to_string(),
@@ -121,6 +140,8 @@ impl PtyManager {
                 args.push("-i".to_string());
                 args.push(key.to_string_lossy().to_string());
             }
+            // End-of-options marker so user@host is never confused with a flag.
+            args.push("--".to_string());
             args.push(format!("{}@{}", ssh_cfg.username, ssh_cfg.host));
             let label = format!("{}@{}", ssh_cfg.username, ssh_cfg.host);
             (PathBuf::from("ssh"), args, true, Some(label))
