@@ -155,8 +155,12 @@ The daemon is configured via environment variables. This table lists all support
 | `TERMINAL_HOST` | `127.0.0.1` | Standalone / Native | Address to bind the WebSocket server to |
 | `TERMINAL_PORT` | `0` (random) | Standalone / Native | Port for the WebSocket server (0 = auto-assign) |
 | `TERMINAL_DATA_DIR` | `~/.terminal-daemon/` | Standalone / Native | Directory for persisted data (sessions, runs, worktrees) |
+| `TERMINAL_AUTH_TOKEN` | _(auto-generated)_ | Standalone / Native | WebSocket auth token. Generated and persisted on first start if absent. |
 | `TERMINAL_CLAUDE_BINARY` | `claude` | All | Path to or command for the Claude CLI binary |
+| `SHELL` | `/bin/bash` | All | Default shell for PTY sessions when no explicit shell is requested |
 | `RUST_LOG` | `info` | All | Log level (trace, debug, info, warn, error) |
+
+The canonical list lives in `crates/terminal-core/src/config.rs` — update the table here whenever a new `TERMINAL_*` var is added.
 
 ### Examples
 
