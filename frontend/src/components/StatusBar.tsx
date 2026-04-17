@@ -77,6 +77,25 @@ export function StatusBar() {
 
       <span style={{ flex: 1 }} />
 
+      {state.gitToast && (
+        <StatusBarItem
+          onClick={() => dispatch({ type: 'DISMISS_GIT_TOAST' })}
+          title="Dismiss"
+        >
+          <span
+            style={{
+              color:
+                state.gitToast.kind === 'error' ? 'var(--accent-error)' : 'var(--accent-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            {state.gitToast.kind === 'error' ? '⚠' : '✓'} {state.gitToast.message}
+          </span>
+        </StatusBarItem>
+      )}
+
       {isRunning && (
         <StatusBarItem
           onClick={() => window.dispatchEvent(new CustomEvent('focus-pane-kind', { detail: 'AiRun' }))}

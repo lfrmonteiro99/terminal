@@ -327,6 +327,12 @@ pub struct WorktreeMeta {
     pub base_head: String,
     pub merge_base: String,
     pub last_modified: DateTime<Utc>,
+    /// Main repository root this worktree belongs to. Needed so cleanup
+    /// paths (crash recovery, startup reconcile) can invoke `git worktree
+    /// remove`. Optional for backward compatibility with older JSON files;
+    /// when absent, callers fall back to deriving it from `worktree_path`.
+    #[serde(default)]
+    pub repo_root: Option<PathBuf>,
 }
 
 // --- Sidebar Types (Phase 3) ---
@@ -594,10 +600,26 @@ mod tests {
             base_head: "abc123".into(),
             merge_base: "abc123".into(),
             last_modified: chrono::Utc::now(),
+            repo_root: Some(PathBuf::from("/tmp/project")),
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorktreeMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.branch_name, "llm/test");
+        assert_eq!(deserialized.repo_root.as_deref(), Some(std::path::Path::new("/tmp/project")));
+    }
+
+    #[test]
+    fn worktree_meta_backward_compat_without_repo_root() {
+        // Older JSON payloads (pre-M17) had no repo_root field.
+        let legacy_json = r#"{
+            "worktree_path": "/tmp/wt",
+            "branch_name": "llm/test",
+            "base_head": "abc123",
+            "merge_base": "abc123",
+            "last_modified": "2024-01-01T00:00:00Z"
+        }"#;
+        let meta: WorktreeMeta = serde_json::from_str(legacy_json).unwrap();
+        assert!(meta.repo_root.is_none());
     }
 
     #[test]

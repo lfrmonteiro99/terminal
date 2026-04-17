@@ -9,15 +9,20 @@ use axum::{
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::sync::Arc;
 use terminal_core::protocol::v1::{AppCommand, AppEvent};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 pub struct DaemonState {
     pub auth_token: String,
     pub event_tx: broadcast::Sender<String>,
     pub command_tx: mpsc::Sender<(ClientId, AppCommand, mpsc::Sender<AppEvent>)>,
+    /// Shared with `DaemonContext` so the WS handler can scrub a client's
+    /// entry on disconnect (M5b, issue #100).
+    pub active_workspaces: Arc<Mutex<HashMap<Uuid, Uuid>>>,
 }
 
 pub fn build_router(state: Arc<DaemonState>) -> Router {
@@ -202,7 +207,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
 
     send_task.abort();
     response_task.abort();
-    info!("Client connection closed");
+    // M5b: scrub this client's active-workspace entry on disconnect.
+    state.active_workspaces.lock().await.remove(&client_id.0);
+    info!("Client connection closed ({:?})", client_id);
 }
 
 #[cfg(test)]
@@ -224,6 +231,7 @@ mod tests {
             auth_token: token.clone(),
             event_tx,
             command_tx,
+            active_workspaces: Arc::new(Mutex::new(HashMap::new())),
         });
 
         let router = build_router(state);

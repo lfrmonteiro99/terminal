@@ -1,5 +1,6 @@
 use crate::claude_runner::{output_file_path, RunnerEvent};
 use crate::daemon_context::{ActiveRun, ClientId, DaemonContext};
+use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
 use crate::safety::broadcast_event;
@@ -32,13 +33,45 @@ impl Dispatcher {
         persistence: Arc<Persistence>,
     ) -> Self {
         let context = Arc::new(DaemonContext::new(config, event_tx.clone(), persistence));
-        let pty_manager = Arc::new(PtyManager::new(event_tx));
+        let pty_manager = Arc::new(
+            PtyManager::new(event_tx).with_workspace_channels(context.workspace_channels.clone()),
+        );
         Self { context, pty_manager }
     }
 
     /// Broadcast an event to all connected clients.
     fn broadcast(&self, event: &AppEvent) {
         self.context.broadcast(event);
+    }
+
+    /// Load persisted workspaces from disk into the in-memory registry and
+    /// create a broadcast channel for each. Called once at startup (C5b,
+    /// issue #98).
+    pub async fn recover_workspaces(&self) {
+        let persisted = match self.context.persistence.list_workspaces() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("recover_workspaces: list failed: {}", e);
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+        let mut workspaces = self.context.workspaces.lock().await;
+        let mut channels = self.context.workspace_channels.lock().await;
+        for ws in persisted {
+            let id = ws.id;
+            channels.entry(id).or_insert_with(|| broadcast::channel(512).0);
+            workspaces.insert(id, ws);
+        }
+        info!("Recovered {} persisted workspace(s)", workspaces.len());
+    }
+
+    /// Borrow the shared daemon context (used by `server.rs` to reach
+    /// per-client state like `active_workspaces`).
+    pub fn context(&self) -> Arc<DaemonContext> {
+        self.context.clone()
     }
 
     /// Handle a command and send response to the requesting client.
@@ -1396,24 +1429,139 @@ impl Dispatcher {
         let mut base_head = String::new();
         let mut actual_working_dir = project_root.clone();
 
+        // RAII concurrency guard — dropped on early return, `forget()` once
+        // the supervisor task takes ownership of cleanup on successful spawn.
+        let mut concurrency_guard: Option<ConcurrencyGuard> = None;
+
         if is_git {
-            match self.prepare_worktree(
-                &project_root,
+            // Concurrency guard (see crate::guards): removes the entry on
+            // any early return below without manual cleanup.
+            let guard = match ConcurrencyGuard::acquire(
+                self.context.concurrency.clone(),
+                project_root.clone(),
                 run_id,
-                session_id,
-                skip_dirty_check,
-                &prompt,
-                &mode,
-                &reply_tx,
-            ).await {
-                Ok(info) => {
-                    actual_working_dir = info.worktree_path.clone();
-                    worktree_path = Some(info.worktree_path);
-                    branch_name = info.branch_name;
-                    base_head = info.base_head;
+            )
+            .await
+            {
+                Some(g) => g,
+                None => {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "REPO_BUSY".into(),
+                            message: format!(
+                                "Repository {} already has an active run",
+                                project_root.display()
+                            ),
+                        })
+                        .await;
+                    return;
                 }
-                Err(()) => return, // error already sent to reply_tx
+            };
+            concurrency_guard = Some(guard);
+
+            // Guard repo state
+            if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "GIT_STATE_ERROR".into(),
+                        message: format!("Repository not in clean state: {}", e),
+                    })
+                    .await;
+                return;
             }
+
+            // Dirty working directory check (unless explicitly skipped)
+            if !skip_dirty_check {
+                let dirty = crate::git_engine::working_dir_status(&project_root)
+                    .await
+                    .unwrap_or_else(|_| DirtyStatus {
+                        staged: vec![],
+                        unstaged: vec![],
+                    });
+
+                if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
+                    // Send DirtyWarning event -- frontend will show modal
+                    let _ = reply_tx
+                        .send(AppEvent::DirtyWarning {
+                            status: dirty,
+                            session_id,
+                            prompt: prompt.clone(),
+                            mode: mode.clone(),
+                        })
+                        .await;
+                    return;
+                }
+            }
+
+            // Get base HEAD
+            match crate::git_engine::head_oid(&project_root).await {
+                Ok(oid) => base_head = oid,
+                Err(e) => {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "GIT_ERROR".into(),
+                            message: format!("Failed to read HEAD: {}", e),
+                        })
+                        .await;
+                    return;
+                }
+            }
+
+            // Generate branch name and worktree path
+            let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            let short_uuid = &run_id.to_string()[..8];
+            branch_name = format!("llm/{}-{}", timestamp, short_uuid);
+            let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
+
+            // Create .terminal-worktrees/ dir
+            let wt_parent = match wt_path.parent() {
+                Some(p) => p,
+                None => {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "IO_ERROR".into(),
+                            message: "Invalid worktree path: no parent directory".into(),
+                        })
+                        .await;
+                    return;
+                }
+            };
+            if let Err(e) = tokio::fs::create_dir_all(wt_parent).await {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "IO_ERROR".into(),
+                        message: format!("Failed to create worktrees dir: {}", e),
+                    })
+                    .await;
+                return;
+            }
+
+            // Create worktree
+            if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "GIT_ERROR".into(),
+                        message: format!("Failed to create worktree: {}", e),
+                    })
+                    .await;
+                return;
+            }
+
+            // Save worktree metadata
+            let meta = WorktreeMeta {
+                worktree_path: wt_path.clone(),
+                branch_name: branch_name.clone(),
+                base_head: base_head.clone(),
+                merge_base: base_head.clone(),
+                last_modified: chrono::Utc::now(),
+                repo_root: Some(project_root.clone()),
+            };
+            if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
+                warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
+            }
+
+            actual_working_dir = wt_path.clone();
+            worktree_path = Some(wt_path);
         }
 
         let run = Run {
@@ -1456,9 +1604,14 @@ impl Dispatcher {
             return;
         }
 
-        // Spawn claude process in actual_working_dir (worktree if git)
+        // Spawn claude process in actual_working_dir (worktree if git).
+        // Ownership of the concurrency entry transfers to the supervisor task
+        // on success; `forget()` prevents the guard from clearing it on drop.
         match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
             Ok((mut event_rx, stdin_tx, mut child)) => {
+                if let Some(g) = concurrency_guard.take() {
+                    g.forget();
+                }
                 let (cancel_tx, mut cancel_rx) = mpsc::channel::<String>(1);
 
                 let active_run = ActiveRun {
@@ -1785,9 +1938,9 @@ impl Dispatcher {
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.active_run = None;
                 }
-                // Cleanup concurrency and worktree on spawn failure
+                // Concurrency entry is released automatically when
+                // `concurrency_guard` drops at end of scope.
                 if is_git {
-                    self.context.concurrency.lock().await.remove(&project_root);
                     if let Some(ref wt_path) = worktree_path {
                         if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
                             warn!("Failed to cleanup worktree on spawn failure: {}", e);

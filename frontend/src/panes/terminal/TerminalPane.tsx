@@ -8,6 +8,7 @@ import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 import type { RestorableTerminalSession, SshConfig } from '../../types/protocol';
+import { subscribeTerminalEvents } from '../../core/events/terminalBus';
 
 type SessionState =
   | { tag: 'idle' }
@@ -46,8 +47,7 @@ let globalListenerInstalled = false;
 function installGlobalListener() {
   if (globalListenerInstalled) return;
   globalListenerInstalled = true;
-  window.addEventListener('terminal-event', (e: Event) => {
-    const event = (e as CustomEvent).detail;
+  subscribeTerminalEvents((event) => {
     if (event.type === 'TerminalSessionCreated') {
       claimSession(event.workspace_id, event.session_id);
     }
@@ -318,8 +318,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Listen for terminal output and close events (session-specific, not creation)
   useEffect(() => {
     if (!sessionId) return;
-    const handler = (e: Event) => {
-      const event = (e as CustomEvent).detail;
+    const handler = (event: Parameters<Parameters<typeof subscribeTerminalEvents>[0]>[0]) => {
       if (event.type === 'TerminalOutput' && event.session_id === sessionId) {
         xtermRef.current?.write(event.data);
 
@@ -368,8 +367,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         setSessionState({ tag: 'lost' });
       }
     };
-    window.addEventListener('terminal-event', handler);
-    return () => window.removeEventListener('terminal-event', handler);
+    return subscribeTerminalEvents(handler);
     // pane.id and pane.label are stable per component instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);

@@ -25,6 +25,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { ToastContainer } from './components/ToastContainer';
 import { SshConnectDialog } from './components/SshConnectDialog';
 import type { SshConnectConfig } from './components/SshConnectDialog';
+import { resolveDaemonWsUrl } from './core/daemon/resolveDaemonWsUrl';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -318,7 +319,7 @@ function AppContent() {
       // Check for Tauri runtime (injected by the native shell, not present in browsers)
       if (!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
         debug('[Browser] Tauri runtime not detected, using standalone mode');
-        setDaemonUrl('ws://127.0.0.1:3000/ws');
+        setDaemonUrl(resolveDaemonWsUrl());
         setTauriMode(false);
         return;
       }
@@ -345,7 +346,7 @@ function AppContent() {
         setTauriMode(true);
       } catch {
         debug('[Browser] Tauri API import failed, using standalone mode');
-        setDaemonUrl('ws://127.0.0.1:3000/ws');
+        setDaemonUrl(resolveDaemonWsUrl());
         setTauriMode(false);
       }
     };
@@ -356,6 +357,9 @@ function AppContent() {
 
   const handleEvent = useCallback(
     (event: AppEvent) => {
+      // C3: every variant now flows through the reducer (or the terminalBus
+      // side effect wrapped into dispatch in AppProvider). No more
+      // `window.dispatchEvent(new CustomEvent(...))` for protocol events.
       dispatch({ type: 'HANDLE_EVENT', event });
 
       // Route terminal events via CustomEvent (high-frequency, shouldn't go through React state)

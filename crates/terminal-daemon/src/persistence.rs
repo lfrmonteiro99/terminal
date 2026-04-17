@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Public API — consumers added in later tasks
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
@@ -243,6 +241,11 @@ impl Persistence {
         Ok(())
     }
 
+    /// Path to the JSON metadata file for a given run's worktree.
+    pub fn worktree_meta_path(&self, run_id: Uuid) -> PathBuf {
+        self.base_dir.join("worktrees").join(format!("{}.json", run_id))
+    }
+
     pub fn list_worktree_metas(&self) -> Result<Vec<(Uuid, WorktreeMeta)>> {
         let dir = self.base_dir.join("worktrees");
         let mut metas = Vec::new();
@@ -354,11 +357,12 @@ impl Persistence {
 
             match self.load_run(run_id) {
                 Ok(run) if run.state.is_terminal() => {
-                    // TODO: call git_engine::worktree_remove for actual worktree cleanup
                     warn!(
                         "Recovery: removing orphaned worktree metadata for terminal run {}",
                         run_id
                     );
+                    // On-disk worktree cleanup happens separately in the async
+                    // reconcile pass (see `prune_orphan_worktrees_on_disk`).
                     fs::remove_file(&path)?;
                     report.orphaned_worktrees += 1;
                     report.cleaned_metadata += 1;
@@ -560,6 +564,7 @@ mod tests {
             base_head: "abc123".into(),
             merge_base: "abc123".into(),
             last_modified: Utc::now(),
+            repo_root: Some(PathBuf::from("/tmp/project")),
         }
     }
 

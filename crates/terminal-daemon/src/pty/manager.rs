@@ -27,8 +27,13 @@ pub struct PtySession {
 
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<Uuid, PtySession>>>,
-    /// Global event broadcast (workspace-scoped routing happens in caller)
+    /// Global event broadcast — used as fallback when no workspace-scoped
+    /// channel is available.
     event_tx: broadcast::Sender<String>,
+    /// Shared workspace-scoped broadcast channels (M5c, issue #101). Kept as
+    /// an `Option` so tests that don't wire this can still run.
+    workspace_channels:
+        Option<Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
 }
 
 impl PtyManager {
@@ -36,7 +41,56 @@ impl PtyManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
+            workspace_channels: None,
         }
+    }
+
+    /// Attach the shared workspace broadcast channel map. When set, terminal
+    /// events route to the owning workspace only, with fallback to the global
+    /// channel if the workspace has no subscribers.
+    pub fn with_workspace_channels(
+        mut self,
+        channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
+    ) -> Self {
+        self.workspace_channels = Some(channels);
+        self
+    }
+
+    async fn emit(&self, workspace_id: Uuid, event: &AppEvent) {
+        Self::emit_via(
+            &self.event_tx,
+            self.workspace_channels.as_ref(),
+            workspace_id,
+            event,
+        )
+        .await;
+    }
+
+    async fn emit_via(
+        global: &broadcast::Sender<String>,
+        channels: Option<&Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
+        workspace_id: Uuid,
+        event: &AppEvent,
+    ) {
+        if let Some(map) = channels {
+            let json = match serde_json::to_string(event) {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!("PTY event serialization failed: {}", e);
+                    return;
+                }
+            };
+            let guard = map.lock().await;
+            if let Some(tx) = guard.get(&workspace_id) {
+                let _ = tx.send(json);
+                return;
+            }
+            drop(guard);
+            // Fallback to global channel so we don't drop events.
+            let _ = global.send(json);
+            return;
+        }
+        broadcast_event(global, event);
     }
 
     /// Create a new PTY session using a real pseudo-terminal via openpty(2).
@@ -189,16 +243,30 @@ impl PtyManager {
 
         // Spawn stdout reader task (reads from PTY master — single stream, PTY merges stdout+stderr).
         let event_tx_clone = self.event_tx.clone();
-        tokio::spawn(Self::stdout_reader(session_id, master_read, event_tx_clone));
+        let workspace_channels_reader = self.workspace_channels.clone();
+        tokio::spawn(Self::stdout_reader(
+            session_id,
+            workspace_id,
+            master_read,
+            event_tx_clone,
+            workspace_channels_reader,
+        ));
 
         // Spawn process watcher — removes session on child exit.
         let sessions_for_watcher = Arc::clone(&self.sessions);
         let event_tx_for_watcher = self.event_tx.clone();
+        let workspace_channels_watcher = self.workspace_channels.clone();
         tokio::spawn(async move {
             let mut child = child;
             let _ = child.wait().await;
             sessions_for_watcher.lock().await.remove(&session_id);
-            broadcast_event(&event_tx_for_watcher, &AppEvent::TerminalSessionClosed { session_id });
+            Self::emit_via(
+                &event_tx_for_watcher,
+                workspace_channels_watcher.as_ref(),
+                workspace_id,
+                &AppEvent::TerminalSessionClosed { session_id },
+            )
+            .await;
             info!("PTY session {} exited", session_id);
         });
 
@@ -221,7 +289,7 @@ impl PtyManager {
             is_ssh,
             ssh_host: ssh_host_label,
         };
-        broadcast_event(&self.event_tx, &created_event);
+        self.emit(workspace_id, &created_event).await;
 
         info!("PTY session {} created for workspace {}", session_id, workspace_id);
         Ok(session_id)
@@ -244,8 +312,11 @@ impl PtyManager {
 
     async fn stdout_reader(
         session_id: Uuid,
+        workspace_id: Uuid,
         mut reader: impl AsyncReadExt + Unpin,
         event_tx: broadcast::Sender<String>,
+        workspace_channels:
+            Option<Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
     ) {
         let mut buf = vec![0u8; 4096];
         loop {
@@ -255,7 +326,13 @@ impl PtyManager {
                     // Real PTY line discipline handles \n → \r\n; no manual replacement needed.
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
                     let event = AppEvent::TerminalOutput { session_id, data };
-                    broadcast_event(&event_tx, &event);
+                    Self::emit_via(
+                        &event_tx,
+                        workspace_channels.as_ref(),
+                        workspace_id,
+                        &event,
+                    )
+                    .await;
                 }
             }
         }
@@ -304,12 +381,15 @@ impl PtyManager {
     pub async fn close_session(&self, session_id: Uuid) -> Result<(), String> {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.remove(&session_id) {
+            let workspace_id = session.meta.workspace_id;
             // Signal the stdin_writer task to exit; it will drop its tokio::fs::File,
             // closing the write half of the master PTY and sending EOF to the shell.
             // The stdout_reader task will exit when it sees EOF/error.
             // We do NOT call nix::libc::close() here — the Tokio Files own the fds.
             let _ = session.close_tx.send(()).await;
-            broadcast_event(&self.event_tx, &AppEvent::TerminalSessionClosed { session_id });
+            drop(sessions);
+            self.emit(workspace_id, &AppEvent::TerminalSessionClosed { session_id })
+                .await;
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))

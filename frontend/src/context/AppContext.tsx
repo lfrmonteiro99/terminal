@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useReducer, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
+import type { AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import { publishTerminalEvent } from '../core/events/terminalBus';
 
 // --- State ---
 
@@ -44,6 +45,34 @@ export interface AppState {
   runMetrics: RunMetrics | null;
   /** Preflight error surfaced when the Claude binary is missing/unauthenticated. */
   preflightError: PreflightError | null;
+
+  // Direct-to-state slices added by C3 (replacing window.dispatchEvent workarounds)
+  /** Branch list last reported by the daemon. Consumed by CommandPalette. */
+  branches: BranchInfo[];
+  /** Currently-viewed file + optional read error. Consumed by FileViewerPane. */
+  fileViewer:
+    | {
+        path: string;
+        content: string;
+        language: string;
+        truncated: boolean;
+        size_bytes: number;
+      }
+    | { path: string; error: string }
+    | null;
+  /** Most recent search result. Consumed by SearchPane. */
+  searchResult: {
+    query: string;
+    matches: SearchMatch[];
+    total_matches: number;
+    files_searched: number;
+    truncated: boolean;
+    duration_ms: number;
+  } | null;
+  /** Transient git-operation toast (push/pull/fetch/error). Auto-dismissed by the StatusBar. */
+  gitToast: { kind: 'push' | 'pull' | 'fetch' | 'error'; message: string; timestamp: number } | null;
+  /** Last-known dirty state snapshot for the active project. */
+  dirtyState: DirtyStatus | null;
 }
 
 const initialState: AppState = {
@@ -82,6 +111,11 @@ const initialState: AppState = {
   runToolCalls: new Map(),
   runMetrics: null,
   preflightError: null,
+  branches: [],
+  fileViewer: null,
+  searchResult: null,
+  gitToast: null,
+  dirtyState: null,
 };
 
 // --- Actions ---
@@ -100,9 +134,19 @@ type Action =
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
   | { type: 'OPEN_DIFF'; file: string }
   | { type: 'CLOSE_DIFF' }
-  | { type: 'SET_DIFF_MODE'; mode: AppState['diffPanel']['mode'] };
+  | { type: 'SET_DIFF_MODE'; mode: AppState['diffPanel']['mode'] }
+  | { type: 'DISMISS_GIT_TOAST' };
 
 const MAX_OUTPUT_LINES = 2000;
+
+/** Compile-time exhaustiveness guard for AppEvent variants.
+ *  Adding a new variant without a matching `case` in HANDLE_EVENT breaks TS
+ *  compilation at the call site. At runtime we log and let the caller fall
+ *  back to the unchanged state. */
+function assertExhaustive(event: never): void {
+  const e = event as { type?: string };
+  console.warn('[AppContext] unhandled AppEvent variant', e.type);
+}
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -144,6 +188,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'SET_DIFF_MODE':
       return { ...state, diffPanel: { ...state.diffPanel, mode: action.mode } };
+
+    case 'DISMISS_GIT_TOAST':
+      return { ...state, gitToast: null };
 
     case 'HANDLE_EVENT': {
       const event = action.event;
@@ -311,9 +358,6 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, stashDiffs };
         }
 
-        case 'DirtyState':
-          return state;
-
         case 'DirtyWarning':
           return {
             ...state,
@@ -412,7 +456,141 @@ function reducer(state: AppState, action: Action): AppState {
           };
         }
 
+        // --- Run history pagination (C3) ---
+        case 'RunOutputPage': {
+          // Treat as append-only history for the active run. Callers that
+          // want fresh pages dispatch CLEAR_OUTPUT first.
+          if (event.run_id !== state.activeRun) return state;
+          const lines = [...state.outputLines, ...event.lines];
+          const trimmed =
+            lines.length > MAX_OUTPUT_LINES ? lines.slice(lines.length - MAX_OUTPUT_LINES) : lines;
+          return { ...state, outputLines: trimmed };
+        }
+
+        // --- Branch list (C3) — replaces window CustomEvent workaround ---
+        case 'BranchList':
+          return { ...state, branches: event.branches };
+
+        // --- File viewer (C3) — replaces window CustomEvent workaround ---
+        case 'FileContent':
+          return {
+            ...state,
+            fileViewer: {
+              path: event.path,
+              content: event.content,
+              language: event.language,
+              truncated: event.truncated,
+              size_bytes: event.size_bytes,
+            },
+          };
+
+        case 'FileReadError':
+          return {
+            ...state,
+            fileViewer: { path: event.path, error: event.error },
+          };
+
+        // --- Search (C3) — replaces window CustomEvent workaround ---
+        case 'SearchResults':
+          return {
+            ...state,
+            searchResult: {
+              query: event.query,
+              matches: event.matches,
+              total_matches: event.total_matches,
+              files_searched: event.files_searched,
+              truncated: event.truncated,
+              duration_ms: event.duration_ms,
+            },
+          };
+
+        // --- Git extended (C3) ---
+        case 'PushCompleted':
+          return {
+            ...state,
+            gitToast: {
+              kind: 'push',
+              message: `Pushed ${event.branch} → ${event.remote}`,
+              timestamp: Date.now(),
+            },
+          };
+
+        case 'PullCompleted':
+          return {
+            ...state,
+            gitToast: {
+              kind: 'pull',
+              message:
+                event.commits_applied === 0
+                  ? `${event.branch} is up to date`
+                  : `Pulled ${event.commits_applied} commit(s) into ${event.branch}`,
+              timestamp: Date.now(),
+            },
+          };
+
+        case 'FetchCompleted':
+          return {
+            ...state,
+            gitToast: {
+              kind: 'fetch',
+              message: `Fetched from ${event.remote}`,
+              timestamp: Date.now(),
+            },
+          };
+
+        case 'GitOperationFailed':
+          return {
+            ...state,
+            gitToast: {
+              kind: 'error',
+              message: `${event.operation} failed: ${event.reason}`,
+              timestamp: Date.now(),
+            },
+          };
+
+        // --- Dirty state snapshot (C3) ---
+        case 'DirtyState':
+          return { ...state, dirtyState: event.status };
+
+        // --- Terminal (C3) — the bounded xterm stream still flows via
+        // terminalBus; we also fire the publish as a side effect in the
+        // `HANDLE_EVENT` wrapper below. These reducer arms are noops so the
+        // default case only triggers for truly unhandled variants.
+        case 'TerminalSessionCreated':
+        case 'TerminalOutput':
+        case 'TerminalSessionClosed':
+          return state;
+
+        case 'TerminalSessionList':
+          // intentionally ignored: listing is consumed directly by panes via dedicated query
+          return state;
+
+        case 'TerminalSessionRestored':
+          // intentionally ignored: restoration re-uses the Created pathway on the pane side
+          return state;
+
+        case 'TerminalSessionRestoreFailed':
+          return {
+            ...state,
+            error: `Terminal restore failed: ${event.reason}`,
+          };
+
+        case 'RestorableTerminalSessions':
+          // intentionally ignored: only surfaced on demand via a pane query
+          return state;
+
+        // --- Workspace lifecycle (routed by App.tsx to workspace state store;
+        //     the legacy reducer doesn't mirror workspace state — it only
+        //     knows about the AI session workspace. Intentionally ignored
+        //     here so they flow through the dedicated WorkspaceSwitcher). ---
+        case 'WorkspaceList':
+        case 'WorkspaceCreated':
+        case 'WorkspaceClosed':
+        case 'WorkspaceActivated':
+          return state;
+
         default:
+          assertExhaustive(event);
           return state;
       }
     }
@@ -430,14 +608,48 @@ const AppDispatchContext = createContext<Dispatch<Action>>(() => {});
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  // Keep a ref pointed at the latest state so side-effect closures can read
+  // the freshest gitToast timestamp without re-running on every render.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   // Fix 3: Persist diffPanel.mode to localStorage via useEffect (not in reducer)
   useEffect(() => {
     localStorage.setItem('diff-mode', state.diffPanel.mode);
   }, [state.diffPanel.mode]);
 
+  // Auto-dismiss git toast after 4s so users always see completion feedback
+  // without leaving stale state in the UI.
+  useEffect(() => {
+    if (!state.gitToast) return;
+    const ts = state.gitToast.timestamp;
+    const timer = setTimeout(() => {
+      if (stateRef.current.gitToast?.timestamp === ts) {
+        dispatch({ type: 'DISMISS_GIT_TOAST' });
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [state.gitToast]);
+
+  // Wrap dispatch so high-frequency terminal events are also broadcast on the
+  // in-memory terminalBus (consumed directly by TerminalPane's xterm writer).
+  const wrappedDispatch: Dispatch<Action> = (action) => {
+    if (action.type === 'HANDLE_EVENT') {
+      const e = action.event;
+      if (
+        e.type === 'TerminalSessionCreated' ||
+        e.type === 'TerminalOutput' ||
+        e.type === 'TerminalSessionClosed'
+      ) {
+        publishTerminalEvent(e);
+      }
+    }
+    dispatch(action);
+  };
+
   return (
     <AppStateContext.Provider value={state}>
-      <AppDispatchContext.Provider value={dispatch}>
+      <AppDispatchContext.Provider value={wrappedDispatch}>
         {children}
       </AppDispatchContext.Provider>
     </AppStateContext.Provider>

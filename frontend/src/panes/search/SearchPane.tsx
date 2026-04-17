@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 import { useSend } from '../../context/SendContext';
+import { useAppState } from '../../context/AppContext';
 import type { SearchMatch } from '../../types/protocol';
 
 interface SearchResultsEvent {
@@ -206,6 +207,7 @@ function FileGroup({
 
 export function SearchPane(_props: PaneProps) {
   const send = useSend();
+  const storeResult = useAppState().searchResult;
   const [query, setQuery] = useState('');
   const [isRegex, setIsRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -233,18 +235,13 @@ export function SearchPane(_props: PaneProps) {
     });
   }
 
-  // Listen for search-results events dispatched from App.tsx
+  // Listen for search results via the store (C3). Only accept results for
+  // the query we last fired — concurrent searches can interleave.
   useEffect(() => {
-    const handler = (e: Event) => {
-      const event = (e as CustomEvent).detail as SearchResultsEvent;
-      // Only accept results for the query we last fired
-      if (event.query === activeQueryRef.current) {
-        setSearchState({ status: 'results', event });
-      }
-    };
-    window.addEventListener('search-results', handler);
-    return () => window.removeEventListener('search-results', handler);
-  }, []);
+    if (!storeResult) return;
+    if (storeResult.query !== activeQueryRef.current) return;
+    setSearchState({ status: 'results', event: { type: 'SearchResults', ...storeResult } });
+  }, [storeResult]);
 
   // Group matches by file
   const fileGroups: Map<string, SearchMatch[]> = (() => {

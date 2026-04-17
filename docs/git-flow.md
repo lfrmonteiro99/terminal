@@ -1,146 +1,84 @@
-# Fluxo Git Completo e Intuitivo (Opção 3)
+# Git in Terminal Engine
 
-Fluxo recomendado para combinar produtividade com segurança.
+This document describes the git surface that the daemon exposes and how the
+frontend panes use it. For the optional `cc` shell helper (legacy of the old
+CLI design), see [`bin-cc.md`](./bin-cc.md).
 
-## 1. Convenções
+## Daemon operations
 
-- Branch principal protegida: `main`.
-- Prefixos:
-  - `feature/<ticket>-<slug>`
-  - `fix/<ticket>-<slug>`
-  - `chore/<ticket>-<slug>`
-  - `refactor/<ticket>-<slug>`
-- Commits em conventional commits:
-  - `feat: ...`
-  - `fix: ...`
-  - `chore: ...`
-  - `refactor: ...`
+All git operations go through `git_engine.rs` — pure CLI invocations via
+`tokio::process::Command`. No libgit2.
 
-## 2. Sequência operacional
+| AppCommand | What the daemon does |
+|------------|----------------------|
+| `GetRepoStatus` | `git status --porcelain=v1`, rev-parse HEAD / branch |
+| `GetChangedFiles { mode }` | Status for working tree, or diff for a completed run |
+| `GetFileDiff { file_path, mode, run_id? }` | `git diff` scoped to one file |
+| `StageFile` / `UnstageFile` | `git add <path>` / `git restore --staged <path>` |
+| `CreateCommit { message }` | `git commit -m` on staged changes |
+| `ListBranches` / `CheckoutBranch` / `CreateBranch` | Branch navigation |
+| `GetCommitHistory { limit }` | `git log --oneline` with author/date metadata |
+| `ListStashes` / `GetStashFiles` / `GetStashDiff` | Stash browser |
+| `CheckDirtyState` | Uncommitted-changes probe before starting a run |
+| `StashAndRun` | `git stash` + `StartRun`, then restore after |
+| `PushBranch` / `PullBranch` / `FetchRemote` | Remote ops (M5-03) |
+| `GetMergeConflicts` / `ResolveConflict` | 3-way conflict editor (M5-05) |
 
-### Passo A — Criar branch de trabalho
+Each operation replies with a matching `AppEvent` (`RepoStatusResult`,
+`ChangedFilesList`, `FileDiffResult`, `CommitCreated`, `BranchList`,
+`StashList`, `PushCompleted`, `PullCompleted`, `MergeConflicts`, etc.).
+Errors surface as `GitOperationFailed { operation, reason }`.
 
-Comando alvo:
+## Run isolation via worktrees
+
+When the user starts an AI run, the daemon:
+
+1. Checks `CheckDirtyState`. If dirty and the user didn't opt into
+   `StashAndRun`, it emits `DirtyWarning` and waits for confirmation.
+2. Creates a worktree in `.terminal-worktrees/<run-id>/` from the current
+   branch head.
+3. Runs Claude inside that worktree (so the user's checkout is untouched).
+4. On completion emits `RunCompleted` with a `DiffStat`. The frontend shows a
+   **Merge** / **Revert** choice in `PostRunSummary`.
+
+`MergeRun` squashes the run's diff back into the user's branch; `RevertRun`
+deletes the worktree. Both paths clean up the worktree meta in
+`~/.terminal-daemon/worktrees/`.
+
+## Frontend panes
+
+| Pane | Uses |
+|------|------|
+| `GitStatusPane` | `RepoStatusResult`, `ChangedFilesList`, stage/unstage, commit box |
+| `GitHistoryPane` | `CommitHistoryResult` |
+| `MergeConflictPane` | `MergeConflicts`, `ResolveConflict` with 3-way view |
+| `StashDrawer` | `StashList`, `StashFiles`, `StashDiff` |
+| `DirtyWarningModal` | `DirtyWarning` → `StashAndRun` / `StartRun { skip_dirty_check }` / cancel |
+| `CommandPalette` | `BranchList` for quick `CheckoutBranch` |
+
+Toasts for `PushCompleted`, `PullCompleted`, `FetchCompleted`,
+`GitOperationFailed` are dispatched from the event router into the workspace
+store's `gitToast` slot and shown in `StatusBar`.
+
+## Guardrails
+
+Guardrails are per-operation and enforced in the daemon:
+
+- Dirty-tree check before every run.
+- `ResolveConflict` refuses if the file no longer has conflict markers.
+- Worktree paths are derived from run UUIDs to avoid collisions.
+- `PushBranch` / `PullBranch` default to the current branch + `origin`; the
+  frontend never force-pushes.
+
+UI-level guardrails (protected-branch warning, commit-type enforcement,
+conventional-commit templates) live in the optional `cc` helper — see
+[`bin-cc.md`](./bin-cc.md).
+
+## Testing git flows
+
 ```bash
-cc branch start 1234-login-flow
+docker compose run --rm test cargo test -p terminal-daemon git_engine
 ```
 
-A CLI deve:
-1. Validar se a árvore está limpa.
-2. Atualizar refs remotas (`git fetch --all --prune`).
-3. Criar branch a partir de `main` atualizada.
-
-### Passo B — Implementar com assistência AI
-
-Comando alvo:
-```bash
-cc do "Implementar validação de sessão e testes"
-```
-
-A CLI deve:
-1. Gerar plano breve.
-2. Aplicar alterações em lotes pequenos.
-3. Mostrar diff resumido por ficheiro.
-
-### Passo C — Revisão local de alterações
-
-Comando alvo:
-```bash
-cc review
-```
-
-A CLI deve devolver:
-- Resumo técnico do diff.
-- Pontos de risco (breaking changes, segurança, migrações).
-- Sugestões de testes adicionais.
-
-### Passo D — Validar qualidade
-
-Comando alvo:
-```bash
-cc test
-```
-
-A CLI deve correr (na ordem):
-1. lint
-2. type-check
-3. testes
-
-Se falhar, a CLI recomenda correção assistida (`cc do "corrigir erros de teste"`).
-
-### Passo E — Commit assistido
-
-Comando alvo:
-```bash
-cc commit
-```
-
-A CLI deve:
-1. Verificar checks mínimos.
-2. Gerar mensagem de commit pelo diff.
-3. Mostrar preview e pedir confirmação.
-4. Executar commit.
-
-### Passo F — Sincronizar com remoto
-
-Comando alvo:
-```bash
-cc sync
-```
-
-A CLI deve:
-1. `git fetch`.
-2. `git rebase origin/main`.
-3. Assistir resolução de conflitos (resumo + próximos comandos).
-
-### Passo G — Abrir PR
-
-Comando alvo:
-```bash
-cc pr
-```
-
-A CLI deve gerar automaticamente:
-- título
-- resumo
-- motivação
-- como testar
-- riscos/rollback
-
-E executar `gh pr create` com o conteúdo.
-
-## 3. Guardrails de segurança
-
-- Bloquear commit/push para `main` por defeito.
-- Proibir `push --force` sem flag explícita `--allow-force`.
-- Abort automático se houver ficheiros com conflito não resolvido.
-- Aviso alto se mudar ficheiros sensíveis (`infra/`, `migrations/`, `auth/`).
-
-## 4. UX de comandos (respostas curtas e úteis)
-
-A CLI deve sempre responder com:
-1. O que fez.
-2. O estado atual (`branch`, `ahead/behind`, `working tree`).
-3. Próximo comando recomendado.
-
-Exemplo:
-```text
-✅ Branch criada: feature/1234-login-flow
-ℹ️ Estado: clean, 0 commits ahead
-➡️ Próximo passo: cc do "..."
-```
-
-## 5. Métricas de sucesso do fluxo
-
-- Tempo médio branch -> PR.
-- Percentagem de PRs aprovadas sem mudanças grandes.
-- Taxa de falhas em CI por PR.
-- Número de reversões pós-merge.
-
-## 6. Checklist de adoção em equipa
-
-- [ ] Definir convenção de branch.
-- [ ] Definir comandos de lint/type-check/test por projeto.
-- [ ] Ativar branch protection no remoto.
-- [ ] Adotar template de PR padrão.
-- [ ] Treinar equipa em `cc review`, `cc commit`, `cc pr`.
+The tests spin up ephemeral repos in `tempfile::TempDir` and run the real
+`git` binary inside the container.

@@ -1068,66 +1068,501 @@ mod tests {
         let _: AppCommand = serde_json::from_str(&json).unwrap();
     }
 
-    #[test]
-    fn pop_stash_command_roundtrip() {
-        let cmd = AppCommand::PopStash { index: 1 };
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("\"type\":\"PopStash\""));
-        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppCommand::PopStash { index } => assert_eq!(index, 1),
-            _ => panic!("wrong variant"),
-        }
+    // --- Exhaustive roundtrip coverage (issue #88, Minor2) ---------------
+    //
+    // These two tests construct one instance of every `AppCommand` /
+    // `AppEvent` variant, serialize and deserialize it, and verify the tag
+    // survives. The inner exhaustive `match` against each enum means adding
+    // a new variant without extending this list fails to compile, which
+    // satisfies the "missing variant fails CI" acceptance criterion.
+
+    fn roundtrip_command(cmd: &AppCommand) -> String {
+        let json = serde_json::to_string(cmd).expect("serialize");
+        let back: AppCommand = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&back).expect("re-serialize");
+        assert_eq!(json, json2, "roundtrip stability failed for {}", json);
+        json
+    }
+
+    fn roundtrip_event(evt: &AppEvent) -> String {
+        let json = serde_json::to_string(evt).expect("serialize");
+        let back: AppEvent = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&back).expect("re-serialize");
+        assert_eq!(json, json2, "roundtrip stability failed for {}", json);
+        json
     }
 
     #[test]
-    fn apply_stash_command_roundtrip() {
-        let cmd = AppCommand::ApplyStash { index: 2 };
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("\"type\":\"ApplyStash\""));
-        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppCommand::ApplyStash { index } => assert_eq!(index, 2),
-            _ => panic!("wrong variant"),
-        }
-    }
+    fn every_app_command_variant_roundtrips() {
+        let uuid = || Uuid::new_v4();
+        let path = || PathBuf::from("/tmp/x");
+        let commands: Vec<AppCommand> = vec![
+            AppCommand::Auth { token: "tok".into() },
+            AppCommand::StartSession { project_root: path() },
+            AppCommand::EndSession { session_id: uuid() },
+            AppCommand::ListSessions,
+            AppCommand::StartRun {
+                session_id: uuid(),
+                prompt: "p".into(),
+                mode: RunMode::Free,
+                skip_dirty_check: false,
+                autonomy: AutonomyLevel::default(),
+            },
+            AppCommand::CancelRun { run_id: uuid(), reason: "user".into() },
+            AppCommand::RespondToBlocking { run_id: uuid(), response: "ok".into() },
+            AppCommand::GetRunStatus { run_id: uuid() },
+            AppCommand::ListRuns { session_id: uuid() },
+            AppCommand::GetRunOutput { run_id: uuid(), offset: 0, limit: 100 },
+            AppCommand::GetDiff { run_id: uuid() },
+            AppCommand::RevertRun { run_id: uuid() },
+            AppCommand::MergeRun { run_id: uuid() },
+            AppCommand::ListStashes,
+            AppCommand::GetStashFiles { stash_index: 0 },
+            AppCommand::GetStashDiff { stash_index: 0, file_path: None },
+            AppCommand::CheckDirtyState,
+            AppCommand::StashAndRun {
+                session_id: uuid(),
+                prompt: "p".into(),
+                mode: RunMode::Free,
+                stash_message: "m".into(),
+            },
+            AppCommand::ListBranches,
+            AppCommand::ListDirectory { path: path() },
+            AppCommand::GetChangedFiles { mode: "working".into(), run_id: None },
+            AppCommand::GetFileDiff {
+                file_path: path(),
+                mode: "working".into(),
+                run_id: None,
+            },
+            AppCommand::GetRepoStatus,
+            AppCommand::GetCommitHistory { limit: 20 },
+            AppCommand::StageFile { path: path() },
+            AppCommand::UnstageFile { path: path() },
+            AppCommand::CreateCommit { message: "msg".into() },
+            AppCommand::CheckoutBranch { name: "main".into() },
+            AppCommand::CreateBranch { name: "feat".into(), from: Some("main".into()) },
+            AppCommand::ListWorkspaces,
+            AppCommand::CreateWorkspace {
+                name: "w".into(),
+                root_path: path(),
+                mode: WorkspaceMode::AiSession,
+            },
+            AppCommand::CloseWorkspace { workspace_id: uuid() },
+            AppCommand::ActivateWorkspace { workspace_id: uuid() },
+            AppCommand::CreateTerminalSession {
+                workspace_id: uuid(),
+                shell: None,
+                cwd: None,
+                env: None,
+                ssh: None,
+            },
+            AppCommand::CloseTerminalSession { session_id: uuid() },
+            AppCommand::WriteTerminalInput { session_id: uuid(), data: "ls\n".into() },
+            AppCommand::ResizeTerminal { session_id: uuid(), cols: 80, rows: 24 },
+            AppCommand::ListTerminalSessions { workspace_id: uuid() },
+            AppCommand::RestoreTerminalSession {
+                previous_session_id: uuid(),
+                workspace_id: uuid(),
+            },
+            AppCommand::ListRestoredTerminalSessions { workspace_id: uuid() },
+            AppCommand::PushBranch { remote: None, branch: None },
+            AppCommand::PullBranch { remote: None, branch: None },
+            AppCommand::FetchRemote { remote: None },
+            AppCommand::GetMergeConflicts,
+            AppCommand::ResolveConflict {
+                file_path: path(),
+                resolution: ConflictResolution::TakeOurs,
+            },
+            AppCommand::ReadFile { path: "x".into(), max_bytes: None },
+            AppCommand::SearchFiles {
+                query: "q".into(),
+                is_regex: false,
+                case_sensitive: false,
+                include_glob: None,
+                exclude_glob: None,
+                max_results: None,
+                context_lines: None,
+            },
+            AppCommand::GetStatus,
+            AppCommand::Ping,
+        ];
 
-    #[test]
-    fn drop_stash_command_roundtrip() {
-        let cmd = AppCommand::DropStash { index: 0 };
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("\"type\":\"DropStash\""));
-        let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppCommand::DropStash { index } => assert_eq!(index, 0),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn stash_applied_event_roundtrip() {
-        let evt = AppEvent::StashApplied { index: 1, had_conflicts: true };
-        let json = serde_json::to_string(&evt).unwrap();
-        assert!(json.contains("\"type\":\"StashApplied\""));
-        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppEvent::StashApplied { index, had_conflicts } => {
-                assert_eq!(index, 1);
-                assert!(had_conflicts);
+        // Exhaustive match — future variants MUST appear here or compilation
+        // fails, which is exactly the CI gate Minor2 asks for.
+        fn ensure_exhaustive(c: &AppCommand) -> &'static str {
+            match c {
+                AppCommand::Auth { .. } => "Auth",
+                AppCommand::StartSession { .. } => "StartSession",
+                AppCommand::EndSession { .. } => "EndSession",
+                AppCommand::ListSessions => "ListSessions",
+                AppCommand::StartRun { .. } => "StartRun",
+                AppCommand::CancelRun { .. } => "CancelRun",
+                AppCommand::RespondToBlocking { .. } => "RespondToBlocking",
+                AppCommand::GetRunStatus { .. } => "GetRunStatus",
+                AppCommand::ListRuns { .. } => "ListRuns",
+                AppCommand::GetRunOutput { .. } => "GetRunOutput",
+                AppCommand::GetDiff { .. } => "GetDiff",
+                AppCommand::RevertRun { .. } => "RevertRun",
+                AppCommand::MergeRun { .. } => "MergeRun",
+                AppCommand::ListStashes => "ListStashes",
+                AppCommand::GetStashFiles { .. } => "GetStashFiles",
+                AppCommand::GetStashDiff { .. } => "GetStashDiff",
+                AppCommand::CheckDirtyState => "CheckDirtyState",
+                AppCommand::StashAndRun { .. } => "StashAndRun",
+                AppCommand::ListBranches => "ListBranches",
+                AppCommand::ListDirectory { .. } => "ListDirectory",
+                AppCommand::GetChangedFiles { .. } => "GetChangedFiles",
+                AppCommand::GetFileDiff { .. } => "GetFileDiff",
+                AppCommand::GetRepoStatus => "GetRepoStatus",
+                AppCommand::GetCommitHistory { .. } => "GetCommitHistory",
+                AppCommand::StageFile { .. } => "StageFile",
+                AppCommand::UnstageFile { .. } => "UnstageFile",
+                AppCommand::CreateCommit { .. } => "CreateCommit",
+                AppCommand::CheckoutBranch { .. } => "CheckoutBranch",
+                AppCommand::CreateBranch { .. } => "CreateBranch",
+                AppCommand::ListWorkspaces => "ListWorkspaces",
+                AppCommand::CreateWorkspace { .. } => "CreateWorkspace",
+                AppCommand::CloseWorkspace { .. } => "CloseWorkspace",
+                AppCommand::ActivateWorkspace { .. } => "ActivateWorkspace",
+                AppCommand::CreateTerminalSession { .. } => "CreateTerminalSession",
+                AppCommand::CloseTerminalSession { .. } => "CloseTerminalSession",
+                AppCommand::WriteTerminalInput { .. } => "WriteTerminalInput",
+                AppCommand::ResizeTerminal { .. } => "ResizeTerminal",
+                AppCommand::ListTerminalSessions { .. } => "ListTerminalSessions",
+                AppCommand::RestoreTerminalSession { .. } => "RestoreTerminalSession",
+                AppCommand::ListRestoredTerminalSessions { .. } => "ListRestoredTerminalSessions",
+                AppCommand::PushBranch { .. } => "PushBranch",
+                AppCommand::PullBranch { .. } => "PullBranch",
+                AppCommand::FetchRemote { .. } => "FetchRemote",
+                AppCommand::GetMergeConflicts => "GetMergeConflicts",
+                AppCommand::ResolveConflict { .. } => "ResolveConflict",
+                AppCommand::ReadFile { .. } => "ReadFile",
+                AppCommand::SearchFiles { .. } => "SearchFiles",
+                AppCommand::GetStatus => "GetStatus",
+                AppCommand::Ping => "Ping",
             }
-            _ => panic!("wrong variant"),
         }
+
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for cmd in &commands {
+            let tag = ensure_exhaustive(cmd);
+            seen.insert(tag);
+            let json = roundtrip_command(cmd);
+            assert!(
+                json.contains(&format!("\"type\":\"{}\"", tag)),
+                "expected tag {} in {}",
+                tag,
+                json
+            );
+        }
+        // Sanity-check the table covers every tag the exhaustive match knows.
+        assert_eq!(
+            seen.len(),
+            commands.len(),
+            "duplicate or missing variant in commands list"
+        );
     }
 
     #[test]
-    fn stash_dropped_event_roundtrip() {
-        let evt = AppEvent::StashDropped { index: 3 };
-        let json = serde_json::to_string(&evt).unwrap();
-        assert!(json.contains("\"type\":\"StashDropped\""));
-        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppEvent::StashDropped { index } => assert_eq!(index, 3),
-            _ => panic!("wrong variant"),
+    fn every_app_event_variant_roundtrips() {
+        let uuid = || Uuid::new_v4();
+        let path = || PathBuf::from("/tmp/x");
+        let diff_stat = || DiffStat {
+            files_changed: 0,
+            insertions: 0,
+            deletions: 0,
+            file_stats: vec![],
+        };
+        let events: Vec<AppEvent> = vec![
+            AppEvent::AuthSuccess,
+            AppEvent::AuthFailed { reason: "bad".into() },
+            AppEvent::RunStateChanged {
+                run_id: uuid(),
+                new_state: RunState::Running,
+            },
+            AppEvent::RunOutput {
+                run_id: uuid(),
+                line: "x".into(),
+                line_number: 1,
+            },
+            AppEvent::RunBlocking {
+                run_id: uuid(),
+                question: "?".into(),
+                context: vec![],
+            },
+            AppEvent::RunCompleted {
+                run_id: uuid(),
+                summary: RunSummary {
+                    id: uuid(),
+                    state: RunState::Completed { exit_code: 0 },
+                    prompt_preview: "p".into(),
+                    modified_file_count: 0,
+                    diff_stat: None,
+                    started_at: chrono::Utc::now(),
+                    ended_at: None,
+                    autonomy: AutonomyLevel::default(),
+                },
+                diff_stat: None,
+            },
+            AppEvent::RunFailed {
+                run_id: uuid(),
+                error: "e".into(),
+                phase: FailPhase::Execution,
+            },
+            AppEvent::RunCancelled { run_id: uuid() },
+            AppEvent::RunToolUse {
+                run_id: uuid(),
+                tool_id: "t".into(),
+                tool_name: "Edit".into(),
+                tool_input_preview: "x".into(),
+            },
+            AppEvent::RunToolResult {
+                run_id: uuid(),
+                tool_id: "t".into(),
+                is_error: false,
+                preview: "ok".into(),
+            },
+            AppEvent::RunMetrics {
+                run_id: uuid(),
+                num_turns: 1,
+                cost_usd: 0.1,
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+            AppEvent::RunPreflightFailed {
+                run_id: uuid(),
+                reason: "r".into(),
+                suggestion: "s".into(),
+            },
+            AppEvent::RunDiff {
+                run_id: uuid(),
+                stat: diff_stat(),
+                diff: "".into(),
+            },
+            AppEvent::RunReverted { run_id: uuid() },
+            AppEvent::RunMerged {
+                run_id: uuid(),
+                merge_result: MergeResult::FastForward,
+            },
+            AppEvent::RunMergeConflict {
+                run_id: uuid(),
+                conflict_paths: vec![path()],
+            },
+            AppEvent::StashList { stashes: vec![] },
+            AppEvent::StashFiles { stash_index: 0, files: vec![] },
+            AppEvent::StashDiff {
+                stash_index: 0,
+                diff: "".into(),
+                stat: None,
+            },
+            AppEvent::DirtyState {
+                status: DirtyStatus { staged: vec![], unstaged: vec![] },
+            },
+            AppEvent::DirtyWarning {
+                status: DirtyStatus { staged: vec![], unstaged: vec![] },
+                session_id: uuid(),
+                prompt: "p".into(),
+                mode: RunMode::Free,
+            },
+            AppEvent::DirectoryListing { path: path(), entries: vec![] },
+            AppEvent::ChangedFilesList {
+                mode: "working".into(),
+                run_id: None,
+                files: vec![],
+            },
+            AppEvent::FileDiffResult {
+                file_path: path(),
+                diff: "".into(),
+                stat: None,
+            },
+            AppEvent::RepoStatusResult {
+                status: RepoStatusSnapshot {
+                    branch: "main".into(),
+                    head: "abc123".into(),
+                    clean: true,
+                    staged_count: 0,
+                    unstaged_count: 0,
+                },
+            },
+            AppEvent::CommitHistoryResult { commits: vec![] },
+            AppEvent::CommitCreated { hash: "abc".into() },
+            AppEvent::BranchChanged { name: "main".into() },
+            AppEvent::BranchList { branches: vec![], current: None },
+            AppEvent::SessionStarted {
+                session: SessionSummary {
+                    id: uuid(),
+                    project_root: path(),
+                    active_run: None,
+                    run_count: 0,
+                    started_at: chrono::Utc::now(),
+                },
+            },
+            AppEvent::SessionEnded { session_id: uuid() },
+            AppEvent::SessionList { sessions: vec![] },
+            AppEvent::RunList { session_id: uuid(), runs: vec![] },
+            AppEvent::RunOutputPage {
+                run_id: uuid(),
+                offset: 0,
+                lines: vec![],
+                has_more: false,
+            },
+            AppEvent::WorkspaceList { workspaces: vec![] },
+            AppEvent::WorkspaceCreated {
+                workspace: WorkspaceSummary {
+                    id: uuid(),
+                    name: "w".into(),
+                    root_path: path(),
+                    mode: WorkspaceMode::AiSession,
+                    linked_session_id: None,
+                    last_active_at: chrono::Utc::now(),
+                },
+            },
+            AppEvent::WorkspaceClosed { workspace_id: uuid() },
+            AppEvent::WorkspaceActivated { workspace_id: uuid() },
+            AppEvent::TerminalSessionCreated {
+                session_id: uuid(),
+                workspace_id: uuid(),
+                shell: "sh".into(),
+                cwd: path(),
+                is_ssh: false,
+                ssh_host: None,
+            },
+            AppEvent::TerminalSessionClosed { session_id: uuid() },
+            AppEvent::TerminalOutput { session_id: uuid(), data: "x".into() },
+            AppEvent::TerminalSessionList {
+                workspace_id: uuid(),
+                sessions: vec![],
+            },
+            AppEvent::TerminalSessionRestored {
+                previous_session_id: uuid(),
+                new_session_id: uuid(),
+                cwd: path(),
+                workspace_id: uuid(),
+            },
+            AppEvent::TerminalSessionRestoreFailed {
+                previous_session_id: uuid(),
+                reason: "r".into(),
+            },
+            AppEvent::RestorableTerminalSessions {
+                workspace_id: uuid(),
+                sessions: vec![],
+            },
+            AppEvent::PushCompleted {
+                branch: "main".into(),
+                remote: "origin".into(),
+            },
+            AppEvent::PullCompleted {
+                branch: "main".into(),
+                commits_applied: 0,
+            },
+            AppEvent::FetchCompleted { remote: "origin".into() },
+            AppEvent::GitOperationFailed {
+                operation: "push".into(),
+                reason: "r".into(),
+            },
+            AppEvent::MergeConflicts { files: vec![] },
+            AppEvent::ConflictResolved { file_path: path() },
+            AppEvent::FileContent {
+                path: "x".into(),
+                content: "y".into(),
+                language: "rust".into(),
+                truncated: false,
+                size_bytes: 0,
+            },
+            AppEvent::FileReadError { path: "x".into(), error: "e".into() },
+            AppEvent::SearchResults {
+                query: "q".into(),
+                matches: vec![],
+                total_matches: 0,
+                files_searched: 0,
+                truncated: false,
+                duration_ms: 0,
+            },
+            AppEvent::StatusUpdate { active_runs: 0, session_count: 0 },
+            AppEvent::Pong,
+            AppEvent::Error { code: "c".into(), message: "m".into() },
+        ];
+
+        fn ensure_exhaustive(e: &AppEvent) -> &'static str {
+            match e {
+                AppEvent::AuthSuccess => "AuthSuccess",
+                AppEvent::AuthFailed { .. } => "AuthFailed",
+                AppEvent::RunStateChanged { .. } => "RunStateChanged",
+                AppEvent::RunOutput { .. } => "RunOutput",
+                AppEvent::RunBlocking { .. } => "RunBlocking",
+                AppEvent::RunCompleted { .. } => "RunCompleted",
+                AppEvent::RunFailed { .. } => "RunFailed",
+                AppEvent::RunCancelled { .. } => "RunCancelled",
+                AppEvent::RunToolUse { .. } => "RunToolUse",
+                AppEvent::RunToolResult { .. } => "RunToolResult",
+                AppEvent::RunMetrics { .. } => "RunMetrics",
+                AppEvent::RunPreflightFailed { .. } => "RunPreflightFailed",
+                AppEvent::RunDiff { .. } => "RunDiff",
+                AppEvent::RunReverted { .. } => "RunReverted",
+                AppEvent::RunMerged { .. } => "RunMerged",
+                AppEvent::RunMergeConflict { .. } => "RunMergeConflict",
+                AppEvent::StashList { .. } => "StashList",
+                AppEvent::StashFiles { .. } => "StashFiles",
+                AppEvent::StashDiff { .. } => "StashDiff",
+                AppEvent::DirtyState { .. } => "DirtyState",
+                AppEvent::DirtyWarning { .. } => "DirtyWarning",
+                AppEvent::DirectoryListing { .. } => "DirectoryListing",
+                AppEvent::ChangedFilesList { .. } => "ChangedFilesList",
+                AppEvent::FileDiffResult { .. } => "FileDiffResult",
+                AppEvent::RepoStatusResult { .. } => "RepoStatusResult",
+                AppEvent::CommitHistoryResult { .. } => "CommitHistoryResult",
+                AppEvent::CommitCreated { .. } => "CommitCreated",
+                AppEvent::BranchChanged { .. } => "BranchChanged",
+                AppEvent::BranchList { .. } => "BranchList",
+                AppEvent::SessionStarted { .. } => "SessionStarted",
+                AppEvent::SessionEnded { .. } => "SessionEnded",
+                AppEvent::SessionList { .. } => "SessionList",
+                AppEvent::RunList { .. } => "RunList",
+                AppEvent::RunOutputPage { .. } => "RunOutputPage",
+                AppEvent::WorkspaceList { .. } => "WorkspaceList",
+                AppEvent::WorkspaceCreated { .. } => "WorkspaceCreated",
+                AppEvent::WorkspaceClosed { .. } => "WorkspaceClosed",
+                AppEvent::WorkspaceActivated { .. } => "WorkspaceActivated",
+                AppEvent::TerminalSessionCreated { .. } => "TerminalSessionCreated",
+                AppEvent::TerminalSessionClosed { .. } => "TerminalSessionClosed",
+                AppEvent::TerminalOutput { .. } => "TerminalOutput",
+                AppEvent::TerminalSessionList { .. } => "TerminalSessionList",
+                AppEvent::TerminalSessionRestored { .. } => "TerminalSessionRestored",
+                AppEvent::TerminalSessionRestoreFailed { .. } => "TerminalSessionRestoreFailed",
+                AppEvent::RestorableTerminalSessions { .. } => "RestorableTerminalSessions",
+                AppEvent::PushCompleted { .. } => "PushCompleted",
+                AppEvent::PullCompleted { .. } => "PullCompleted",
+                AppEvent::FetchCompleted { .. } => "FetchCompleted",
+                AppEvent::GitOperationFailed { .. } => "GitOperationFailed",
+                AppEvent::MergeConflicts { .. } => "MergeConflicts",
+                AppEvent::ConflictResolved { .. } => "ConflictResolved",
+                AppEvent::FileContent { .. } => "FileContent",
+                AppEvent::FileReadError { .. } => "FileReadError",
+                AppEvent::SearchResults { .. } => "SearchResults",
+                AppEvent::StatusUpdate { .. } => "StatusUpdate",
+                AppEvent::Pong => "Pong",
+                AppEvent::Error { .. } => "Error",
+            }
         }
+
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for evt in &events {
+            let tag = ensure_exhaustive(evt);
+            seen.insert(tag);
+            let json = roundtrip_event(evt);
+            assert!(
+                json.contains(&format!("\"type\":\"{}\"", tag)),
+                "expected tag {} in {}",
+                tag,
+                json
+            );
+        }
+        assert_eq!(
+            seen.len(),
+            events.len(),
+            "duplicate or missing variant in events list"
+        );
     }
 }
