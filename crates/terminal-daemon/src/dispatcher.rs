@@ -398,14 +398,13 @@ impl Dispatcher {
             }
 
             AppCommand::GetRunStatus { run_id } => {
-                let runs = self.context.active_runs.lock().await;
-                match runs.get(&run_id) {
-                    Some(active) => {
+                // Read the state, then release the lock before awaiting the
+                // reply send — don't hold active_runs across a channel await.
+                let state = self.context.active_runs.lock().await.get(&run_id).map(|a| a.run.state.clone());
+                match state {
+                    Some(new_state) => {
                         let _ = reply_tx
-                            .send(AppEvent::RunStateChanged {
-                                run_id,
-                                new_state: active.run.state.clone(),
-                            })
+                            .send(AppEvent::RunStateChanged { run_id, new_state })
                             .await;
                     }
                     None => {
@@ -430,34 +429,46 @@ impl Dispatcher {
             }
 
             AppCommand::CancelRun { run_id, reason } => {
-                let runs = self.context.active_runs.lock().await;
-                if let Some(active) = runs.get(&run_id) {
-                    let _ = active.cancel_tx.send(reason).await;
-                } else {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "RUN_NOT_FOUND".into(),
-                            message: format!("No active run {}", run_id),
-                        })
-                        .await;
+                // Clone the sender and release the lock before awaiting send —
+                // cancel_tx has capacity 1 and a blocked send would hold the
+                // active_runs lock, starving the supervisor that needs it to
+                // remove the entry on completion.
+                let sender = self.context.active_runs.lock().await.get(&run_id).map(|r| r.cancel_tx.clone());
+                match sender {
+                    Some(tx) => {
+                        let _ = tx.send(reason).await;
+                    }
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "RUN_NOT_FOUND".into(),
+                                message: format!("No active run {}", run_id),
+                            })
+                            .await;
+                    }
                 }
             }
 
             AppCommand::RespondToBlocking { run_id, response } => {
-                let runs = self.context.active_runs.lock().await;
-                if let Some(active) = runs.get(&run_id) {
-                    let _ = active.stdin_tx.send(response).await;
-                    self.broadcast(&AppEvent::RunStateChanged {
-                        run_id,
-                        new_state: RunState::Running,
-                    });
-                } else {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "RUN_NOT_FOUND".into(),
-                            message: format!("No active run {}", run_id),
-                        })
-                        .await;
+                // Same pattern as CancelRun — don't hold active_runs across
+                // a bounded-channel send.
+                let sender = self.context.active_runs.lock().await.get(&run_id).map(|r| r.stdin_tx.clone());
+                match sender {
+                    Some(tx) => {
+                        let _ = tx.send(response).await;
+                        self.broadcast(&AppEvent::RunStateChanged {
+                            run_id,
+                            new_state: RunState::Running,
+                        });
+                    }
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "RUN_NOT_FOUND".into(),
+                                message: format!("No active run {}", run_id),
+                            })
+                            .await;
+                    }
                 }
             }
 

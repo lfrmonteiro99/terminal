@@ -748,8 +748,8 @@ pub async fn list_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictFile>> 
         let path = std::path::PathBuf::from(line.trim());
         match std::fs::read_to_string(cwd.join(&path)) {
             Ok(content) => {
-                let (ours, theirs) = parse_conflict_sections(&content);
-                conflicts.push(MergeConflictFile { path, ours, theirs, base: None });
+                let (ours, theirs, base) = parse_conflict_sections(&content);
+                conflicts.push(MergeConflictFile { path, ours, theirs, base });
             }
             Err(e) => {
                 return Err(GitError::CommandFailed(format!(
@@ -763,19 +763,68 @@ pub async fn list_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictFile>> 
     Ok(conflicts)
 }
 
-fn parse_conflict_sections(content: &str) -> (String, String) {
+/// Extract the "ours", "theirs", and optional "base" (diff3) sections from a
+/// file that contains git conflict markers.
+///
+/// Handles both the default two-way style:
+/// ```text
+/// <<<<<<< HEAD
+/// ours
+/// =======
+/// theirs
+/// >>>>>>> branch
+/// ```
+/// and the diff3 three-way style emitted when `merge.conflictStyle=diff3`:
+/// ```text
+/// <<<<<<< HEAD
+/// ours
+/// ||||||| merged common ancestor
+/// base
+/// =======
+/// theirs
+/// >>>>>>> branch
+/// ```
+fn parse_conflict_sections(content: &str) -> (String, String, Option<String>) {
+    #[derive(PartialEq)]
+    enum Section {
+        None,
+        Ours,
+        Base,
+        Theirs,
+    }
     let mut ours = Vec::new();
     let mut theirs = Vec::new();
-    let mut in_ours = false;
-    let mut in_theirs = false;
+    let mut base = Vec::new();
+    let mut section = Section::None;
+    let mut saw_base = false;
+
     for line in content.lines() {
-        if line.starts_with("<<<<<<<") { in_ours = true; continue; }
-        if line.starts_with("=======") { in_ours = false; in_theirs = true; continue; }
-        if line.starts_with(">>>>>>>") { in_theirs = false; continue; }
-        if in_ours { ours.push(line); }
-        else if in_theirs { theirs.push(line); }
+        if line.starts_with("<<<<<<<") {
+            section = Section::Ours;
+            continue;
+        }
+        if line.starts_with("|||||||") {
+            section = Section::Base;
+            saw_base = true;
+            continue;
+        }
+        if line.starts_with("=======") {
+            section = Section::Theirs;
+            continue;
+        }
+        if line.starts_with(">>>>>>>") {
+            section = Section::None;
+            continue;
+        }
+        match section {
+            Section::Ours => ours.push(line),
+            Section::Base => base.push(line),
+            Section::Theirs => theirs.push(line),
+            Section::None => {}
+        }
     }
-    (ours.join("\n"), theirs.join("\n"))
+    let base_out = if saw_base { Some(base.join("\n")) } else { None };
+    (ours.join("\n"), theirs.join("\n"), base_out)
 }
 
 /// Resolve a conflict for a file and stage it.
@@ -784,7 +833,12 @@ pub async fn resolve_conflict(
     file_path: &std::path::Path,
     resolution: &terminal_core::protocol::v1::ConflictResolution,
 ) -> Result<()> {
-    let full_path = cwd.join(file_path);
+    // Reject absolute or parent-traversing paths before letting them reach
+    // git or the filesystem. Without this a Manual resolution could write
+    // arbitrary files outside the repo via `../../...`.
+    let safe_path = crate::safety::validate_path(cwd, file_path)
+        .map_err(GitError::CommandFailed)?;
+
     match resolution {
         terminal_core::protocol::v1::ConflictResolution::TakeOurs => {
             run_git(cwd, &["checkout", "--ours", &file_path.to_string_lossy()]).await?;
@@ -793,7 +847,9 @@ pub async fn resolve_conflict(
             run_git(cwd, &["checkout", "--theirs", &file_path.to_string_lossy()]).await?;
         }
         terminal_core::protocol::v1::ConflictResolution::Manual { content } => {
-            std::fs::write(&full_path, content).map_err(|e| GitError::CommandFailed(e.to_string()))?;
+            tokio::fs::write(&safe_path, content)
+                .await
+                .map_err(|e| GitError::CommandFailed(e.to_string()))?;
         }
     }
     run_git(cwd, &["add", &file_path.to_string_lossy()]).await?;
@@ -809,6 +865,43 @@ mod tests {
     use super::*;
     use std::process::Command as StdCommand;
     use tempfile::tempdir;
+
+    #[test]
+    fn parse_conflict_two_way() {
+        let content = "before\n<<<<<<< HEAD\nours line\n=======\ntheirs line\n>>>>>>> feat\nafter\n";
+        let (ours, theirs, base) = parse_conflict_sections(content);
+        assert_eq!(ours, "ours line");
+        assert_eq!(theirs, "theirs line");
+        assert_eq!(base, None);
+    }
+
+    #[test]
+    fn parse_conflict_diff3_separates_base() {
+        // When `merge.conflictStyle=diff3`, the base section should not leak
+        // into `ours` — the previous two-way parser would have.
+        let content = "\
+<<<<<<< HEAD
+ours line
+||||||| merged common ancestor
+base line
+=======
+theirs line
+>>>>>>> feat
+";
+        let (ours, theirs, base) = parse_conflict_sections(content);
+        assert_eq!(ours, "ours line");
+        assert_eq!(theirs, "theirs line");
+        assert_eq!(base.as_deref(), Some("base line"));
+    }
+
+    #[test]
+    fn parse_conflict_empty_sides() {
+        let content = "<<<<<<< HEAD\n=======\n>>>>>>> branch\n";
+        let (ours, theirs, base) = parse_conflict_sections(content);
+        assert_eq!(ours, "");
+        assert_eq!(theirs, "");
+        assert_eq!(base, None);
+    }
 
     /// Create a temp dir with `git init`, basic config, and an initial commit.
     fn init_test_repo() -> tempfile::TempDir {
