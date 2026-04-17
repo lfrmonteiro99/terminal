@@ -1400,22 +1400,30 @@ impl Dispatcher {
         skip_dirty_check: bool,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
-        // Check session exists and has no active run
-        let mut sessions = self.context.sessions.lock().await;
-        let session = match sessions.get_mut(&session_id) {
-            Some(s) => s,
-            None => {
-                let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "SESSION_NOT_FOUND".into(),
-                        message: format!("Session {} not found", session_id),
-                    })
-                    .await;
-                return;
+        // Read everything we need from the session, then release the lock
+        // before any async IO or git subprocess. Previously the lock was held
+        // across create_dir_all, is_git_repo, guard_repo_state, head_oid,
+        // worktree_add and the dirty-check — a window of several seconds
+        // during which every other sessions-touching handler
+        // (ListSessions / GetStatus / StartSession / ...) blocked.
+        let (project_root, already_active) = {
+            let sessions = self.context.sessions.lock().await;
+            match sessions.get(&session_id) {
+                Some(s) => (s.project_root.clone(), s.active_run.is_some()),
+                None => {
+                    drop(sessions);
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "SESSION_NOT_FOUND".into(),
+                            message: format!("Session {} not found", session_id),
+                        })
+                        .await;
+                    return;
+                }
             }
         };
 
-        if session.active_run.is_some() {
+        if already_active {
             let _ = reply_tx
                 .send(AppEvent::Error {
                     code: "RUN_ALREADY_ACTIVE".into(),
@@ -1441,7 +1449,6 @@ impl Dispatcher {
             }
         }
 
-        let project_root = session.project_root.clone();
         let is_git = crate::git_engine::is_git_repo(&project_root).await;
 
         // Git worktree setup (delegated to helper)
@@ -1609,16 +1616,36 @@ impl Dispatcher {
             warn!("Failed to persist run {}: {}", run_id, e);
         }
 
-        session.active_run = Some(run_id);
-        session.runs.push(run_id);
+        // Re-acquire the sessions lock just for the mutation, then release.
+        // With the earlier refactor we no longer hold it across the git
+        // preparation work.
+        {
+            let mut sessions = self.context.sessions.lock().await;
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.active_run = Some(run_id);
+                session.runs.push(run_id);
+            } else {
+                // Session disappeared mid-setup (StartRun racing with
+                // EndSession). Clean up what we already created.
+                if let Some(ref wt_path) = worktree_path {
+                    let _ = crate::git_engine::worktree_remove(&project_root, wt_path).await;
+                    let _ = crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
+                }
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "SESSION_NOT_FOUND".into(),
+                        message: format!("Session {} disappeared during setup", session_id),
+                    })
+                    .await;
+                return;
+            }
+        }
 
         // Broadcast state change
         self.broadcast(&AppEvent::RunStateChanged {
             run_id,
             new_state: RunState::Preparing,
         });
-
-        drop(sessions); // Release lock before spawning
 
         // Pre-flight check (delegated to helper)
         if self.run_preflight(run_id, &run).await.is_err() {

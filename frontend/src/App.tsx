@@ -15,7 +15,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { ShortcutCheatsheet } from './components/ShortcutCheatsheet';
 import { PaneRenderer } from './panes/PaneRenderer';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
-import { splitPane, closePane, collectPanes } from './domain/pane/types';
+import { splitPane, closePane, collectPanes, nextPaneId } from './domain/pane/types';
 import { LAYOUT_PRESETS } from './core/layoutPresets';
 import type { AppEvent } from './types/protocol.ts';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
@@ -173,7 +173,7 @@ function AppContent() {
       }
     } else {
       // Last pane closed — replace with Empty pane
-      const emptyLayout: PaneLayout = { Single: { id: `empty-${Date.now()}`, kind: 'Empty', resource_id: null } };
+      const emptyLayout: PaneLayout = { Single: { id: nextPaneId('Empty'), kind: 'Empty', resource_id: null } };
       setLayout(emptyLayout);
       setFocusedPaneId(emptyLayout.Single.id);
     }
@@ -187,7 +187,7 @@ function AppContent() {
       setLayout(prev => {
         const replace = (l: PaneLayout): PaneLayout => {
           if ('Single' in l && l.Single.id === paneId) {
-            return { Single: { ...l.Single, kind, id: `${kind.toLowerCase()}-${Date.now()}` } };
+            return { Single: { ...l.Single, kind, id: nextPaneId(kind) } };
           }
           if ('Split' in l) {
             return { Split: { ...l.Split, first: replace(l.Split.first), second: replace(l.Split.second) } };
@@ -296,7 +296,7 @@ function AppContent() {
       setLayout(prev => {
         const replace = (l: PaneLayout): PaneLayout => {
           if ('Single' in l && l.Single.id === sshTargetPaneId) {
-            return { Single: { ...l.Single, kind: 'Terminal' as const, id: `ssh-${Date.now()}`, resource_id: resourceId } };
+            return { Single: { ...l.Single, kind: 'Terminal' as const, id: nextPaneId('Terminal'), resource_id: resourceId } };
           }
           if ('Split' in l) {
             return { Split: { ...l.Split, first: replace(l.Split.first), second: replace(l.Split.second) } };
