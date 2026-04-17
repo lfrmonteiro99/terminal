@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { debug } from './util/log';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
-import { debug } from './util/log';
 import { ActivityBar } from './components/ActivityBar.tsx';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
@@ -361,6 +361,31 @@ function AppContent() {
       // side effect wrapped into dispatch in AppProvider). No more
       // `window.dispatchEvent(new CustomEvent(...))` for protocol events.
       dispatch({ type: 'HANDLE_EVENT', event });
+
+      // Route terminal events via CustomEvent (high-frequency, shouldn't go through React state)
+      if (event.type === 'TerminalSessionCreated' ||
+          event.type === 'TerminalOutput' ||
+          event.type === 'TerminalSessionClosed' ||
+          event.type === 'RestorableTerminalSessions' ||
+          event.type === 'TerminalSessionRestored' ||
+          event.type === 'TerminalSessionRestoreFailed') {
+        window.dispatchEvent(new CustomEvent('terminal-event', { detail: event }));
+      }
+
+      // Route BranchList events via CustomEvent so CommandPalette can receive them
+      if (event.type === 'BranchList') {
+        window.dispatchEvent(new CustomEvent('branch-list', { detail: event }));
+      }
+
+      // Route file-viewer events so FileViewerPane can receive them without going through React state
+      if (event.type === 'FileContent' || event.type === 'FileReadError') {
+        window.dispatchEvent(new CustomEvent('file-viewer-event', { detail: event }));
+      }
+
+      // Route search results to SearchPane
+      if (event.type === 'SearchResults') {
+        window.dispatchEvent(new CustomEvent('search-results', { detail: event }));
+      }
     },
     [dispatch],
   );

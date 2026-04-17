@@ -16,9 +16,9 @@ import type {
   RunSummary,
   SearchMatch,
   StashEntry,
+  TerminalSessionSummary,
   ToolCall,
 } from '../types/protocol';
-import type { TerminalSessionSummary } from '../types/protocol';
 
 export interface SearchResult {
   query: string;
@@ -203,6 +203,7 @@ export type WorkspaceAction =
   | { type: 'SET_RESTORABLE_TERMINALS'; sessions: RestorableTerminalSession[] }
   | { type: 'SET_MERGE_CONFLICTS'; files: MergeConflictFile[] }
   | { type: 'REMOVE_CONFLICT'; filePath: string }
+  | { type: 'CLEAR_RUN_METRICS' }
   | {
       type: 'SET_FILE_CONTENT';
       path: string;
@@ -290,6 +291,7 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
     }
 
     case 'SET_RUN_METRICS':
+      if (action.runId !== state.activeRun) return state;
       return { ...state, runMetrics: action.metrics };
 
     case 'SET_PREFLIGHT_ERROR':
@@ -413,6 +415,9 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
         ...state,
         mergeConflicts: state.mergeConflicts.filter((f) => f.path !== action.filePath),
       };
+
+    case 'CLEAR_RUN_METRICS':
+      return { ...state, runMetrics: null, runToolCalls: new Map() };
 
     case 'SET_FILE_CONTENT':
       return {

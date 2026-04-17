@@ -12,6 +12,17 @@ use terminal_core::protocol::v1::AppEvent;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use uuid::Uuid;
 
+/// Opaque identifier for a connected WebSocket client.
+/// Generated per-connection in server.rs and threaded through the command channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClientId(pub Uuid);
+
+impl ClientId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
 /// Internal state for tracking active runs.
 pub struct ActiveRun {
     #[allow(dead_code)]

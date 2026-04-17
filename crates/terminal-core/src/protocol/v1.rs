@@ -78,6 +78,11 @@ pub enum AppCommand {
         stash_message: String,
     },
 
+    // Stash mutations (M4)
+    PopStash { index: usize },
+    ApplyStash { index: usize },
+    DropStash { index: usize },
+
     // Branch operations
     ListBranches,
 
@@ -307,6 +312,8 @@ pub enum AppEvent {
         diff: String,
         stat: Option<DiffStat>,
     },
+    StashApplied { index: usize, had_conflicts: bool },
+    StashDropped { index: usize },
     DirtyState {
         status: DirtyStatus,
     },
@@ -1178,6 +1185,9 @@ mod tests {
             },
             AppCommand::GetStatus,
             AppCommand::Ping,
+            AppCommand::PopStash { index: 0 },
+            AppCommand::ApplyStash { index: 0 },
+            AppCommand::DropStash { index: 0 },
         ];
 
         // Exhaustive match — future variants MUST appear here or compilation
@@ -1233,6 +1243,9 @@ mod tests {
                 AppCommand::SearchFiles { .. } => "SearchFiles",
                 AppCommand::GetStatus => "GetStatus",
                 AppCommand::Ping => "Ping",
+                AppCommand::PopStash { .. } => "PopStash",
+                AppCommand::ApplyStash { .. } => "ApplyStash",
+                AppCommand::DropStash { .. } => "DropStash",
             }
         }
 
@@ -1475,6 +1488,8 @@ mod tests {
             AppEvent::StatusUpdate { active_runs: 0, session_count: 0 },
             AppEvent::Pong,
             AppEvent::Error { code: "c".into(), message: "m".into() },
+            AppEvent::StashApplied { index: 0, had_conflicts: false },
+            AppEvent::StashDropped { index: 0 },
         ];
 
         fn ensure_exhaustive(e: &AppEvent) -> &'static str {
@@ -1536,6 +1551,8 @@ mod tests {
                 AppEvent::StatusUpdate { .. } => "StatusUpdate",
                 AppEvent::Pong => "Pong",
                 AppEvent::Error { .. } => "Error",
+                AppEvent::StashApplied { .. } => "StashApplied",
+                AppEvent::StashDropped { .. } => "StashDropped",
             }
         }
 

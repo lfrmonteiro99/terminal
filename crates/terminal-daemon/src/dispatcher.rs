@@ -1,5 +1,5 @@
 use crate::claude_runner::{output_file_path, RunnerEvent};
-use crate::daemon_context::{ActiveRun, DaemonContext};
+use crate::daemon_context::{ActiveRun, ClientId, DaemonContext};
 use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
@@ -17,6 +17,13 @@ use uuid::Uuid;
 pub struct Dispatcher {
     context: Arc<DaemonContext>,
     pty_manager: Arc<PtyManager>,
+}
+
+/// Result of a successful worktree preparation.
+struct WorktreeInfo {
+    branch_name: String,
+    worktree_path: PathBuf,
+    base_head: String,
 }
 
 impl Dispatcher {
@@ -68,12 +75,8 @@ impl Dispatcher {
     }
 
     /// Handle a command and send response to the requesting client.
-    pub async fn handle(
-        &self,
-        cmd: AppCommand,
-        client_id: Uuid,
-        reply_tx: mpsc::Sender<AppEvent>,
-    ) {
+    pub async fn handle(&self, client_id: ClientId, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+        let _ = client_id; // forwarded to workspace_dispatcher; suppressed elsewhere
         match cmd {
             AppCommand::Auth { .. } => {
                 // Auth is handled at the server level, not here
@@ -1165,7 +1168,7 @@ impl Dispatcher {
                 let dispatcher = crate::dispatchers::workspace_dispatcher::WorkspaceDispatcher::new(
                     self.context.clone(),
                 );
-                dispatcher.handle(cmd, client_id, reply_tx).await;
+                dispatcher.handle(client_id, cmd, reply_tx).await;
             }
 
             // --- PTY commands (M4-01) ---
@@ -1230,15 +1233,55 @@ impl Dispatcher {
                     .await;
             }
 
-            AppCommand::RestoreTerminalSession { previous_session_id, workspace_id: _ } => {
-                // Placeholder: PTY sessions can't persist across daemon restarts in pipe mode.
-                // Full persistence handled in M4-06.
-                let _ = reply_tx
-                    .send(AppEvent::TerminalSessionRestoreFailed {
-                        previous_session_id,
-                        reason: "Session restoration not yet supported in pipe mode".into(),
-                    })
-                    .await;
+            AppCommand::RestoreTerminalSession { previous_session_id, workspace_id } => {
+                let meta = match self.context.persistence.load_terminal_session(previous_session_id) {
+                    Ok(m) => m,
+                    Err(crate::persistence::PersistenceError::NotFound(_)) => {
+                        let _ = reply_tx
+                            .send(AppEvent::TerminalSessionRestoreFailed {
+                                previous_session_id,
+                                reason: "No saved session with that id".into(),
+                            })
+                            .await;
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::TerminalSessionRestoreFailed {
+                                previous_session_id,
+                                reason: format!("Load failed: {}", e),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+                let shell = meta.shell_path.to_string_lossy().to_string();
+                let cwd = meta.cwd.clone();
+                let pane_id = format!("terminal-restored-{}", workspace_id);
+                match self.pty_manager
+                    .create_session(workspace_id, pane_id, Some(shell.clone()), Some(cwd.clone()), None, None)
+                    .await
+                {
+                    Ok(new_session_id) => {
+                        let _ = self.context.persistence.delete_terminal_session(previous_session_id);
+                        let _ = reply_tx
+                            .send(AppEvent::TerminalSessionRestored {
+                                previous_session_id,
+                                new_session_id,
+                                cwd,
+                                workspace_id,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::TerminalSessionRestoreFailed {
+                                previous_session_id,
+                                reason: format!("Failed to spawn PTY: {}", e),
+                            })
+                            .await;
+                    }
+                }
             }
 
             AppCommand::ListRestoredTerminalSessions { workspace_id } => {
@@ -1258,6 +1301,56 @@ impl Dispatcher {
                                 message: format!("Failed to list terminal sessions: {}", e),
                             })
                             .await;
+                    }
+                }
+            }
+
+            // --- Stash mutations (M4) ---
+
+            AppCommand::PopStash { index } => {
+                if let Some(root) = self.find_active_project_root().await {
+                    match crate::git_engine::stash_pop(&root, index).await {
+                        Ok(had_conflicts) => {
+                            let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            }).await;
+                        }
+                    }
+                }
+            }
+
+            AppCommand::ApplyStash { index } => {
+                if let Some(root) = self.find_active_project_root().await {
+                    match crate::git_engine::stash_apply(&root, index).await {
+                        Ok(had_conflicts) => {
+                            let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            }).await;
+                        }
+                    }
+                }
+            }
+
+            AppCommand::DropStash { index } => {
+                if let Some(root) = self.find_active_project_root().await {
+                    match crate::git_engine::stash_drop(&root, index).await {
+                        Ok(()) => {
+                            let _ = reply_tx.send(AppEvent::StashDropped { index }).await;
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            }).await;
+                        }
                     }
                 }
             }
@@ -1330,7 +1423,7 @@ impl Dispatcher {
         let project_root = session.project_root.clone();
         let is_git = crate::git_engine::is_git_repo(&project_root).await;
 
-        // Git worktree setup
+        // Git worktree setup (delegated to helper)
         let mut branch_name = String::new();
         let mut worktree_path: Option<PathBuf> = None;
         let mut base_head = String::new();
@@ -1506,33 +1599,8 @@ impl Dispatcher {
 
         drop(sessions); // Release lock before spawning
 
-        // Pre-flight: verify the Claude binary works before spawning a run.
-        // Surfaces "not installed / not authenticated" as a structured event
-        // instead of a cryptic spawn error that appears for ~1s and stops.
-        if let Err(pf) = self.context.runner.preflight().await {
-            self.broadcast(&AppEvent::RunPreflightFailed {
-                run_id,
-                reason: pf.reason.clone(),
-                suggestion: pf.suggestion.clone(),
-            });
-            self.broadcast(&AppEvent::RunFailed {
-                run_id,
-                error: pf.reason,
-                phase: FailPhase::Preflight,
-            });
-            // Persist the failure so it appears in run history.
-            let failed_run = Run {
-                state: RunState::Failed {
-                    error: pf.suggestion,
-                    phase: FailPhase::Preflight,
-                },
-                ended_at: Some(chrono::Utc::now()),
-                last_modified: chrono::Utc::now(),
-                ..run.clone()
-            };
-            if let Err(e) = self.context.persistence.save_run(&failed_run) {
-                warn!("failed to persist preflight-failed run {}: {}", run_id, e);
-            }
+        // Pre-flight check (delegated to helper)
+        if self.run_preflight(run_id, &run).await.is_err() {
             return;
         }
 
@@ -1936,7 +2004,7 @@ impl Dispatcher {
             .map(|s| s.project_root.clone())
     }
 
-    /// Like find_active_project_root, but sends an error event if None.
+    /// Like `find_active_project_root`, but emits an Error event and returns None if no session found.
     async fn active_root_or_err(&self, reply_tx: &mpsc::Sender<AppEvent>) -> Option<PathBuf> {
         match self.find_active_project_root().await {
             Some(p) => Some(p),
@@ -1950,6 +2018,177 @@ impl Dispatcher {
                 None
             }
         }
+    }
+
+    /// Run the Claude binary preflight check and emit structured events on failure.
+    ///
+    /// Returns `Ok(())` when preflight passes, `Err(())` when it fails (events already broadcast).
+    async fn run_preflight(&self, run_id: Uuid, run: &Run) -> Result<(), ()> {
+        if let Err(pf) = self.context.runner.preflight().await {
+            self.broadcast(&AppEvent::RunPreflightFailed {
+                run_id,
+                reason: pf.reason.clone(),
+                suggestion: pf.suggestion.clone(),
+            });
+            self.broadcast(&AppEvent::RunFailed {
+                run_id,
+                error: pf.reason,
+                phase: FailPhase::Preflight,
+            });
+            let failed_run = Run {
+                state: RunState::Failed {
+                    error: pf.suggestion,
+                    phase: FailPhase::Preflight,
+                },
+                ended_at: Some(chrono::Utc::now()),
+                last_modified: chrono::Utc::now(),
+                ..run.clone()
+            };
+            if let Err(e) = self.context.persistence.save_run(&failed_run) {
+                warn!("failed to persist preflight-failed run {}: {}", run_id, e);
+            }
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// Prepare a git worktree for the run, returning [`WorktreeInfo`] with paths and metadata.
+    ///
+    /// Handles concurrency checks, dirty-state detection, HEAD read, and `git worktree add`.
+    /// Emits reply_tx errors and cleans up the concurrency guard on failure.
+    /// Returns `Err(())` when an error was sent (caller should return early).
+    async fn prepare_worktree(
+        &self,
+        project_root: &PathBuf,
+        run_id: Uuid,
+        session_id: Uuid,
+        skip_dirty_check: bool,
+        prompt: &str,
+        mode: &RunMode,
+        reply_tx: &mpsc::Sender<AppEvent>,
+    ) -> Result<WorktreeInfo, ()> {
+        // Concurrency guard: one run per repo at a time
+        {
+            let mut conc = self.context.concurrency.lock().await;
+            if let Some(existing_run_id) = conc.get(project_root) {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "REPO_BUSY".into(),
+                        message: format!(
+                            "Repository {} already has active run {}",
+                            project_root.display(),
+                            existing_run_id
+                        ),
+                    })
+                    .await;
+                return Err(());
+            }
+            conc.insert(project_root.clone(), run_id);
+        }
+
+        // Guard repo state
+        if let Err(e) = crate::git_engine::guard_repo_state(project_root).await {
+            self.context.concurrency.lock().await.remove(project_root);
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "GIT_STATE_ERROR".into(),
+                    message: format!("Repository not in clean state: {}", e),
+                })
+                .await;
+            return Err(());
+        }
+
+        // Dirty working directory check (unless explicitly skipped)
+        if !skip_dirty_check {
+            let dirty = crate::git_engine::working_dir_status(project_root)
+                .await
+                .unwrap_or_else(|_| DirtyStatus { staged: vec![], unstaged: vec![] });
+            if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
+                self.context.concurrency.lock().await.remove(project_root);
+                let _ = reply_tx
+                    .send(AppEvent::DirtyWarning {
+                        status: dirty,
+                        session_id,
+                        prompt: prompt.to_string(),
+                        mode: mode.clone(),
+                    })
+                    .await;
+                return Err(());
+            }
+        }
+
+        // Read base HEAD
+        let base_head = match crate::git_engine::head_oid(project_root).await {
+            Ok(oid) => oid,
+            Err(e) => {
+                self.context.concurrency.lock().await.remove(project_root);
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "GIT_ERROR".into(),
+                        message: format!("Failed to read HEAD: {}", e),
+                    })
+                    .await;
+                return Err(());
+            }
+        };
+
+        // Generate branch name and worktree path
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        let short_uuid = &run_id.to_string()[..8];
+        let branch_name = format!("llm/{}-{}", timestamp, short_uuid);
+        let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
+
+        // Create .terminal-worktrees/ dir
+        let wt_parent = match wt_path.parent() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                self.context.concurrency.lock().await.remove(project_root);
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "IO_ERROR".into(),
+                        message: "Invalid worktree path: no parent directory".into(),
+                    })
+                    .await;
+                return Err(());
+            }
+        };
+        if let Err(e) = tokio::fs::create_dir_all(&wt_parent).await {
+            self.context.concurrency.lock().await.remove(project_root);
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("Failed to create worktrees dir: {}", e),
+                })
+                .await;
+            return Err(());
+        }
+
+        // Create the worktree
+        if let Err(e) = crate::git_engine::worktree_add(project_root, &wt_path, &branch_name).await {
+            self.context.concurrency.lock().await.remove(project_root);
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "GIT_ERROR".into(),
+                    message: format!("Failed to create worktree: {}", e),
+                })
+                .await;
+            return Err(());
+        }
+
+        // Persist worktree metadata
+        let meta = WorktreeMeta {
+            worktree_path: wt_path.clone(),
+            branch_name: branch_name.clone(),
+            base_head: base_head.clone(),
+            merge_base: base_head.clone(),
+            last_modified: chrono::Utc::now(),
+            repo_root: Some(project_root.clone()),
+        };
+        if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
+            warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
+        }
+
+        Ok(WorktreeInfo { branch_name, worktree_path: wt_path, base_head })
     }
 }
 

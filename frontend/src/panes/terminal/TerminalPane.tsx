@@ -7,9 +7,18 @@ import { useSend } from '../../context/SendContext';
 import { useAppState } from '../../context/AppContext';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
+import type { RestorableTerminalSession, SshConfig } from '../../types/protocol';
 import { subscribeTerminalEvents } from '../../core/events/terminalBus';
 
-type SessionState = 'idle' | 'creating' | 'active' | 'lost' | 'restoring';
+type SessionState =
+  | { tag: 'idle' }
+  | { tag: 'checking-restorable' }
+  | { tag: 'restore-prompt'; sessions: RestorableTerminalSession[] }
+  | { tag: 'creating' }
+  | { tag: 'restoring' }
+  | { tag: 'active'; sessionId: string }
+  | { tag: 'lost' }
+  | { tag: 'error'; message: string };
 
 // FIFO queue: panes register when they send CreateTerminalSession,
 // and TerminalSessionCreated events are matched in order.
@@ -78,7 +87,9 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Check if this pane already has a session from a previous mount (e.g., after split)
   const existingSessionId = paneSessionMap.get(pane.id) ?? null;
   const [sessionId, setSessionId] = useState<string | null>(existingSessionId);
-  const [sessionState, setSessionState] = useState<SessionState>(existingSessionId ? 'active' : 'idle');
+  const [sessionState, setSessionState] = useState<SessionState>(
+    existingSessionId ? { tag: 'active', sessionId: existingSessionId } : { tag: 'idle' }
+  );
   const [xtermLoaded, setXtermLoaded] = useState(false);
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTermHandle | null>(null);
@@ -198,41 +209,111 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     const rid = pane.resource_id;
     if (typeof rid !== 'string' || !rid.startsWith('ssh://')) return undefined;
     try {
-      // ssh://username@host:port or ssh://username@host:port?identity=/path/to/key
       const url = new URL(rid);
-      return {
+      const config: SshConfig = {
         host: url.hostname,
         port: url.port ? parseInt(url.port, 10) : 22,
         username: url.username || 'root',
-        identity_file: url.searchParams.get('identity') || undefined,
+        identity_file: url.searchParams.get('identity') ?? undefined,
       };
+      return config;
     } catch {
       return undefined;
     }
   })();
 
-  // Create a PTY session when component mounts — uses FIFO queue for reliable matching
+  // Step 1: On mount, check for restorable sessions before creating a new one
   useEffect(() => {
-    if (sessionState !== 'idle') return;
+    if (sessionState.tag !== 'idle') return;
+    if (sshConfig) { setSessionState({ tag: 'creating' }); return; } // SSH sessions skip restore check
     installGlobalListener();
-    setSessionState('creating');
-    const cmd: Record<string, unknown> = {
-      type: 'CreateTerminalSession',
-      workspace_id: workspaceId,
-      cwd,
+    setSessionState({ tag: 'checking-restorable' });
+    send({ type: 'ListRestoredTerminalSessions', workspace_id: workspaceId });
+  }, [workspaceId, sessionState.tag, send]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Step 2: Listen for restorable sessions response
+  useEffect(() => {
+    if (sessionState.tag !== 'checking-restorable') return;
+    let cancelled = false;
+    const handler = (e: Event) => {
+      const event = (e as CustomEvent).detail;
+      if (event.type === 'RestorableTerminalSessions' && event.workspace_id === workspaceId) {
+        if (cancelled) return;
+        const sessions: RestorableTerminalSession[] = event.sessions ?? [];
+        if (sessions.length > 0) {
+          setSessionState({ tag: 'restore-prompt', sessions });
+        } else {
+          setSessionState({ tag: 'creating' });
+        }
+      }
     };
-    if (sshConfig) {
-      cmd.ssh = sshConfig;
-    }
-    // cmd is structurally an AppCommand for CreateTerminalSession — the
-    // optional `ssh` field isn't on every variant, hence the unknown cast.
-    send(cmd as unknown as Parameters<typeof send>[0]);
-    waitForSession(workspaceId).then((sid) => {
-      paneSessionMap.set(pane.id, sid);
-      setSessionId(sid);
-      setSessionState('active');
-    });
-  }, [workspaceId, sessionState, send]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Timeout: if no response in 3s, just proceed to creating
+    const timer = setTimeout(() => {
+      if (!cancelled) setSessionState({ tag: 'creating' });
+    }, 3_000);
+    window.addEventListener('terminal-event', handler);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      window.removeEventListener('terminal-event', handler);
+    };
+  }, [workspaceId, sessionState.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Step 3: Create a PTY session when component mounts — uses FIFO queue for reliable matching
+  useEffect(() => {
+    if (sessionState.tag !== 'creating') return;
+    let cancelled = false;
+    installGlobalListener();
+
+    send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd, ssh: sshConfig });
+
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Timed out after 10s waiting for terminal session')), 10_000),
+    );
+
+    Promise.race([waitForSession(workspaceId), timeout])
+      .then((sid) => {
+        if (cancelled) return;
+        paneSessionMap.set(pane.id, sid);
+        setSessionId(sid);
+        setSessionState({ tag: 'active', sessionId: sid });
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setSessionState({ tag: 'error', message: err.message });
+      });
+
+    return () => { cancelled = true; };
+  }, [workspaceId, sessionState.tag, send]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Step 4: Handle session restore flow
+  useEffect(() => {
+    if (sessionState.tag !== 'restoring') return;
+    let cancelled = false;
+    const handler = (e: Event) => {
+      const event = (e as CustomEvent).detail;
+      if (event.type === 'TerminalSessionRestored' && event.workspace_id === workspaceId) {
+        if (cancelled) return;
+        const newSid: string = event.new_session_id;
+        paneSessionMap.set(pane.id, newSid);
+        setSessionId(newSid);
+        setSessionState({ tag: 'active', sessionId: newSid });
+      }
+      if (event.type === 'TerminalSessionRestoreFailed') {
+        if (cancelled) return;
+        setSessionState({ tag: 'error', message: event.reason ?? 'Restore failed' });
+      }
+    };
+    const timer = setTimeout(() => {
+      if (!cancelled) setSessionState({ tag: 'error', message: 'Timed out waiting for session restore' });
+    }, 10_000);
+    window.addEventListener('terminal-event', handler);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      window.removeEventListener('terminal-event', handler);
+    };
+  }, [workspaceId, sessionState.tag]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for terminal output and close events (session-specific, not creation)
   useEffect(() => {
@@ -283,7 +364,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
       }
       if (event.type === 'TerminalSessionClosed' && event.session_id === sessionId) {
         paneSessionMap.delete(pane.id);
-        setSessionState('lost');
+        setSessionState({ tag: 'lost' });
       }
     };
     return subscribeTerminalEvents(handler);
@@ -337,13 +418,114 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
 
   const handleReconnect = () => {
     paneSessionMap.delete(pane.id);
-    setSessionState('idle');
+    setSessionState({ tag: 'idle' });
     setSessionId(null);
+  };
+
+  const handleRestore = (previousSessionId: string) => {
+    setSessionState({ tag: 'restoring' });
+    send({ type: 'RestoreTerminalSession', previous_session_id: previousSessionId, workspace_id: workspaceId });
   };
 
   return (
     <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
-      {sessionState === 'lost' && (
+      {sessionState.tag === 'restore-prompt' && (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 16,
+            backgroundColor: 'var(--bg-surface)',
+            padding: 24,
+          }}
+          role="region"
+          aria-label="Restore terminal session"
+        >
+          <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 13 }}>
+            Restore a previous session?
+          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: 340 }}>
+            {sessionState.sessions.map((s) => (
+              <button
+                key={s.session_id}
+                onClick={() => handleRestore(s.session_id)}
+                aria-label={`Restore session from ${s.cwd}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  backgroundColor: 'var(--bg-raised)',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: 'var(--text-primary)',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {s.cwd}
+                </span>
+                <span style={{ color: 'var(--accent-primary)', marginLeft: 8, flexShrink: 0, fontWeight: 600, fontSize: 10 }}>
+                  Restore
+                </span>
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setSessionState({ tag: 'creating' })}
+            aria-label="Start a new terminal session"
+            style={{
+              padding: '6px 16px',
+              backgroundColor: 'transparent',
+              border: '1px solid var(--border-default)',
+              borderRadius: 5,
+              cursor: 'pointer',
+              fontFamily: 'var(--font-display)',
+              fontSize: 11,
+              color: 'var(--text-muted)',
+            }}
+          >
+            New Terminal
+          </button>
+        </div>
+      )}
+      {sessionState.tag === 'error' && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            zIndex: 10,
+          }}
+          role="alert"
+        >
+          <span style={{ color: 'var(--accent-error)', fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 14 }}>
+            Failed to start terminal
+          </span>
+          <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            {sessionState.message}
+          </span>
+          <button
+            onClick={handleReconnect}
+            aria-label="Retry terminal connection"
+            style={{ padding: '8px 18px', backgroundColor: 'var(--accent-primary)', color: 'var(--bg-base)', border: 'none', borderRadius: 5, cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12 }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {sessionState.tag === 'lost' && (
         <div
           style={{
             position: 'absolute',
@@ -390,7 +572,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
       )}
       {/* xterm.js mount point */}
       <div ref={termRef} style={{ flex: 1, overflow: 'hidden' }} />
-      {!xtermLoaded && sessionState !== 'lost' && (
+      {!xtermLoaded && sessionState.tag !== 'lost' && sessionState.tag !== 'error' && sessionState.tag !== 'restore-prompt' && (
         <div
           style={{
             flex: 1,
@@ -417,9 +599,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             }}
           />
           <span>
-            {sessionState === 'creating'
+            {sessionState.tag === 'creating'
               ? (sshConfig ? `connecting to ${sshConfig.username}@${sshConfig.host}...` : 'starting terminal...')
-              : 'terminal'}
+              : sessionState.tag === 'restoring'
+                ? 'restoring session...'
+                : sessionState.tag === 'checking-restorable'
+                  ? 'checking for previous sessions...'
+                  : 'terminal'}
           </span>
         </div>
       )}

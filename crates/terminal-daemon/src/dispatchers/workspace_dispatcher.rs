@@ -1,6 +1,6 @@
 // Workspace domain dispatcher (M1-04, M1-05)
 
-use crate::daemon_context::DaemonContext;
+use crate::daemon_context::{ClientId, DaemonContext};
 use std::sync::Arc;
 use terminal_core::models::{PaneLayout, Workspace, WorkspaceSummary};
 use terminal_core::protocol::v1::{AppCommand, AppEvent};
@@ -17,12 +17,7 @@ impl WorkspaceDispatcher {
         Self { ctx }
     }
 
-    pub async fn handle(
-        &self,
-        cmd: AppCommand,
-        client_id: Uuid,
-        reply_tx: mpsc::Sender<AppEvent>,
-    ) {
+    pub async fn handle(&self, client_id: ClientId, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
         match cmd {
             AppCommand::ListWorkspaces => {
                 let workspaces = self.ctx.workspaces.lock().await;
@@ -116,7 +111,7 @@ impl WorkspaceDispatcher {
                         .active_workspaces
                         .lock()
                         .await
-                        .insert(client_id, workspace_id);
+                        .insert(client_id.0, workspace_id);
                     if let Err(e) = self.ctx.persistence.save_workspace(&ws) {
                         warn!("Failed to persist workspace activation {}: {}", workspace_id, e);
                     }
@@ -169,12 +164,12 @@ mod tests {
 
         dispatcher
             .handle(
+                ClientId::new(),
                 AppCommand::CreateWorkspace {
                     name: "demo".into(),
                     root_path: PathBuf::from("/tmp/demo"),
                     mode: WorkspaceMode::Terminal,
                 },
-                Uuid::new_v4(),
                 tx,
             )
             .await;
@@ -190,23 +185,23 @@ mod tests {
         let ctx = make_ctx(&tmp);
         let dispatcher = WorkspaceDispatcher::new(ctx.clone());
         let (tx, _rx) = mpsc::channel(8);
-        let client = Uuid::new_v4();
+        let client = ClientId::new();
 
         dispatcher
             .handle(
+                client,
                 AppCommand::CreateWorkspace {
                     name: "demo".into(),
                     root_path: PathBuf::from("/tmp/demo"),
                     mode: WorkspaceMode::Terminal,
                 },
-                client,
                 tx.clone(),
             )
             .await;
 
         let id = *ctx.workspaces.lock().await.keys().next().unwrap();
         dispatcher
-            .handle(AppCommand::CloseWorkspace { workspace_id: id }, client, tx)
+            .handle(client, AppCommand::CloseWorkspace { workspace_id: id }, tx)
             .await;
 
         assert!(ctx.persistence.list_workspaces().unwrap().is_empty());
@@ -223,50 +218,50 @@ mod tests {
         // Create two workspaces
         dispatcher
             .handle(
+                ClientId::new(),
                 AppCommand::CreateWorkspace {
                     name: "X".into(),
                     root_path: PathBuf::from("/tmp/x"),
                     mode: WorkspaceMode::Terminal,
                 },
-                Uuid::new_v4(),
                 tx.clone(),
             )
             .await;
         dispatcher
             .handle(
+                ClientId::new(),
                 AppCommand::CreateWorkspace {
                     name: "Y".into(),
                     root_path: PathBuf::from("/tmp/y"),
                     mode: WorkspaceMode::Terminal,
                 },
-                Uuid::new_v4(),
                 tx.clone(),
             )
             .await;
 
         let ids: Vec<_> = ctx.workspaces.lock().await.keys().copied().collect();
         let (x_id, y_id) = (ids[0], ids[1]);
-        let client_a = Uuid::new_v4();
-        let client_b = Uuid::new_v4();
+        let client_a = ClientId::new();
+        let client_b = ClientId::new();
 
         dispatcher
             .handle(
-                AppCommand::ActivateWorkspace { workspace_id: x_id },
                 client_a,
+                AppCommand::ActivateWorkspace { workspace_id: x_id },
                 tx.clone(),
             )
             .await;
         dispatcher
             .handle(
-                AppCommand::ActivateWorkspace { workspace_id: y_id },
                 client_b,
+                AppCommand::ActivateWorkspace { workspace_id: y_id },
                 tx.clone(),
             )
             .await;
 
         let active = ctx.active_workspaces.lock().await;
-        assert_eq!(active.get(&client_a), Some(&x_id));
-        assert_eq!(active.get(&client_b), Some(&y_id));
+        assert_eq!(active.get(&client_a.0), Some(&x_id));
+        assert_eq!(active.get(&client_b.0), Some(&y_id));
     }
 
     #[tokio::test]
@@ -278,29 +273,29 @@ mod tests {
 
         dispatcher
             .handle(
+                ClientId::new(),
                 AppCommand::CreateWorkspace {
                     name: "demo".into(),
                     root_path: PathBuf::from("/tmp/demo"),
                     mode: WorkspaceMode::Terminal,
                 },
-                Uuid::new_v4(),
                 tx.clone(),
             )
             .await;
         let id = *ctx.workspaces.lock().await.keys().next().unwrap();
 
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = ClientId::new();
+        let b = ClientId::new();
         dispatcher
-            .handle(AppCommand::ActivateWorkspace { workspace_id: id }, a, tx.clone())
+            .handle(a, AppCommand::ActivateWorkspace { workspace_id: id }, tx.clone())
             .await;
         dispatcher
-            .handle(AppCommand::ActivateWorkspace { workspace_id: id }, b, tx.clone())
+            .handle(b, AppCommand::ActivateWorkspace { workspace_id: id }, tx.clone())
             .await;
         assert_eq!(ctx.active_workspaces.lock().await.len(), 2);
 
         dispatcher
-            .handle(AppCommand::CloseWorkspace { workspace_id: id }, a, tx)
+            .handle(a, AppCommand::CloseWorkspace { workspace_id: id }, tx)
             .await;
         assert!(ctx.active_workspaces.lock().await.is_empty());
     }

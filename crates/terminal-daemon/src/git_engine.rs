@@ -509,6 +509,35 @@ pub async fn stash_push(cwd: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Apply a stash by index (git stash apply stash@{N}).
+pub async fn stash_apply(cwd: &Path, index: usize) -> Result<bool> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "apply", &stash_ref]).await;
+    match output {
+        Ok(_) => Ok(false), // no conflicts
+        Err(GitError::CommandFailed(msg)) if msg.contains("CONFLICT") => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// Pop a stash by index (git stash pop stash@{N}).
+pub async fn stash_pop(cwd: &Path, index: usize) -> Result<bool> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    let output = run_git(cwd, &["stash", "pop", &stash_ref]).await;
+    match output {
+        Ok(_) => Ok(false), // no conflicts
+        Err(GitError::CommandFailed(msg)) if msg.contains("CONFLICT") => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// Drop a stash by index (git stash drop stash@{N}).
+pub async fn stash_drop(cwd: &Path, index: usize) -> Result<()> {
+    let stash_ref = format!("stash@{{{}}}", index);
+    run_git(cwd, &["stash", "drop", &stash_ref]).await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar operations (Phase 3)
 // ---------------------------------------------------------------------------

@@ -261,6 +261,9 @@ terminal/
 | `RUST_LOG` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `TERMINAL_HOST` | `127.0.0.1` | Daemon bind address |
 | `TERMINAL_PORT` | `3000` | Daemon port |
+| `TERMINAL_DATA_DIR` | `~/.terminal-daemon` | Directory for persisted sessions, runs, and auth token |
+| `TERMINAL_AUTH_TOKEN` | _(auto-generated)_ | WebSocket auth token; generated on first start if absent |
+| `TERMINAL_CLAUDE_BINARY` | `claude` | Path or name of the Claude CLI binary |
 
 ## Protocol
 

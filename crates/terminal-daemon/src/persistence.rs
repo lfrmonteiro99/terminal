@@ -473,6 +473,14 @@ impl Persistence {
         Ok(())
     }
 
+    pub fn delete_terminal_session(&self, session_id: uuid::Uuid) -> Result<()> {
+        self.delete_terminal_meta(session_id)
+    }
+
+    pub fn load_terminal_session(&self, session_id: uuid::Uuid) -> Result<terminal_core::models::TerminalSessionMeta> {
+        self.load_terminal_meta(session_id)
+    }
+
     /// Remove terminal metas older than `max_age_hours` hours.
     pub fn cleanup_stale_terminal_metas(&self, max_age_hours: i64) -> Result<usize> {
         let dir = self.base_dir.join("terminals");
@@ -499,6 +507,7 @@ impl Persistence {
         }
         Ok(cleaned)
     }
+
 }
 
 // ---------------------------------------------------------------------------

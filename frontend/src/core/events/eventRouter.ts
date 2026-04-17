@@ -145,14 +145,17 @@ export class EventRouter {
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'UPSERT_RUN', run: event.summary });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunFailed':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunCancelled':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'CLEAR_BLOCKING' });
+        dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunList':
         dispatch({ type: 'SET_RUNS', runs: event.runs });
@@ -226,6 +229,12 @@ export class EventRouter {
           stat: event.stat,
         });
         break;
+      case 'StashApplied':
+        // intentionally ignored: UI refreshes via follow-up ListStashes/GetRepoStatus
+        break;
+      case 'StashDropped':
+        // intentionally ignored: UI refreshes via follow-up ListStashes
+        break;
       case 'DirtyState':
         dispatch({ type: 'SET_DIRTY_STATE', status: event.status });
         break;
@@ -257,9 +266,6 @@ export class EventRouter {
           diff: event.diff,
           stat: event.stat,
         });
-        break;
-      case 'RepoStatusResult':
-        dispatch({ type: 'SET_REPO_STATUS', status: event.status });
         break;
       case 'CommitHistoryResult':
         dispatch({ type: 'SET_COMMIT_HISTORY', commits: event.commits });
@@ -357,6 +363,11 @@ export class EventRouter {
         break;
       case 'ConflictResolved':
         dispatch({ type: 'REMOVE_CONFLICT', filePath: event.file_path });
+        break;
+
+      // --- Repo status ---
+      case 'RepoStatusResult':
+        dispatch({ type: 'SET_REPO_STATUS', status: event.status });
         break;
 
       // --- File viewer / search ---
