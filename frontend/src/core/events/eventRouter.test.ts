@@ -98,6 +98,8 @@ const SAMPLES: Record<AppEvent['type'], AppEvent> = {
   StashList: { type: 'StashList', stashes: [] },
   StashFiles: { type: 'StashFiles', stash_index: 0, files: [] },
   StashDiff: { type: 'StashDiff', stash_index: 0, diff: '', stat: null },
+  StashApplied: { type: 'StashApplied', index: 0, had_conflicts: false },
+  StashDropped: { type: 'StashDropped', index: 0 },
   DirtyState: { type: 'DirtyState', status: { staged: [], unstaged: [] } },
   DirtyWarning: {
     type: 'DirtyWarning',
@@ -196,6 +198,8 @@ describe('EventRouter — C3 completeness', () => {
         'RunReverted',
         'CommitCreated',
         'TerminalOutput',
+        'StashApplied',
+        'StashDropped',
       ]);
       if (!deliberatelyIgnored.has(tag)) {
         expect(

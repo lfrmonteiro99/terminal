@@ -229,6 +229,12 @@ export class EventRouter {
           stat: event.stat,
         });
         break;
+      case 'StashApplied':
+        // intentionally ignored: UI refreshes via follow-up ListStashes/GetRepoStatus
+        break;
+      case 'StashDropped':
+        // intentionally ignored: UI refreshes via follow-up ListStashes
+        break;
       case 'DirtyState':
         dispatch({ type: 'SET_DIRTY_STATE', status: event.status });
         break;

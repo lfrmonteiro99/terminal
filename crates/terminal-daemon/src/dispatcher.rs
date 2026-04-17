@@ -2182,6 +2182,7 @@ impl Dispatcher {
             base_head: base_head.clone(),
             merge_base: base_head.clone(),
             last_modified: chrono::Utc::now(),
+            repo_root: Some(project_root.clone()),
         };
         if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
             warn!("Failed to persist worktree meta for run {}: {}", run_id, e);

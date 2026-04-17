@@ -579,6 +579,14 @@ function reducer(state: AppState, action: Action): AppState {
           // intentionally ignored: only surfaced on demand via a pane query
           return state;
 
+        case 'StashApplied':
+          // intentionally ignored: UI refreshes via follow-up ListStashes/GetRepoStatus
+          return state;
+
+        case 'StashDropped':
+          // intentionally ignored: UI refreshes via follow-up ListStashes
+          return state;
+
         // --- Workspace lifecycle (routed by App.tsx to workspace state store;
         //     the legacy reducer doesn't mirror workspace state — it only
         //     knows about the AI session workspace. Intentionally ignored
