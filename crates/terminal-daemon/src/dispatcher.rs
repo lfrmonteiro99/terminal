@@ -118,11 +118,31 @@ impl Dispatcher {
                     Ok(meta) => {
                         let size_bytes = meta.len();
 
-                        // Read up to max(limit, 8192) bytes for binary detection + content
+                        // Cap the actual bytes pulled from disk, not just the
+                        // returned slice. Previously `tokio::fs::read` pulled
+                        // the whole file into memory before truncation, so a
+                        // 10 GB file (or a pseudo-file like /dev/zero, whose
+                        // metadata reports size 0) would OOM the daemon.
                         let read_limit = (limit.max(8192)) as usize;
-                        let raw = match tokio::fs::read(&resolved).await {
-                            Ok(b) => b,
-                            Err(e) => {
+                        let raw = {
+                            use tokio::io::AsyncReadExt;
+                            let file = match tokio::fs::File::open(&resolved).await {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    let _ = reply_tx
+                                        .send(AppEvent::FileReadError {
+                                            path,
+                                            error: e.to_string(),
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            };
+                            let mut buf = Vec::with_capacity(read_limit.min(64 * 1024));
+                            // `take` caps reads at read_limit bytes. One extra
+                            // byte would be needed to *detect* truncation, but
+                            // size_bytes already tells us that for regular files.
+                            if let Err(e) = file.take(read_limit as u64).read_to_end(&mut buf).await {
                                 let _ = reply_tx
                                     .send(AppEvent::FileReadError {
                                         path,
@@ -131,6 +151,7 @@ impl Dispatcher {
                                     .await;
                                 return;
                             }
+                            buf
                         };
 
                         // Binary detection: null byte in first 8 KB
@@ -145,9 +166,8 @@ impl Dispatcher {
                             return;
                         }
 
-                        // Truncate to limit bytes, then to 10 000 lines
-                        let capped = &raw[..raw.len().min(read_limit)];
-                        let text = String::from_utf8_lossy(capped).into_owned();
+                        // Content is already capped by the bounded read above.
+                        let text = String::from_utf8_lossy(&raw).into_owned();
 
                         const MAX_LINES: usize = 10_000;
                         let (content, truncated) = {

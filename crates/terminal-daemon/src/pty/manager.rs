@@ -262,20 +262,30 @@ impl PtyManager {
         ));
 
         // Spawn process watcher — removes session on child exit.
+        // Only emits TerminalSessionClosed if the entry is still in the map;
+        // an explicit close_session() removes the entry first and emits the
+        // event itself, so we'd otherwise double-emit when the shell exits
+        // in response to the EOF we just sent it.
         let sessions_for_watcher = Arc::clone(&self.sessions);
         let event_tx_for_watcher = self.event_tx.clone();
         let workspace_channels_watcher = self.workspace_channels.clone();
         tokio::spawn(async move {
             let mut child = child;
             let _ = child.wait().await;
-            sessions_for_watcher.lock().await.remove(&session_id);
-            Self::emit_via(
-                &event_tx_for_watcher,
-                workspace_channels_watcher.as_ref(),
-                workspace_id,
-                &AppEvent::TerminalSessionClosed { session_id },
-            )
-            .await;
+            let was_present = sessions_for_watcher
+                .lock()
+                .await
+                .remove(&session_id)
+                .is_some();
+            if was_present {
+                Self::emit_via(
+                    &event_tx_for_watcher,
+                    workspace_channels_watcher.as_ref(),
+                    workspace_id,
+                    &AppEvent::TerminalSessionClosed { session_id },
+                )
+                .await;
+            }
             info!("PTY session {} exited", session_id);
         });
 
@@ -388,15 +398,17 @@ impl PtyManager {
 
     /// Close a PTY session.
     pub async fn close_session(&self, session_id: Uuid) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.remove(&session_id) {
+        // Remove under the lock, then release before awaiting the close
+        // channel send. close_tx is bounded; keeping the lock across a full
+        // send could starve the watcher task that also needs `sessions`.
+        let removed = self.sessions.lock().await.remove(&session_id);
+        if let Some(session) = removed {
             let workspace_id = session.meta.workspace_id;
             // Signal the stdin_writer task to exit; it will drop its tokio::fs::File,
             // closing the write half of the master PTY and sending EOF to the shell.
             // The stdout_reader task will exit when it sees EOF/error.
             // We do NOT call nix::libc::close() here — the Tokio Files own the fds.
             let _ = session.close_tx.send(()).await;
-            drop(sessions);
             self.emit(workspace_id, &AppEvent::TerminalSessionClosed { session_id })
                 .await;
             Ok(())
