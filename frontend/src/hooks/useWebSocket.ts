@@ -49,15 +49,29 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
     debug('[WS] Connecting to', url);
     setStatus('connecting');
     const ws = new WebSocket(url);
+    // Close any previous socket before replacing the ref. Without this, the
+    // old socket's close event fires later (see `isCurrent` guards below) —
+    // and even with the guards, leaving it open leaks a connection.
+    if (wsRef.current && wsRef.current !== ws) {
+      try { wsRef.current.close(); } catch { /* ignore */ }
+    }
     wsRef.current = ws;
 
+    // A socket might close/message AFTER it was replaced (e.g. url/token
+    // changed → new socket created → old socket closes later). Without this
+    // guard the old socket's `onclose` would nullify `wsRef.current` even
+    // though it now points to the fresh socket, silently breaking `send`.
+    const isCurrent = () => wsRef.current === ws;
+
     ws.onopen = () => {
+      if (!isCurrent()) return;
       debug('[WS] Connected, sending auth');
       setStatus('authenticating');
       ws.send(JSON.stringify({ type: 'Auth', token }));
     };
 
     ws.onmessage = (event) => {
+      if (!isCurrent()) return;
       if (import.meta.env.DEV && !event.data.includes('TerminalOutput')) {
         debug('[WS] Received:', event.data);
       }
@@ -82,6 +96,7 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
 
     ws.onclose = (ev) => {
       debug('[WS] Closed:', ev.code, ev.reason);
+      if (!isCurrent()) return;
       setStatus('disconnected');
       wsRef.current = null;
 
@@ -98,6 +113,7 @@ export function useWebSocket({ url, token, onEvent }: UseWebSocketOptions) {
     };
 
     ws.onerror = (err) => {
+      if (!isCurrent()) return;
       console.error('[WS] Error:', err);
       ws.close();
     };
