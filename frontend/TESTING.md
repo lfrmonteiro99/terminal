@@ -1,5 +1,11 @@
 # Frontend testing (M14)
 
+Two layers:
+
+- **Unit** (Vitest, jsdom) — reducers, event router, pane smoke tests.
+- **End-to-end** (Playwright, Chromium) — drives the Vite-served app against
+  a real `terminal-daemon` over WebSocket. See [`e2e/README.md`](./e2e/README.md).
+
 ## Commands
 
 | Script | Purpose |
@@ -7,6 +13,9 @@
 | `npm run test` | Single CI run (vitest run) |
 | `npm run test:watch` | Re-runs on file save |
 | `npm run test:coverage` | v8 coverage report (requires `@vitest/coverage-v8`) |
+| `npm run e2e` | Playwright golden-path suite (builds daemon + boots vite) |
+| `npm run e2e:ui` | Playwright interactive UI mode |
+| `npm run e2e:install` | One-time Chromium download |
 
 ## Config
 

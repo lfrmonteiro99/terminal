@@ -1,4 +1,4 @@
-.PHONY: help run stop desktop test test-rust test-frontend lint
+.PHONY: help run stop desktop test test-rust test-frontend test-e2e lint
 
 help:
 	@echo "Terminal Engine — Development Commands"
@@ -9,6 +9,7 @@ help:
 	@echo "  make test           Run all tests (Rust + frontend)"
 	@echo "  make test-rust      Run Rust tests only"
 	@echo "  make test-frontend  Run frontend tests only"
+	@echo "  make test-e2e       Run Playwright end-to-end tests"
 	@echo "  make lint           Run linters (cargo fmt, clippy, eslint)"
 	@echo ""
 
@@ -28,6 +29,9 @@ test-rust:
 
 test-frontend:
 	cd frontend && npm test -- --run
+
+test-e2e:
+	cd frontend && npm run e2e
 
 lint:
 	cargo fmt --check

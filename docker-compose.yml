@@ -45,8 +45,31 @@ services:
     profiles:
       - test
 
+  # --- Run Playwright e2e: docker compose --profile e2e run --rm e2e ---
+  # Boots the daemon in-process via globalSetup + vite dev + chromium.
+  # Needs privileged for the PTY devices the daemon opens on StartSession.
+  e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    working_dir: /app/frontend
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/app/target
+      - e2e-node-modules:/app/frontend/node_modules
+    command: sh -c "npm ci && npm run e2e"
+    environment:
+      - CI=1
+      - RUST_LOG=warn
+    privileged: true
+    profiles:
+      - e2e
+
 volumes:
   daemon-data:
   cargo-cache:
   cargo-git:
   target-cache:
+  e2e-node-modules:

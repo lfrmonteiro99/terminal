@@ -1,0 +1,19 @@
+# Playwright e2e image: Rust toolchain (to build terminal-daemon) + Node
+# (for Vite + Playwright). Uses Playwright's official image for the Chromium
+# + OS deps, then layers rustup on top.
+
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl build-essential pkg-config libssl-dev git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    RUST_VERSION=1.88.0
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- --default-toolchain $RUST_VERSION --profile minimal -y
+
+WORKDIR /app

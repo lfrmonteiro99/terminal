@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'playwright-report', 'test-results', 'e2e/.e2e-info.json']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -40,6 +40,13 @@ export default defineConfig([
           destructuredArrayIgnorePattern: '^_',
         },
       ],
+    },
+  },
+  // Playwright e2e files + config run under Node, not the browser.
+  {
+    files: ['e2e/**/*.ts', 'playwright.config.ts'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
     },
   },
 ])
