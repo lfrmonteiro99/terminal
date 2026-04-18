@@ -10,3 +10,4 @@ __pycache__/
 # Tooling scratch
 /.playwright-mcp/
 /docs/superpowers/
+.claude/
