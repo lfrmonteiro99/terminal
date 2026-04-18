@@ -49,6 +49,15 @@ pub async fn start_server(
 ) -> Result<DaemonHandle, Box<dyn std::error::Error + Send + Sync>> {
     // Create data directory (needed for persistence in both modes)
     tokio::fs::create_dir_all(&config.data_dir).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(
+            &config.data_dir,
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .await?;
+    }
 
     // Use TERMINAL_AUTH_TOKEN env var if set, otherwise generate random
     let token: String = std::env::var("TERMINAL_AUTH_TOKEN").unwrap_or_else(|_| {
@@ -62,7 +71,38 @@ pub async fn start_server(
     // Standalone mode: write token to disk
     if config.mode == DaemonMode::Standalone {
         let token_path = config.data_dir.join("auth_token");
+
+        // Startup check: if auth_token already exists with looser permissions, warn and tighten.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if token_path.exists() {
+                let meta = std::fs::metadata(&token_path)?;
+                let mode = meta.permissions().mode();
+                if mode & 0o177 != 0 {
+                    tracing::warn!(
+                        "auth_token at {:?} has loose permissions ({:#o}); tightening to 0600",
+                        token_path,
+                        mode & 0o777,
+                    );
+                    std::fs::set_permissions(
+                        &token_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    )?;
+                }
+            }
+        }
+
         tokio::fs::write(&token_path, &token).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(
+                &token_path,
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .await?;
+        }
     }
 
     // Event broadcast channel
@@ -102,6 +142,15 @@ pub async fn start_server(
     if config.mode == DaemonMode::Standalone {
         let port_path = config.data_dir.join("port");
         tokio::fs::write(&port_path, actual_port.to_string()).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(
+                &port_path,
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .await?;
+        }
     }
 
     // Recovery on startup — synchronous pass (metadata + run-state fixes).
@@ -238,4 +287,93 @@ fn derive_repo_root_from_worktree(worktree_path: &std::path::Path) -> Option<std
         return None;
     }
     parent.parent().map(|p| p.to_path_buf())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+    use terminal_core::config::{DaemonConfig, DaemonMode};
+
+    fn standalone_config(data_dir: std::path::PathBuf) -> DaemonConfig {
+        DaemonConfig {
+            data_dir,
+            mode: DaemonMode::Standalone,
+            host: "127.0.0.1".to_string(),
+            port: 0, // bind to any available port
+            ..DaemonConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_standalone_file_permissions() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let handle = start_server(standalone_config(dir.path().to_path_buf()))
+            .await
+            .expect("start_server failed");
+
+        // auth_token must be 0600
+        let token_path = dir.path().join("auth_token");
+        let token_meta = std::fs::metadata(&token_path).expect("auth_token missing");
+        let token_mode = token_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            token_mode, 0o600,
+            "auth_token mode should be 0600, got {:#o}",
+            token_mode
+        );
+
+        // port file must be 0600
+        let port_path = dir.path().join("port");
+        let port_meta = std::fs::metadata(&port_path).expect("port file missing");
+        let port_mode = port_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            port_mode, 0o600,
+            "port file mode should be 0600, got {:#o}",
+            port_mode
+        );
+
+        // data_dir must be 0700
+        let dir_meta = std::fs::metadata(dir.path()).expect("data_dir missing");
+        let dir_mode = dir_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            dir_mode, 0o700,
+            "data_dir mode should be 0700, got {:#o}",
+            dir_mode
+        );
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_loose_token_perms_tightened_on_startup() {
+        use std::fs;
+
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Pre-create an auth_token with loose permissions (0644).
+        let token_path = dir.path().join("auth_token");
+        fs::write(&token_path, b"old-token").expect("failed to write token");
+        fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o644))
+            .expect("failed to set loose perms");
+
+        let handle = start_server(standalone_config(dir.path().to_path_buf()))
+            .await
+            .expect("start_server failed");
+
+        // After startup the token must be 0600.
+        let meta = fs::metadata(&token_path).expect("auth_token missing");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "auth_token should be tightened to 0600, got {:#o}",
+            mode
+        );
+
+        handle.shutdown();
+    }
 }

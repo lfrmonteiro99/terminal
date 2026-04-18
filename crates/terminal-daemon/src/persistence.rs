@@ -33,11 +33,16 @@ pub struct Persistence {
 impl Persistence {
     /// Creates a new Persistence instance, ensuring the required subdirectories exist.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(base_dir.join("sessions"))?;
-        fs::create_dir_all(base_dir.join("runs"))?;
-        fs::create_dir_all(base_dir.join("worktrees"))?;
-        fs::create_dir_all(base_dir.join("terminals"))?;
-        fs::create_dir_all(base_dir.join("workspaces"))?;
+        let subdirs = ["sessions", "runs", "worktrees", "terminals", "workspaces"];
+        for subdir in &subdirs {
+            let path = base_dir.join(subdir);
+            fs::create_dir_all(&path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
         Ok(Self { base_dir })
     }
 
