@@ -213,7 +213,8 @@ export type WorkspaceAction =
       sizeBytes: number;
     }
   | { type: 'SET_FILE_ERROR'; path: string; error: string }
-  | { type: 'SET_SEARCH_RESULTS'; result: SearchResult };
+  | { type: 'SET_SEARCH_RESULTS'; result: SearchResult }
+  | { type: 'MARK_RUN_FAILED'; runId: string; error: string; phase: import('../types/protocol').FailPhase };
 
 export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction): WorkspaceStore {
   switch (action.type) {
@@ -246,6 +247,20 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
     case 'UPSERT_RUN': {
       const runs = new Map(state.runs);
       runs.set(action.run.id, action.run);
+      return { ...state, runs };
+    }
+
+    case 'MARK_RUN_FAILED': {
+      // Update the run's state in-place so PostRunSummary renders the failure
+      // reason instead of the stale "Running" state. AI-BUG-01 / issue #113.
+      const existing = state.runs.get(action.runId);
+      if (!existing) return state;
+      const runs = new Map(state.runs);
+      runs.set(action.runId, {
+        ...existing,
+        state: { type: 'Failed', error: action.error, phase: action.phase },
+        ended_at: existing.ended_at ?? new Date().toISOString(),
+      });
       return { ...state, runs };
     }
 

@@ -151,6 +151,9 @@ export class EventRouter {
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'CLEAR_BLOCKING' });
         dispatch({ type: 'CLEAR_RUN_METRICS' });
+        // Update the run record so PostRunSummary shows the failure reason
+        // instead of the stale state. AI-BUG-01 / issue #113.
+        dispatch({ type: 'MARK_RUN_FAILED', runId: event.run_id, error: event.error, phase: event.phase });
         break;
       case 'RunCancelled':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });

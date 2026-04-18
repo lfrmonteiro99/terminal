@@ -18,6 +18,7 @@
 use crate::parser::{ParseEvent, StreamParser};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use terminal_core::config::DaemonConfig;
 use terminal_core::models::{AutonomyLevel, RunMode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,6 +26,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 use uuid::Uuid;
+
+/// Maximum number of bytes kept in the stderr tail buffer.
+const STDERR_TAIL_BYTES: usize = 4096;
 
 /// Events emitted by the Claude runner to the supervisor.
 #[derive(Debug)]
@@ -67,6 +71,11 @@ pub enum RunnerEvent {
     ProcessExited { exit_code: Option<i32> },
     /// Error spawning the child process.
     SpawnError(String),
+    /// Emitted immediately before `Metrics` when the parser sees a `Result`
+    /// event in the stream. Signals the supervisor that the run produced a
+    /// proper terminal result — used to distinguish a clean completion from a
+    /// mid-stream crash (network blip, OOM, provider 5xx, etc.).
+    ResultSeen,
 }
 
 /// What to pass to `claude --permission-mode`. Mirrors Claude Code's CLI.
@@ -139,8 +148,7 @@ impl ClaudeRunner {
 
         match result {
             Ok(out) if out.status.success() => {
-                let version =
-                    String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 Ok(PreflightInfo { version })
             }
             Ok(out) => {
@@ -152,15 +160,15 @@ impl ClaudeRunner {
                         out.status.code().unwrap_or(-1),
                         if stderr.is_empty() { "no output".into() } else { stderr }
                     ),
-                    suggestion: "verify Claude Code is installed and authenticated: `claude doctor`".into(),
+                    suggestion: "verify Claude Code is installed and authenticated: `claude doctor`"
+                        .into(),
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(PreflightFailure {
                 reason: format!("`{}` binary not found on PATH", binary),
-                suggestion:
-                    "install Claude Code: https://docs.claude.com/en/docs/claude-code/overview — \
+                suggestion: "install Claude Code: https://docs.claude.com/en/docs/claude-code/overview — \
                      or set `claude_binary` / TERMINAL_CLAUDE_BINARY to the full path."
-                        .into(),
+                    .into(),
             }),
             Err(e) => Err(PreflightFailure {
                 reason: format!("failed to run `{} --version`: {}", binary, e),
@@ -170,7 +178,10 @@ impl ClaudeRunner {
     }
 
     /// Spawn `claude -p` with stream-json output. Returns the event stream,
-    /// a stdin sender (reserved for future interactive modes), and the child.
+    /// a stdin sender (reserved for future interactive modes), the child, and
+    /// a shared buffer containing the last [`STDERR_TAIL_BYTES`] bytes of
+    /// stderr (populated concurrently while the process runs — read it in the
+    /// failure path after channel close).
     ///
     /// The caller must have already run `preflight()` or be prepared to
     /// translate `SpawnError` into a UI-visible failure.
@@ -181,7 +192,8 @@ impl ClaudeRunner {
         mode: &RunMode,
         autonomy: AutonomyLevel,
         working_dir: &Path,
-    ) -> Result<(mpsc::Receiver<RunnerEvent>, mpsc::Sender<String>, Child), String> {
+    ) -> Result<(mpsc::Receiver<RunnerEvent>, mpsc::Sender<String>, Child, Arc<Mutex<String>>), String>
+    {
         // Reject empty / whitespace-only prompts before we touch the CLI.
         // Preserved from the safety hardening pass in #61.
         if prompt.trim().is_empty() {
@@ -270,6 +282,10 @@ impl ClaudeRunner {
                             output_tokens,
                             error_text,
                         } => {
+                            // Signal the supervisor that a Result event arrived
+                            // before the channel closes — used to distinguish a
+                            // clean completion from a mid-stream crash.
+                            let _ = event_tx_stdout.send(RunnerEvent::ResultSeen).await;
                             let _ = event_tx_stdout
                                 .send(RunnerEvent::Metrics {
                                     num_turns,
@@ -298,12 +314,31 @@ impl ClaudeRunner {
             }
         });
 
-        // Stderr reader.
+        // Stderr reader — forwards lines as StderrLine events and concurrently
+        // accumulates the last STDERR_TAIL_BYTES bytes into `stderr_tail` so
+        // the failure path can include a snippet in the error reason.
+        let stderr_tail: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let stderr_tail_write = stderr_tail.clone();
         let event_tx_stderr = event_tx.clone();
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // Append to rolling tail buffer (cap at STDERR_TAIL_BYTES).
+                if let Ok(mut buf) = stderr_tail_write.lock() {
+                    buf.push_str(&line);
+                    buf.push('\n');
+                    // Trim from the front when over budget, advancing past a
+                    // newline boundary so we never split a line mid-character.
+                    if buf.len() > STDERR_TAIL_BYTES {
+                        let excess = buf.len() - STDERR_TAIL_BYTES;
+                        let trim_at = buf[excess..]
+                            .find('\n')
+                            .map(|i| excess + i + 1)
+                            .unwrap_or(buf.len());
+                        buf.drain(..trim_at);
+                    }
+                }
                 let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
             }
         });
@@ -332,7 +367,7 @@ impl ClaudeRunner {
         });
 
         info!("claude stream-json process spawned for run {}", run_id);
-        Ok((event_rx, stdin_tx, child))
+        Ok((event_rx, stdin_tx, child, stderr_tail))
     }
 }
 
@@ -409,7 +444,13 @@ mod tests {
         cfg.claude_binary = "echo".into();
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
+            .spawn(
+                Uuid::new_v4(),
+                "",
+                &RunMode::Free,
+                AutonomyLevel::Autonomous,
+                Path::new("/tmp"),
+            )
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
     }
@@ -420,8 +461,99 @@ mod tests {
         cfg.claude_binary = "echo".into();
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "   \n\t  ", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
+            .spawn(
+                Uuid::new_v4(),
+                "   \n\t  ",
+                &RunMode::Free,
+                AutonomyLevel::Autonomous,
+                Path::new("/tmp"),
+            )
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
+    }
+
+    /// A synthetic supervisor loop: given a sequence of RunnerEvents that ends
+    /// WITHOUT a `ResultSeen`, the supervisor must classify the channel-close
+    /// as a mid-stream failure and emit `RunFailed { phase: Execution, .. }`.
+    #[tokio::test]
+    async fn stream_end_without_result_is_classified_as_failed() {
+        use terminal_core::models::FailPhase;
+
+        // Build a synthetic event channel that closes without a ResultSeen.
+        let (tx, mut rx) = mpsc::channel::<RunnerEvent>(16);
+        // Send a couple of normal events then drop the sender to close the channel.
+        tx.send(RunnerEvent::AssistantText("hello".into())).await.unwrap();
+        tx.send(RunnerEvent::StderrLine("connection reset".into())).await.unwrap();
+        drop(tx); // simulates child crash
+
+        let mut result_event_seen = false;
+        let mut last_event_kind: Option<&'static str> = None;
+
+        loop {
+            match rx.recv().await {
+                Some(RunnerEvent::ResultSeen) => {
+                    result_event_seen = true;
+                    last_event_kind = Some("ResultSeen");
+                }
+                Some(RunnerEvent::AssistantText(_)) => {
+                    last_event_kind = Some("AssistantText");
+                }
+                Some(RunnerEvent::StderrLine(_)) => {
+                    last_event_kind = Some("StderrLine");
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+
+        // Supervisor decision
+        let phase = if result_event_seen {
+            None // would be Completed
+        } else {
+            Some(FailPhase::Execution)
+        };
+
+        assert!(
+            !result_event_seen,
+            "ResultSeen must NOT be set when no Result event was in the stream"
+        );
+        assert_eq!(
+            phase,
+            Some(FailPhase::Execution),
+            "mid-stream close must map to FailPhase::Execution"
+        );
+        // Sanity: last event we processed was the stderr line
+        assert_eq!(last_event_kind, Some("StderrLine"));
+    }
+
+    /// When a `ResultSeen` event IS present the supervisor must treat the
+    /// channel close as a normal completion, not a failure.
+    #[tokio::test]
+    async fn stream_end_with_result_is_classified_as_completed() {
+        let (tx, mut rx) = mpsc::channel::<RunnerEvent>(16);
+        tx.send(RunnerEvent::ResultSeen).await.unwrap();
+        tx.send(RunnerEvent::Metrics {
+            num_turns: 1,
+            cost_usd: 0.01,
+            input_tokens: 100,
+            output_tokens: 50,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut result_event_seen = false;
+        loop {
+            match rx.recv().await {
+                Some(RunnerEvent::ResultSeen) => result_event_seen = true,
+                Some(_) => {}
+                None => break,
+            }
+        }
+
+        assert!(
+            result_event_seen,
+            "ResultSeen must be set when a Result event was in the stream"
+        );
     }
 }

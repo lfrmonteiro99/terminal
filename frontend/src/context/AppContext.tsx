@@ -279,13 +279,27 @@ function reducer(state: AppState, action: Action): AppState {
           };
         }
 
-        case 'RunFailed':
+        case 'RunFailed': {
+          // Also update the run record in the runs map so PostRunSummary shows
+          // the failure reason instead of the stale "Running" state.
+          // AI-BUG-01 / issue #113.
+          const runs = new Map(state.runs);
+          const existing = runs.get(event.run_id);
+          if (existing) {
+            runs.set(event.run_id, {
+              ...existing,
+              state: { type: 'Failed', error: event.error, phase: event.phase },
+              ended_at: existing.ended_at ?? new Date().toISOString(),
+            });
+          }
           return {
             ...state,
             activeRun: null,
             runState: { type: 'Failed', error: event.error, phase: event.phase },
             blocking: null,
+            runs,
           };
+        }
 
         case 'RunCancelled':
           return {

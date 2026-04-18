@@ -279,6 +279,42 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
           </div>
         )}
 
+      {/* Failure reason — shown prominently when the run failed mid-stream.
+          AI-BUG-01 / issue #113. */}
+      {run.state.type === 'Failed' && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: 12,
+            borderRadius: 6,
+            border: '1px solid var(--accent-error)',
+            backgroundColor: 'rgba(var(--accent-error-rgb), 0.08)',
+          }}
+        >
+          <div
+            style={{
+              color: 'var(--accent-error)',
+              fontWeight: 'bold',
+              marginBottom: 4,
+              fontSize: 13,
+            }}
+          >
+            Run failed ({run.state.phase})
+          </div>
+          <div
+            style={{
+              color: 'var(--text-primary)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {run.state.error}
+          </div>
+        </div>
+      )}
+
       {/* DiffStat */}
       <div style={sectionStyle}>
         <div style={labelStyle}>Changes</div>
@@ -296,7 +332,11 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
           </>
         ) : (
           <div style={{ color: 'var(--text-muted)' }}>
-            {run.state.type === 'Completed' ? 'No git changes' : 'Not a git run'}
+            {run.state.type === 'Completed'
+              ? 'No git changes'
+              : run.state.type === 'Failed'
+                ? 'Run did not complete'
+                : 'Not a git run'}
           </div>
         )}
       </div>

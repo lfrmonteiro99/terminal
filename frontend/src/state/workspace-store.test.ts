@@ -394,6 +394,34 @@ describe('workspaceReducer', () => {
     expect(next.searchResult?.query).toBe('q');
   });
 
+  it('MARK_RUN_FAILED updates run state to Failed', () => {
+    const seeded = workspaceReducer(base(), { type: 'UPSERT_RUN', run: runSummary('r1') });
+    const next = run(seeded, {
+      type: 'MARK_RUN_FAILED',
+      runId: 'r1',
+      error: 'stream ended without result event (exit -1)',
+      phase: 'Execution',
+    });
+    const r = next.runs.get('r1');
+    expect(r?.state.type).toBe('Failed');
+    if (r?.state.type === 'Failed') {
+      expect(r.state.error).toContain('stream ended without result event');
+      expect(r.state.phase).toBe('Execution');
+    }
+  });
+
+  it('MARK_RUN_FAILED is a no-op when run does not exist', () => {
+    const start = base();
+    const next = run(start, {
+      type: 'MARK_RUN_FAILED',
+      runId: 'nonexistent',
+      error: 'oops',
+      phase: 'Execution',
+    });
+    // State should be unchanged
+    expect(next).toBe(start);
+  });
+
   it('unknown action returns state unchanged (default branch)', () => {
     const start = base();
     // @ts-expect-error — probing the default arm.
@@ -452,6 +480,7 @@ describe('workspaceReducer', () => {
       'SET_FILE_CONTENT',
       'SET_FILE_ERROR',
       'SET_SEARCH_RESULTS',
+      'MARK_RUN_FAILED',
     ] as const satisfies readonly WorkspaceAction['type'][];
     for (const tag of expected) {
       expect(covered.has(tag), `action ${tag} should have a test`).toBe(true);

@@ -1616,7 +1616,7 @@ impl Dispatcher {
         // Ownership of the concurrency entry transfers to the supervisor task
         // on success; `forget()` prevents the guard from clearing it on drop.
         match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
-            Ok((mut event_rx, stdin_tx, mut child)) => {
+            Ok((mut event_rx, stdin_tx, mut child, stderr_tail)) => {
                 if let Some(g) = concurrency_guard.take() {
                     g.forget();
                 }
@@ -1668,6 +1668,11 @@ impl Dispatcher {
                         }
                     };
 
+                    // Track whether the stream emitted a `Result` event before
+                    // closing. Absence means a mid-stream crash (network blip,
+                    // OOM, provider 5xx) — emit RunFailed instead of
+                    // RunCompleted in that case (AI-BUG-01 / issue #113).
+                    let mut result_event_seen = false;
                     let mut line_number: usize = 0;
                     let mut output_file = tokio::fs::OpenOptions::new()
                         .create(true)
@@ -1684,6 +1689,9 @@ impl Dispatcher {
                         tokio::select! {
                             event = event_rx.recv() => {
                                 match event {
+                                    Some(RunnerEvent::ResultSeen) => {
+                                        result_event_seen = true;
+                                    }
                                     Some(RunnerEvent::StdoutLine(line)) => {
                                         line_number += 1;
                                         // Write to disk
@@ -1836,12 +1844,88 @@ impl Dispatcher {
                                         // Handled via channel close (None) below
                                     }
                                     None => {
-                                        // Channel closed -- process exited
+                                        // Channel closed -- process exited.
+                                        // If we never saw a `Result` event the
+                                        // process crashed mid-stream (OOM,
+                                        // network blip, provider 5xx). Classify
+                                        // that as RunFailed so the UI shows an
+                                        // error instead of a false "Completed".
+                                        // AI-BUG-01 / issue #113.
                                         let exit_code = child.wait().await
                                             .map(|s| s.code().unwrap_or(-1))
                                             .unwrap_or(-1);
 
-                                        // Compute git diff info if this was a git run
+                                        if !result_event_seen {
+                                            // Build a reason that includes the
+                                            // stderr tail when the process
+                                            // exited non-zero.
+                                            let reason = if exit_code != 0 {
+                                                let tail = stderr_tail
+                                                    .lock()
+                                                    .map(|b| b.trim().to_string())
+                                                    .unwrap_or_default();
+                                                if tail.is_empty() {
+                                                    format!(
+                                                        "stream ended without result event (exit {})",
+                                                        exit_code
+                                                    )
+                                                } else {
+                                                    let snippet = tail.trim();
+                                                    let snippet = if snippet.len() > 400 {
+                                                        &snippet[snippet.len() - 400..]
+                                                    } else {
+                                                        snippet
+                                                    };
+                                                    format!(
+                                                        "stream ended without result event (exit {}): {}",
+                                                        exit_code, snippet
+                                                    )
+                                                }
+                                            } else {
+                                                "stream ended without result event".to_string()
+                                            };
+                                            warn!(
+                                                "Run {} crashed mid-stream (exit {}): {}",
+                                                run_id, exit_code, reason
+                                            );
+                                            let evt = AppEvent::RunFailed {
+                                                run_id,
+                                                error: reason.clone(),
+                                                phase: FailPhase::Execution,
+                                            };
+                                            emit(evt).await;
+
+                                            // Persist the failed run state
+                                            let failed_run = Run {
+                                                id: run_id,
+                                                session_id,
+                                                branch: branch_name_clone.clone(),
+                                                mode,
+                                                autonomy: autonomy_clone,
+                                                state: RunState::Failed {
+                                                    error: reason,
+                                                    phase: FailPhase::Execution,
+                                                },
+                                                prompt,
+                                                provided_files: vec![],
+                                                modified_files: vec![],
+                                                expanded_files: vec![],
+                                                output_path,
+                                                output_line_count: line_number,
+                                                output_byte_count: 0,
+                                                started_at: run_started_at,
+                                                ended_at: Some(chrono::Utc::now()),
+                                                last_modified: chrono::Utc::now(),
+                                            };
+                                            if let Err(e) = persistence.save_run(&failed_run) {
+                                                warn!("Failed to persist failed run {}: {}", run_id, e);
+                                            }
+
+                                            break;
+                                        }
+
+                                        // Normal completion -- result event was seen.
+                                        // Compute git diff info if this was a git run.
                                         let mut modified_files_list = vec![];
                                         let mut run_diff_stat = None;
 
