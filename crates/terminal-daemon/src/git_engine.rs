@@ -604,13 +604,18 @@ pub async fn repo_status_snapshot(cwd: &Path) -> Result<RepoStatusSnapshot> {
 
 /// Recent commit history via `git log`.
 pub async fn commit_history(cwd: &Path, limit: usize) -> Result<Vec<CommitEntry>> {
+    // `git log -0` is treated as "no limit" — show every commit — which on a
+    // repo with thousands of commits can return megabytes of output the UI
+    // cannot display. Clamp to a reasonable window (and reject `0`). 1000 is
+    // an order of magnitude above any realistic pagination size.
+    let effective = limit.clamp(1, 1000);
     let output = run_git(
         cwd,
         &[
             "log",
             "--oneline",
             "--format=%h|||%s|||%an|||%aI",
-            &format!("-{}", limit),
+            &format!("-{}", effective),
         ],
     )
     .await?;
@@ -631,7 +636,9 @@ pub async fn commit_history(cwd: &Path, limit: usize) -> Result<Vec<CommitEntry>
 
 /// Stage a file (`git add`).
 pub async fn stage_file(cwd: &Path, path: &Path) -> Result<()> {
-    run_git(cwd, &["add", &path.to_string_lossy()]).await?;
+    // `--` ensures the path is never interpreted as a flag. Without it a
+    // path like `--force` or `-f` would be honored as a git-add option.
+    run_git(cwd, &["add", "--", &path.to_string_lossy()]).await?;
     Ok(())
 }
 

@@ -923,7 +923,25 @@ impl Dispatcher {
 
             AppCommand::ListDirectory { path } => {
                 let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
-                let full_path = root.join(&path);
+                // Keep the listing confined to the project root. Without
+                // validation, an absolute path or one with `..` components
+                // would let a client enumerate any directory on the host
+                // filesystem.
+                let full_path = match crate::safety::validate_path(
+                    &root,
+                    std::path::Path::new(&path),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "LIST_DIR_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
+                        return;
+                    }
+                };
                 match crate::git_engine::list_directory(&full_path).await {
                     Ok(entries) => {
                         let _ = reply_tx
@@ -1692,12 +1710,27 @@ impl Dispatcher {
 
                 tokio::spawn(async move {
                     let mut line_number: usize = 0;
-                    let mut output_file = tokio::fs::OpenOptions::new()
+                    let mut output_file = match tokio::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(&output_path)
                         .await
-                        .ok();
+                    {
+                        Ok(f) => Some(f),
+                        Err(e) => {
+                            // Previously this was `.ok()` which silently
+                            // dropped the error — a permission or disk-space
+                            // failure at open time meant the run streamed to
+                            // clients live but left no persisted output, so
+                            // GetRunOutput after a reload returned nothing
+                            // with no indication why.
+                            warn!(
+                                "run {}: could not open output file {:?}: {} — output will not be persisted",
+                                run_id, output_path, e
+                            );
+                            None
+                        }
+                    };
 
                     let timeout =
                         tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
