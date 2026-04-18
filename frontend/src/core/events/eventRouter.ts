@@ -127,7 +127,6 @@ export class EventRouter {
       case 'RunStateChanged':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: event.run_id });
         dispatch({ type: 'SET_RUN_STATE', runState: event.new_state });
-        if (event.new_state.type === 'Running') dispatch({ type: 'CLEAR_BLOCKING' });
         break;
       case 'RunOutput':
         dispatch({ type: 'APPEND_OUTPUT', line: event.line });
@@ -138,23 +137,17 @@ export class EventRouter {
           dispatch({ type: 'APPEND_OUTPUT', line });
         }
         break;
-      case 'RunBlocking':
-        dispatch({ type: 'SET_BLOCKING', question: event.question, context: event.context });
-        break;
       case 'RunCompleted':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
         dispatch({ type: 'UPSERT_RUN', run: event.summary });
-        dispatch({ type: 'CLEAR_BLOCKING' });
         dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunFailed':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
-        dispatch({ type: 'CLEAR_BLOCKING' });
         dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunCancelled':
         dispatch({ type: 'SET_ACTIVE_RUN', runId: null });
-        dispatch({ type: 'CLEAR_BLOCKING' });
         dispatch({ type: 'CLEAR_RUN_METRICS' });
         break;
       case 'RunList':

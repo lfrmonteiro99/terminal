@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
     FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta, Workspace,
@@ -33,11 +34,15 @@ pub struct Persistence {
 impl Persistence {
     /// Creates a new Persistence instance, ensuring the required subdirectories exist.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(base_dir.join("sessions"))?;
-        fs::create_dir_all(base_dir.join("runs"))?;
-        fs::create_dir_all(base_dir.join("worktrees"))?;
-        fs::create_dir_all(base_dir.join("terminals"))?;
-        fs::create_dir_all(base_dir.join("workspaces"))?;
+        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+            let dir = base_dir.join(sub);
+            fs::create_dir_all(&dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+            }
+        }
         Ok(Self { base_dir })
     }
 
@@ -47,8 +52,18 @@ impl Persistence {
 
     fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         let tmp_path = path.with_extension("json.tmp");
-        fs::write(&tmp_path, data)?;
+        {
+            let mut f = fs::File::create(&tmp_path)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
         fs::rename(&tmp_path, path)?;
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            if let Ok(dir_file) = fs::File::open(dir) {
+                let _ = dir_file.sync_all();
+            }
+        }
         Ok(())
     }
 

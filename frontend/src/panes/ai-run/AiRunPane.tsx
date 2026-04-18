@@ -3,8 +3,8 @@
 import { useRef, useState } from 'react';
 import { Bot, Eye, AlertTriangle, X } from 'lucide-react';
 import { RunPanel } from '../../components/RunPanel';
-import { DecisionPanel } from '../../components/DecisionPanel';
 import { PostRunSummary } from '../../components/PostRunSummary';
+import { PromptComposer } from '../../components/PromptComposer';
 import { useSend } from '../../context/SendContext';
 import { useAppState, useAppDispatch } from '../../context/AppContext';
 import type { PaneProps } from '../registry';
@@ -52,10 +52,6 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     if (!overridePrompt) setPrompt('');
   };
 
-  const handleRespond = (runId: string, response: string) => {
-    send({ type: 'RespondToBlocking', run_id: runId, response });
-  };
-
   const handleCancel = (runId: string) => {
     send({ type: 'CancelRun', run_id: runId, reason: 'User cancelled' });
   };
@@ -89,15 +85,42 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
       {state.activeRun ? (
         <>
           <RunPanel />
-          {state.blocking && (
-            <DecisionPanel
-              runId={state.activeRun}
-              question={state.blocking.question}
-              context={state.blocking.context}
-              onRespond={handleRespond}
-              onCancel={handleCancel}
-            />
-          )}
+          <div
+            style={{
+              padding: '8px 14px',
+              borderTop: '1px solid var(--border-default)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              background: 'var(--bg-surface)',
+            }}
+          >
+            <button
+              onClick={() => handleCancel(state.activeRun!)}
+              style={{
+                padding: '6px 16px',
+                backgroundColor: 'transparent',
+                color: 'var(--accent-error)',
+                border: '1px solid var(--accent-error)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontFamily: 'var(--font-display)',
+                fontWeight: 600,
+                fontSize: 12,
+                letterSpacing: '0.02em',
+                transition: 'background 160ms, box-shadow 160ms',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(var(--accent-error-rgb), 0.10)';
+                e.currentTarget.style.boxShadow = 'var(--glow-error)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            >
+              Cancel
+            </button>
+          </div>
         </>
       ) : showPostRunSummary && state.selectedRun ? (
         <PostRunSummary
@@ -123,40 +146,16 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
           }}
         >
           <AutonomyToggle value={autonomy} onChange={updateAutonomy} />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <PromptComposer
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  startRun();
-                }
-              }}
+              onChange={setPrompt}
+              onSubmit={startRun}
               placeholder={
                 autonomy === 'Autonomous'
                   ? 'ask Claude to do something…'
                   : 'ask Claude to plan something…'
               }
-              style={{
-                flex: 1,
-                padding: '9px 12px',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 13,
-                backgroundColor: 'var(--bg-raised)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 6,
-                outline: 'none',
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.borderColor = 'var(--accent-primary)';
-                e.currentTarget.style.boxShadow = 'var(--glow-accent)';
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-default)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
             />
             <button
               onClick={() => startRun()}

@@ -40,10 +40,6 @@ pub enum AppCommand {
         run_id: Uuid,
         reason: String,
     },
-    RespondToBlocking {
-        run_id: Uuid,
-        response: String,
-    },
     GetRunStatus {
         run_id: Uuid,
     },
@@ -228,11 +224,6 @@ pub enum AppEvent {
         run_id: Uuid,
         line: String,
         line_number: usize,
-    },
-    RunBlocking {
-        run_id: Uuid,
-        question: String,
-        context: Vec<String>,
     },
     RunCompleted {
         run_id: Uuid,
@@ -901,24 +892,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn run_blocking_event_roundtrip() {
-        let evt = AppEvent::RunBlocking {
-            run_id: Uuid::new_v4(),
-            question: "Which file?".into(),
-            context: vec!["src/main.rs".into(), "src/lib.rs".into()],
-        };
-        let json = serde_json::to_string(&evt).unwrap();
-        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            AppEvent::RunBlocking { question, context, .. } => {
-                assert_eq!(question, "Which file?");
-                assert_eq!(context.len(), 2);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
     // --- New protocol variant tests (M1-01) ---
 
     #[test]
@@ -1109,7 +1082,6 @@ mod tests {
                 autonomy: AutonomyLevel::default(),
             },
             AppCommand::CancelRun { run_id: uuid(), reason: "user".into() },
-            AppCommand::RespondToBlocking { run_id: uuid(), response: "ok".into() },
             AppCommand::GetRunStatus { run_id: uuid() },
             AppCommand::ListRuns { session_id: uuid() },
             AppCommand::GetRunOutput { run_id: uuid(), offset: 0, limit: 100 },
@@ -1200,7 +1172,6 @@ mod tests {
                 AppCommand::ListSessions => "ListSessions",
                 AppCommand::StartRun { .. } => "StartRun",
                 AppCommand::CancelRun { .. } => "CancelRun",
-                AppCommand::RespondToBlocking { .. } => "RespondToBlocking",
                 AppCommand::GetRunStatus { .. } => "GetRunStatus",
                 AppCommand::ListRuns { .. } => "ListRuns",
                 AppCommand::GetRunOutput { .. } => "GetRunOutput",
@@ -1291,11 +1262,6 @@ mod tests {
                 run_id: uuid(),
                 line: "x".into(),
                 line_number: 1,
-            },
-            AppEvent::RunBlocking {
-                run_id: uuid(),
-                question: "?".into(),
-                context: vec![],
             },
             AppEvent::RunCompleted {
                 run_id: uuid(),
@@ -1498,7 +1464,6 @@ mod tests {
                 AppEvent::AuthFailed { .. } => "AuthFailed",
                 AppEvent::RunStateChanged { .. } => "RunStateChanged",
                 AppEvent::RunOutput { .. } => "RunOutput",
-                AppEvent::RunBlocking { .. } => "RunBlocking",
                 AppEvent::RunCompleted { .. } => "RunCompleted",
                 AppEvent::RunFailed { .. } => "RunFailed",
                 AppEvent::RunCancelled { .. } => "RunCancelled",

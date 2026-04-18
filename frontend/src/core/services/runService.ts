@@ -1,6 +1,6 @@
 // Run service — abstracts AI run protocol commands (M1-03)
 
-import type { RunMode } from '../../types/protocol';
+import type { AutonomyLevel, RunMode } from '../../types/protocol';
 import type { CommandBus } from '../commands/commandBus';
 
 export class RunService {
@@ -10,22 +10,19 @@ export class RunService {
     this.bus = bus;
   }
 
-  startRun(params: { sessionId: string; prompt: string; mode: RunMode; skipDirtyCheck?: boolean }): void {
+  startRun(params: { sessionId: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; skipDirtyCheck?: boolean }): void {
     this.bus.dispatch({
       type: 'StartRun',
       session_id: params.sessionId,
       prompt: params.prompt,
       mode: params.mode,
+      autonomy: params.autonomy,
       skip_dirty_check: params.skipDirtyCheck,
     });
   }
 
   cancelRun(runId: string, reason = 'User cancelled'): void {
     this.bus.dispatch({ type: 'CancelRun', run_id: runId, reason });
-  }
-
-  respondToBlocking(runId: string, response: string): void {
-    this.bus.dispatch({ type: 'RespondToBlocking', run_id: runId, response });
   }
 
   getDiff(runId: string): void {

@@ -15,7 +15,6 @@ export interface AppState {
   runState: RunState | null;
   // Bounded output buffer — NOT the full run output
   outputLines: string[];
-  blocking: { question: string; context: string[] } | null;
   error: string | null;
   runs: Map<string, RunSummary>;
   selectedRun: string | null;
@@ -82,7 +81,6 @@ const initialState: AppState = {
   activeRun: null,
   runState: null,
   outputLines: [],
-  blocking: null,
   error: null,
   runs: new Map(),
   selectedRun: null,
@@ -244,7 +242,6 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: event.run_id,
             runState: event.new_state,
-            blocking: event.new_state.type === 'Running' ? null : state.blocking,
             runToolCalls: startingFresh ? new Map() : state.runToolCalls,
             runMetrics: startingFresh ? null : state.runMetrics,
             preflightError: startingFresh ? null : state.preflightError,
@@ -261,12 +258,6 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, outputLines: trimmed };
         }
 
-        case 'RunBlocking':
-          return {
-            ...state,
-            blocking: { question: event.question, context: event.context },
-          };
-
         case 'RunCompleted': {
           const runs = new Map(state.runs);
           runs.set(event.run_id, event.summary);
@@ -274,7 +265,6 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: null,
             runState: { type: 'Completed', exit_code: event.summary.state.type === 'Completed' ? event.summary.state.exit_code : 0 },
-            blocking: null,
             runs,
           };
         }
@@ -284,7 +274,6 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: null,
             runState: { type: 'Failed', error: event.error, phase: event.phase },
-            blocking: null,
           };
 
         case 'RunCancelled':
@@ -292,7 +281,6 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: null,
             runState: { type: 'Cancelled', reason: 'User cancelled' },
-            blocking: null,
           };
 
         case 'RunList': {
