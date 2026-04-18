@@ -7,9 +7,13 @@
 import { test, expect } from './fixtures';
 
 test('AI Run pane mounts the prompt composer', async ({ sessionPage }) => {
-  // Split right, then pick the AI Run card from the Empty pane chooser.
-  await sessionPage.keyboard.press('Control+Shift+|');
-  await sessionPage.getByRole('button', { name: /AI Run/ }).click();
+  // Open the command palette and invoke "Add Pane: AI Run".
+  await sessionPage.keyboard.press('Control+k');
+
+  const palette = sessionPage.getByPlaceholder(/Type a command/);
+  await expect(palette).toBeVisible();
+  await palette.fill('AI Run');
+  await sessionPage.keyboard.press('Enter');
 
   // Default autonomy is Autonomous → composer placeholder reflects it.
   const composer = sessionPage.getByPlaceholder(/ask Claude to do something/i);

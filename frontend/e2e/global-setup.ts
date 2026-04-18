@@ -31,9 +31,17 @@ async function waitFor(url: string, timeoutMs: number): Promise<void> {
 
 function initTestRepo(root: string) {
   mkdirSync(root, { recursive: true });
-  const run = (...args: string[]) =>
-    spawnSync('git', args, { cwd: root, stdio: 'inherit' });
-  run('init', '-q');
+  const run = (...args: string[]) => {
+    const res = spawnSync('git', args, { cwd: root, stdio: 'inherit' });
+    if (res.status !== 0) {
+      throw new Error(`git ${args.join(' ')} failed (exit ${res.status})`);
+    }
+  };
+  run('init', '-q', '-b', 'main');
+  // Disable GPG signing locally — sandboxes often enforce signing via global
+  // config, and our fixture commit doesn't need a signature.
+  run('config', 'commit.gpgsign', 'false');
+  run('config', 'tag.gpgsign', 'false');
   run('config', 'user.email', 'e2e@example.com');
   run('config', 'user.name', 'e2e');
   writeFileSync(join(root, 'README.md'), '# e2e fixture\n');
