@@ -49,17 +49,27 @@ impl WorkspaceDispatcher {
                     last_active_at: now,
                 };
 
+                let summary = WorkspaceSummary::from(&ws);
+
+                // Persist before any in-memory registration. If the write
+                // fails, we must not expose the workspace to clients —
+                // otherwise the client sees a workspace that disappears on
+                // next daemon restart (the scenario the earlier comment was
+                // meant to prevent).
+                if let Err(e) = self.ctx.persistence.save_workspace(&ws) {
+                    warn!("Failed to persist workspace {}: {}", id, e);
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "WORKSPACE_PERSIST_FAILED".into(),
+                            message: format!("Failed to persist workspace: {}", e),
+                        })
+                        .await;
+                    return;
+                }
+
                 // Create a dedicated broadcast channel for this workspace (M1-05)
                 let (ws_tx, _) = broadcast::channel(512);
                 self.ctx.workspace_channels.lock().await.insert(id, ws_tx);
-
-                let summary = WorkspaceSummary::from(&ws);
-
-                // Persist before registering in-memory so a crash doesn't leave a
-                // ghost workspace that can't be recovered (C5b, issue #98).
-                if let Err(e) = self.ctx.persistence.save_workspace(&ws) {
-                    warn!("Failed to persist workspace {}: {}", id, e);
-                }
                 self.ctx.workspaces.lock().await.insert(id, ws);
 
                 info!("Workspace created: {} ({:?}) at {}", id, mode, root_path.display());
