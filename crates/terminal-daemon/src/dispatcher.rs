@@ -18,13 +18,6 @@ pub struct Dispatcher {
     pty_manager: Arc<PtyManager>,
 }
 
-/// Result of a successful worktree preparation.
-struct WorktreeInfo {
-    branch_name: String,
-    worktree_path: PathBuf,
-    base_head: String,
-}
-
 impl Dispatcher {
     pub fn new(
         config: DaemonConfig,
@@ -124,11 +117,31 @@ impl Dispatcher {
                     Ok(meta) => {
                         let size_bytes = meta.len();
 
-                        // Read up to max(limit, 8192) bytes for binary detection + content
+                        // Cap the actual bytes pulled from disk, not just the
+                        // returned slice. Previously `tokio::fs::read` pulled
+                        // the whole file into memory before truncation, so a
+                        // 10 GB file (or a pseudo-file like /dev/zero, whose
+                        // metadata reports size 0) would OOM the daemon.
                         let read_limit = (limit.max(8192)) as usize;
-                        let raw = match tokio::fs::read(&resolved).await {
-                            Ok(b) => b,
-                            Err(e) => {
+                        let raw = {
+                            use tokio::io::AsyncReadExt;
+                            let file = match tokio::fs::File::open(&resolved).await {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    let _ = reply_tx
+                                        .send(AppEvent::FileReadError {
+                                            path,
+                                            error: e.to_string(),
+                                        })
+                                        .await;
+                                    return;
+                                }
+                            };
+                            let mut buf = Vec::with_capacity(read_limit.min(64 * 1024));
+                            // `take` caps reads at read_limit bytes. One extra
+                            // byte would be needed to *detect* truncation, but
+                            // size_bytes already tells us that for regular files.
+                            if let Err(e) = file.take(read_limit as u64).read_to_end(&mut buf).await {
                                 let _ = reply_tx
                                     .send(AppEvent::FileReadError {
                                         path,
@@ -137,6 +150,7 @@ impl Dispatcher {
                                     .await;
                                 return;
                             }
+                            buf
                         };
 
                         // Binary detection: null byte in first 8 KB
@@ -151,9 +165,8 @@ impl Dispatcher {
                             return;
                         }
 
-                        // Truncate to limit bytes, then to 10 000 lines
-                        let capped = &raw[..raw.len().min(read_limit)];
-                        let text = String::from_utf8_lossy(capped).into_owned();
+                        // Content is already capped by the bounded read above.
+                        let text = String::from_utf8_lossy(&raw).into_owned();
 
                         const MAX_LINES: usize = 10_000;
                         let (content, truncated) = {
@@ -404,14 +417,13 @@ impl Dispatcher {
             }
 
             AppCommand::GetRunStatus { run_id } => {
-                let runs = self.context.active_runs.lock().await;
-                match runs.get(&run_id) {
-                    Some(active) => {
+                // Read the state, then release the lock before awaiting the
+                // reply send — don't hold active_runs across a channel await.
+                let state = self.context.active_runs.lock().await.get(&run_id).map(|a| a.run.state.clone());
+                match state {
+                    Some(new_state) => {
                         let _ = reply_tx
-                            .send(AppEvent::RunStateChanged {
-                                run_id,
-                                new_state: active.run.state.clone(),
-                            })
+                            .send(AppEvent::RunStateChanged { run_id, new_state })
                             .await;
                     }
                     None => {
@@ -436,16 +448,23 @@ impl Dispatcher {
             }
 
             AppCommand::CancelRun { run_id, reason } => {
-                let runs = self.context.active_runs.lock().await;
-                if let Some(active) = runs.get(&run_id) {
-                    let _ = active.cancel_tx.send(reason).await;
-                } else {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "RUN_NOT_FOUND".into(),
-                            message: format!("No active run {}", run_id),
-                        })
-                        .await;
+                // Clone the sender and release the lock before awaiting send —
+                // cancel_tx has capacity 1 and a blocked send would hold the
+                // active_runs lock, starving the supervisor that needs it to
+                // remove the entry on completion.
+                let sender = self.context.active_runs.lock().await.get(&run_id).map(|r| r.cancel_tx.clone());
+                match sender {
+                    Some(tx) => {
+                        let _ = tx.send(reason).await;
+                    }
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "RUN_NOT_FOUND".into(),
+                                message: format!("No active run {}", run_id),
+                            })
+                            .await;
+                    }
                 }
             }
 
@@ -880,7 +899,25 @@ impl Dispatcher {
 
             AppCommand::ListDirectory { path } => {
                 let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
-                let full_path = root.join(&path);
+                // Keep the listing confined to the project root. Without
+                // validation, an absolute path or one with `..` components
+                // would let a client enumerate any directory on the host
+                // filesystem.
+                let full_path = match crate::safety::validate_path(
+                    &root,
+                    std::path::Path::new(&path),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "LIST_DIR_FAILED".into(),
+                                message: e,
+                            })
+                            .await;
+                        return;
+                    }
+                };
                 match crate::git_engine::list_directory(&full_path).await {
                     Ok(entries) => {
                         let _ = reply_tx
@@ -1358,7 +1395,7 @@ impl Dispatcher {
         skip_dirty_check: bool,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
-        // Resolve the workspace this run belongs to (SEC-02).
+        // Resolve the workspace this run belongs to (SEC-02 event routing).
         let workspace_id: Option<Uuid> = self
             .context
             .active_workspaces
@@ -1366,22 +1403,28 @@ impl Dispatcher {
             .await
             .get(&client_id.0)
             .copied();
-        // Check session exists and has no active run
-        let mut sessions = self.context.sessions.lock().await;
-        let session = match sessions.get_mut(&session_id) {
-            Some(s) => s,
-            None => {
-                let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "SESSION_NOT_FOUND".into(),
-                        message: format!("Session {} not found", session_id),
-                    })
-                    .await;
-                return;
+
+        // Read session data then release the lock before any async IO or git
+        // subprocess — previously the lock was held for several seconds blocking
+        // all other session-touching handlers.
+        let (project_root, already_active) = {
+            let sessions = self.context.sessions.lock().await;
+            match sessions.get(&session_id) {
+                Some(s) => (s.project_root.clone(), s.active_run.is_some()),
+                None => {
+                    drop(sessions);
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "SESSION_NOT_FOUND".into(),
+                            message: format!("Session {} not found", session_id),
+                        })
+                        .await;
+                    return;
+                }
             }
         };
 
-        if session.active_run.is_some() {
+        if already_active {
             let _ = reply_tx
                 .send(AppEvent::Error {
                     code: "RUN_ALREADY_ACTIVE".into(),
@@ -1407,7 +1450,6 @@ impl Dispatcher {
             }
         }
 
-        let project_root = session.project_root.clone();
         let is_git = crate::git_engine::is_git_repo(&project_root).await;
 
         // Git worktree setup (delegated to helper)
@@ -1575,16 +1617,36 @@ impl Dispatcher {
             warn!("Failed to persist run {}: {}", run_id, e);
         }
 
-        session.active_run = Some(run_id);
-        session.runs.push(run_id);
+        // Re-acquire the sessions lock just for the mutation, then release.
+        // With the earlier refactor we no longer hold it across the git
+        // preparation work.
+        {
+            let mut sessions = self.context.sessions.lock().await;
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.active_run = Some(run_id);
+                session.runs.push(run_id);
+            } else {
+                // Session disappeared mid-setup (StartRun racing with
+                // EndSession). Clean up what we already created.
+                if let Some(ref wt_path) = worktree_path {
+                    let _ = crate::git_engine::worktree_remove(&project_root, wt_path).await;
+                    let _ = crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
+                }
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "SESSION_NOT_FOUND".into(),
+                        message: format!("Session {} disappeared during setup", session_id),
+                    })
+                    .await;
+                return;
+            }
+        }
 
         // Broadcast state change
         self.broadcast(&AppEvent::RunStateChanged {
             run_id,
             new_state: RunState::Preparing,
         });
-
-        drop(sessions); // Release lock before spawning
 
         // Pre-flight check (delegated to helper)
         if self.run_preflight(run_id, &run).await.is_err() {
@@ -1665,12 +1727,27 @@ impl Dispatcher {
 
                     let mut line_number: usize = 0;
                     let mut result_event_seen = false;
-                    let mut output_file = tokio::fs::OpenOptions::new()
+                    let mut output_file = match tokio::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(&output_path)
                         .await
-                        .ok();
+                    {
+                        Ok(f) => Some(f),
+                        Err(e) => {
+                            // Previously this was `.ok()` which silently
+                            // dropped the error — a permission or disk-space
+                            // failure at open time meant the run streamed to
+                            // clients live but left no persisted output, so
+                            // GetRunOutput after a reload returned nothing
+                            // with no indication why.
+                            warn!(
+                                "run {}: could not open output file {:?}: {} — output will not be persisted",
+                                run_id, output_path, e
+                            );
+                            None
+                        }
+                    };
 
                     let timeout =
                         tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
@@ -2099,145 +2176,6 @@ impl Dispatcher {
             return Err(());
         }
         Ok(())
-    }
-
-    /// Prepare a git worktree for the run, returning [`WorktreeInfo`] with paths and metadata.
-    ///
-    /// Handles concurrency checks, dirty-state detection, HEAD read, and `git worktree add`.
-    /// Emits reply_tx errors and cleans up the concurrency guard on failure.
-    /// Returns `Err(())` when an error was sent (caller should return early).
-    async fn prepare_worktree(
-        &self,
-        project_root: &PathBuf,
-        run_id: Uuid,
-        session_id: Uuid,
-        skip_dirty_check: bool,
-        prompt: &str,
-        mode: &RunMode,
-        reply_tx: &mpsc::Sender<AppEvent>,
-    ) -> Result<WorktreeInfo, ()> {
-        // Concurrency guard: one run per repo at a time
-        {
-            let mut conc = self.context.concurrency.lock().await;
-            if let Some(existing_run_id) = conc.get(project_root) {
-                let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "REPO_BUSY".into(),
-                        message: format!(
-                            "Repository {} already has active run {}",
-                            project_root.display(),
-                            existing_run_id
-                        ),
-                    })
-                    .await;
-                return Err(());
-            }
-            conc.insert(project_root.clone(), run_id);
-        }
-
-        // Guard repo state
-        if let Err(e) = crate::git_engine::guard_repo_state(project_root).await {
-            self.context.concurrency.lock().await.remove(project_root);
-            let _ = reply_tx
-                .send(AppEvent::Error {
-                    code: "GIT_STATE_ERROR".into(),
-                    message: format!("Repository not in clean state: {}", e),
-                })
-                .await;
-            return Err(());
-        }
-
-        // Dirty working directory check (unless explicitly skipped)
-        if !skip_dirty_check {
-            let dirty = crate::git_engine::working_dir_status(project_root)
-                .await
-                .unwrap_or_else(|_| DirtyStatus { staged: vec![], unstaged: vec![] });
-            if !dirty.staged.is_empty() || !dirty.unstaged.is_empty() {
-                self.context.concurrency.lock().await.remove(project_root);
-                let _ = reply_tx
-                    .send(AppEvent::DirtyWarning {
-                        status: dirty,
-                        session_id,
-                        prompt: prompt.to_string(),
-                        mode: mode.clone(),
-                    })
-                    .await;
-                return Err(());
-            }
-        }
-
-        // Read base HEAD
-        let base_head = match crate::git_engine::head_oid(project_root).await {
-            Ok(oid) => oid,
-            Err(e) => {
-                self.context.concurrency.lock().await.remove(project_root);
-                let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "GIT_ERROR".into(),
-                        message: format!("Failed to read HEAD: {}", e),
-                    })
-                    .await;
-                return Err(());
-            }
-        };
-
-        // Generate branch name and worktree path
-        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-        let short_uuid = &run_id.to_string()[..8];
-        let branch_name = format!("llm/{}-{}", timestamp, short_uuid);
-        let wt_path = project_root.join(".terminal-worktrees").join(short_uuid);
-
-        // Create .terminal-worktrees/ dir
-        let wt_parent = match wt_path.parent() {
-            Some(p) => p.to_path_buf(),
-            None => {
-                self.context.concurrency.lock().await.remove(project_root);
-                let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "IO_ERROR".into(),
-                        message: "Invalid worktree path: no parent directory".into(),
-                    })
-                    .await;
-                return Err(());
-            }
-        };
-        if let Err(e) = tokio::fs::create_dir_all(&wt_parent).await {
-            self.context.concurrency.lock().await.remove(project_root);
-            let _ = reply_tx
-                .send(AppEvent::Error {
-                    code: "IO_ERROR".into(),
-                    message: format!("Failed to create worktrees dir: {}", e),
-                })
-                .await;
-            return Err(());
-        }
-
-        // Create the worktree
-        if let Err(e) = crate::git_engine::worktree_add(project_root, &wt_path, &branch_name).await {
-            self.context.concurrency.lock().await.remove(project_root);
-            let _ = reply_tx
-                .send(AppEvent::Error {
-                    code: "GIT_ERROR".into(),
-                    message: format!("Failed to create worktree: {}", e),
-                })
-                .await;
-            return Err(());
-        }
-
-        // Persist worktree metadata
-        let meta = WorktreeMeta {
-            worktree_path: wt_path.clone(),
-            branch_name: branch_name.clone(),
-            base_head: base_head.clone(),
-            merge_base: base_head.clone(),
-            last_modified: chrono::Utc::now(),
-            repo_root: Some(project_root.clone()),
-        };
-        if let Err(e) = self.context.persistence.save_worktree_meta(run_id, &meta) {
-            warn!("Failed to persist worktree meta for run {}: {}", run_id, e);
-        }
-
-        Ok(WorktreeInfo { branch_name, worktree_path: wt_path, base_head })
     }
 }
 

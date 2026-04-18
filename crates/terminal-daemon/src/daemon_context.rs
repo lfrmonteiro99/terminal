@@ -102,10 +102,24 @@ impl DaemonContext {
         }
     }
 
-    /// Find the project root for the first active session (legacy helper).
+    /// Find the project root for the currently-active session.
+    ///
+    /// Picks the most-recently-started not-yet-ended session, falling back to
+    /// the most-recently-started session overall. Previously this returned
+    /// `sessions.values().next()`, which is arbitrary — HashMap iteration
+    /// order in Rust is randomized per-instance, so with multiple open
+    /// sessions git commands routed through the GitDispatcher (push/pull/
+    /// fetch/merge-conflicts/resolve-conflict) could non-deterministically
+    /// target the wrong repository. Mirrors the deterministic selection used
+    /// by `Dispatcher::find_active_project_root`.
     pub async fn find_active_project_root(&self) -> Option<PathBuf> {
         let sessions = self.sessions.lock().await;
-        sessions.values().next().map(|s| s.project_root.clone())
+        sessions
+            .values()
+            .filter(|s| s.ended_at.is_none())
+            .max_by_key(|s| s.started_at)
+            .or_else(|| sessions.values().max_by_key(|s| s.started_at))
+            .map(|s| s.project_root.clone())
     }
 
     /// Find project root for a given run id.

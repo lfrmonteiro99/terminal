@@ -51,13 +51,19 @@ impl Persistence {
     // -----------------------------------------------------------------------
 
     fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-        let tmp_path = path.with_extension("json.tmp");
+        // Unique suffix prevents concurrent writers from stomping each other's
+        // temp file (races between two writes to the same target path).
+        let suffix = Uuid::new_v4().simple().to_string();
+        let tmp_path = path.with_extension(format!("json.tmp.{}", suffix));
         {
             let mut f = fs::File::create(&tmp_path)?;
             f.write_all(data)?;
             f.sync_all()?;
         }
-        fs::rename(&tmp_path, path)?;
+        if let Err(e) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
         #[cfg(unix)]
         if let Some(dir) = path.parent() {
             if let Ok(dir_file) = fs::File::open(dir) {

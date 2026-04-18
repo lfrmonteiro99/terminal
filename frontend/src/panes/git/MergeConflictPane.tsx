@@ -38,7 +38,7 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
         <div style={{ flex: 1, overflow: 'auto' }}>
           {files.map((f) => (
             <div
-              key={typeof f.path === 'string' ? f.path : String(f.path)}
+              key={f.path}
               onClick={() => setSelected(f)}
               style={{
                 padding: '6px 12px',
@@ -49,7 +49,7 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
                 borderLeft: selected?.path === f.path ? '2px solid var(--accent-primary)' : '2px solid transparent',
               }}
             >
-              {typeof f.path === 'string' ? f.path.split('/').pop() : String(f.path)}
+              {f.path.split('/').pop()}
             </div>
           ))}
           {files.length === 0 && (
@@ -62,11 +62,11 @@ export function MergeConflictPane({ pane: _pane }: PaneProps) {
       {selected ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-default)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: 'var(--text-muted)' }}>{typeof selected.path === 'string' ? selected.path : String(selected.path)}</span>
-            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'ours')} style={{ marginLeft: 'auto', backgroundColor: 'var(--accent-primary)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
+            <span style={{ color: 'var(--text-muted)' }}>{selected.path}</span>
+            <button onClick={() => resolve(selected.path, 'ours')} style={{ marginLeft: 'auto', backgroundColor: 'var(--accent-primary)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
               Take Ours
             </button>
-            <button onClick={() => resolve(typeof selected.path === 'string' ? selected.path : String(selected.path), 'theirs')} style={{ backgroundColor: 'var(--accent-warn)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
+            <button onClick={() => resolve(selected.path, 'theirs')} style={{ backgroundColor: 'var(--accent-warn)', color: 'var(--bg-surface)', border: 'none', borderRadius: 3, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 'bold' }}>
               Take Theirs
             </button>
           </div>

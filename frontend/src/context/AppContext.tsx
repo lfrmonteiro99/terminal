@@ -577,8 +577,7 @@ function reducer(state: AppState, action: Action): AppState {
 
         // --- Workspace lifecycle (routed by App.tsx to workspace state store;
         //     the legacy reducer doesn't mirror workspace state — it only
-        //     knows about the AI session workspace. Intentionally ignored
-        //     here so they flow through the dedicated WorkspaceSwitcher). ---
+        //     knows about the AI session workspace). ---
         case 'WorkspaceList':
         case 'WorkspaceCreated':
         case 'WorkspaceClosed':

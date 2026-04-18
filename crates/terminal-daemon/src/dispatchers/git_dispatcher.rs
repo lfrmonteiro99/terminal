@@ -16,15 +16,25 @@ impl GitDispatcher {
     }
 
     pub async fn handle(&self, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+        // Every handler needs an active project root. Resolve once so the
+        // failure path is uniform: emit NO_ACTIVE_SESSION and return rather
+        // than silently dropping the command (which leaves the client
+        // waiting indefinitely for a reply event).
+        let root = match self.ctx.find_active_project_root().await {
+            Some(r) => r,
+            None => {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "NO_ACTIVE_SESSION".into(),
+                        message: "No active session to resolve project root".into(),
+                    })
+                    .await;
+                return;
+            }
+        };
+
         match cmd {
             AppCommand::PushBranch { remote, branch } => {
-                let Some(root) = self.ctx.find_active_project_root().await else {
-                    let _ = reply_tx.send(AppEvent::GitOperationFailed {
-                        operation: "push".into(),
-                        reason: "no active session".into(),
-                    }).await;
-                    return;
-                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 let branch_name = branch.unwrap_or_else(|| "HEAD".into());
                 match crate::git_engine::push_branch(&root, &remote, &branch_name).await {
@@ -48,13 +58,6 @@ impl GitDispatcher {
             }
 
             AppCommand::PullBranch { remote, branch } => {
-                let Some(root) = self.ctx.find_active_project_root().await else {
-                    let _ = reply_tx.send(AppEvent::GitOperationFailed {
-                        operation: "pull".into(),
-                        reason: "no active session".into(),
-                    }).await;
-                    return;
-                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 match crate::git_engine::pull_branch(&root, &remote, branch.as_deref()).await {
                     Ok(commits_applied) => {
@@ -78,13 +81,6 @@ impl GitDispatcher {
             }
 
             AppCommand::FetchRemote { remote } => {
-                let Some(root) = self.ctx.find_active_project_root().await else {
-                    let _ = reply_tx.send(AppEvent::GitOperationFailed {
-                        operation: "fetch".into(),
-                        reason: "no active session".into(),
-                    }).await;
-                    return;
-                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 match crate::git_engine::fetch_remote(&root, &remote).await {
                     Ok(()) => {
@@ -104,13 +100,6 @@ impl GitDispatcher {
             }
 
             AppCommand::GetMergeConflicts => {
-                let Some(root) = self.ctx.find_active_project_root().await else {
-                    let _ = reply_tx.send(AppEvent::GitOperationFailed {
-                        operation: "get_merge_conflicts".into(),
-                        reason: "no active session".into(),
-                    }).await;
-                    return;
-                };
                 match crate::git_engine::list_merge_conflicts(&root).await {
                     Ok(files) => {
                         let _ = reply_tx
@@ -129,13 +118,6 @@ impl GitDispatcher {
             }
 
             AppCommand::ResolveConflict { file_path, resolution } => {
-                let Some(root) = self.ctx.find_active_project_root().await else {
-                    let _ = reply_tx.send(AppEvent::GitOperationFailed {
-                        operation: "resolve_conflict".into(),
-                        reason: "no active session".into(),
-                    }).await;
-                    return;
-                };
                 match crate::git_engine::resolve_conflict(&root, &file_path, &resolution).await {
                     Ok(()) => {
                         let _ = reply_tx
