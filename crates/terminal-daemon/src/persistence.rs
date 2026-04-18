@@ -46,9 +46,19 @@ impl Persistence {
     // -----------------------------------------------------------------------
 
     fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-        let tmp_path = path.with_extension("json.tmp");
+        // Include a random suffix in the tmp path so concurrent writers to the
+        // same target path don't stomp on each other's temp file. With a fixed
+        // `{path}.tmp` the two writes would interleave, the final rename would
+        // be a race, and the winning file could contain a mix of both payloads.
+        // Using a unique suffix makes each rename a clean, atomic replacement.
+        let suffix = Uuid::new_v4().simple().to_string();
+        let tmp_path = path.with_extension(format!("json.tmp.{}", suffix));
         fs::write(&tmp_path, data)?;
-        fs::rename(&tmp_path, path)?;
+        // On rename failure, try to clean up the orphan temp file. Best-effort.
+        if let Err(e) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
         Ok(())
     }
 

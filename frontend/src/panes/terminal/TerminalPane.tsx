@@ -21,14 +21,24 @@ type SessionState =
   | { tag: 'error'; message: string };
 
 // FIFO queue: panes register when they send CreateTerminalSession,
-// and TerminalSessionCreated events are matched in order.
+// and TerminalSessionCreated events are matched in order. Callers receive a
+// cancel function so an unmounting pane can withdraw its claim — without it,
+// an orphaned claim would eat the next session event for that workspace and
+// starve the pane that actually requested it.
 type PendingClaim = { resolve: (sessionId: string) => void; workspaceId: string };
 const pendingQueue: PendingClaim[] = [];
 
-function waitForSession(workspaceId: string): Promise<string> {
-  return new Promise((resolve) => {
-    pendingQueue.push({ resolve, workspaceId });
+function waitForSession(workspaceId: string): { promise: Promise<string>; cancel: () => void } {
+  let claim!: PendingClaim;
+  const promise = new Promise<string>((resolve) => {
+    claim = { resolve, workspaceId };
+    pendingQueue.push(claim);
   });
+  const cancel = () => {
+    const idx = pendingQueue.indexOf(claim);
+    if (idx >= 0) pendingQueue.splice(idx, 1);
+  };
+  return { promise, cancel };
 }
 
 // Called from the event handler — resolves the first matching pending claim
@@ -121,6 +131,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
     let disposed = false;
+    // These refs live in the outer effect scope so the cleanup can actually
+    // tear them down. Previously the ResizeObserver was only disconnected by
+    // a `return () => ro.disconnect()` inside the async `initXterm`, which
+    // the useEffect cleanup never sees — so the observer (and its pending
+    // resize timer) leaked on every unmount.
+    let ro: ResizeObserver | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
     const initXterm = async () => {
       try {
@@ -151,11 +168,11 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         });
 
         // Resize observer — fit immediately (cheap), debounce only the stty ResizeTerminal IPC
-        let resizeTimer: ReturnType<typeof setTimeout>;
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           fitAddon.fit();
-          clearTimeout(resizeTimer);
+          if (resizeTimer) clearTimeout(resizeTimer);
           resizeTimer = setTimeout(() => {
+            if (disposed) return;
             if (sessionIdRef.current) {
               const dims = fitAddon.proposeDimensions();
               if (dims) {
@@ -170,8 +187,6 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           }, 80);
         });
         if (termRef.current) ro.observe(termRef.current);
-
-        return () => ro.disconnect();
       } catch {
         // xterm not installed — show fallback
       }
@@ -180,6 +195,8 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     initXterm();
     return () => {
       disposed = true;
+      if (ro) ro.disconnect();
+      if (resizeTimer) clearTimeout(resizeTimer);
       xtermRef.current?.dispose();
       xtermRef.current = null;
     };
@@ -267,11 +284,12 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
 
     send({ type: 'CreateTerminalSession', workspace_id: workspaceId, cwd, ssh: sshConfig });
 
+    const { promise: sessionPromise, cancel: withdrawClaim } = waitForSession(workspaceId);
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('Timed out after 10s waiting for terminal session')), 10_000),
     );
 
-    Promise.race([waitForSession(workspaceId), timeout])
+    Promise.race([sessionPromise, timeout])
       .then((sid) => {
         if (cancelled) return;
         paneSessionMap.set(pane.id, sid);
@@ -283,7 +301,12 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         setSessionState({ tag: 'error', message: err.message });
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Remove our claim from the FIFO queue so the next session event for
+      // this workspace is routed to the pane that actually needs it.
+      withdrawClaim();
+    };
   }, [workspaceId, sessionState.tag, send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 4: Handle session restore flow

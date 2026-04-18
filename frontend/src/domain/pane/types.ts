@@ -47,6 +47,13 @@ export function collectPanes(layout: PaneLayout): PaneDefinition[] {
 
 let _paneCounter = 0;
 
+/** Generate a unique pane id. The monotonic counter prevents collisions even
+ * within the same millisecond; Date.now() is retained purely as a debugging
+ * aid so ids remain roughly sortable by creation time. */
+export function nextPaneId(kind: PaneKind): string {
+  return `${kind.toLowerCase()}-${++_paneCounter}-${Date.now()}`;
+}
+
 /** Split a pane by ID, inserting a new pane of the given kind in the given direction. */
 export function splitPane(
   layout: PaneLayout,
@@ -56,7 +63,7 @@ export function splitPane(
 ): { layout: PaneLayout; newPaneId: string } | null {
   if (isSingle(layout)) {
     if (layout.Single.id === targetPaneId) {
-      const newPaneId = `${kind.toLowerCase()}-${++_paneCounter}-${Date.now()}`;
+      const newPaneId = nextPaneId(kind);
       return {
         layout: {
           Split: {

@@ -107,6 +107,25 @@ impl PtyManager {
 
         // Determine command path, args, and whether this is an SSH session.
         let (shell_path, extra_args, is_ssh, ssh_host_label) = if let Some(ref ssh_cfg) = ssh {
+            // Reject values that would be interpreted as OpenSSH flags.
+            // Without this, a crafted username like "-oProxyCommand=..." or a
+            // host starting with "-" turns into an argv element that ssh
+            // parses as a flag rather than a destination. The arg order
+            // (flags before the destination) partly mitigates this, but ssh
+            // still honors flag-shaped tokens anywhere before `--`; we prefer
+            // to fail explicitly.
+            if ssh_cfg.username.starts_with('-') {
+                return Err(format!(
+                    "SSH username '{}' looks like a flag — rejected",
+                    ssh_cfg.username
+                ));
+            }
+            if ssh_cfg.host.starts_with('-') {
+                return Err(format!(
+                    "SSH host '{}' looks like a flag — rejected",
+                    ssh_cfg.host
+                ));
+            }
             let mut args = vec![
                 "-p".to_string(),
                 ssh_cfg.port.to_string(),
@@ -121,6 +140,8 @@ impl PtyManager {
                 args.push("-i".to_string());
                 args.push(key.to_string_lossy().to_string());
             }
+            // End-of-options marker so user@host is never confused with a flag.
+            args.push("--".to_string());
             args.push(format!("{}@{}", ssh_cfg.username, ssh_cfg.host));
             let label = format!("{}@{}", ssh_cfg.username, ssh_cfg.host);
             (PathBuf::from("ssh"), args, true, Some(label))
@@ -262,20 +283,30 @@ impl PtyManager {
         ));
 
         // Spawn process watcher — removes session on child exit.
+        // Only emits TerminalSessionClosed if the entry is still in the map;
+        // an explicit close_session() removes the entry first and emits the
+        // event itself, so we'd otherwise double-emit when the shell exits
+        // in response to the EOF we just sent it.
         let sessions_for_watcher = Arc::clone(&self.sessions);
         let event_tx_for_watcher = self.event_tx.clone();
         let workspace_channels_watcher = self.workspace_channels.clone();
         tokio::spawn(async move {
             let mut child = child;
             let _ = child.wait().await;
-            sessions_for_watcher.lock().await.remove(&session_id);
-            Self::emit_via(
-                &event_tx_for_watcher,
-                workspace_channels_watcher.as_ref(),
-                workspace_id,
-                &AppEvent::TerminalSessionClosed { session_id },
-            )
-            .await;
+            let was_present = sessions_for_watcher
+                .lock()
+                .await
+                .remove(&session_id)
+                .is_some();
+            if was_present {
+                Self::emit_via(
+                    &event_tx_for_watcher,
+                    workspace_channels_watcher.as_ref(),
+                    workspace_id,
+                    &AppEvent::TerminalSessionClosed { session_id },
+                )
+                .await;
+            }
             info!("PTY session {} exited", session_id);
         });
 
@@ -328,12 +359,44 @@ impl PtyManager {
             Option<Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
     ) {
         let mut buf = vec![0u8; 4096];
+        // UTF-8 codepoints are 1–4 bytes. A codepoint can straddle the read
+        // boundary, so we can't decode each read() in isolation — doing so
+        // turns every boundary-crossing emoji / CJK char into a pair of
+        // replacement characters (U+FFFD). Keep a small pending tail and
+        // prepend it to the next read.
+        let mut pending: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
+                Ok(0) | Err(_) => {
+                    // Flush any still-pending bytes as lossy before exit;
+                    // a partial at true EOF is unrecoverable anyway.
+                    if !pending.is_empty() {
+                        let data = String::from_utf8_lossy(&pending).to_string();
+                        let event = AppEvent::TerminalOutput { session_id, data };
+                        Self::emit_via(
+                            &event_tx,
+                            workspace_channels.as_ref(),
+                            workspace_id,
+                            &event,
+                        )
+                        .await;
+                    }
+                    break;
+                }
                 Ok(n) => {
                     // Real PTY line discipline handles \n → \r\n; no manual replacement needed.
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    pending.extend_from_slice(&buf[..n]);
+                    // Split off the longest trailing tail that could still be
+                    // the start of a multi-byte codepoint (up to 3 bytes) and
+                    // hold it for the next read.
+                    let split_at = utf8_safe_split(&pending);
+                    let tail = pending.split_off(split_at);
+                    let data = String::from_utf8_lossy(&pending).to_string();
+                    pending = tail;
+
+                    if data.is_empty() {
+                        continue;
+                    }
                     let event = AppEvent::TerminalOutput { session_id, data };
                     Self::emit_via(
                         &event_tx,
@@ -349,15 +412,21 @@ impl PtyManager {
 
     /// Write data to a PTY session's stdin.
     pub async fn write_input(&self, session_id: Uuid, data: &str) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(&session_id) {
-            session
-                .stdin_tx
+        // Clone the sender under the lock and release before awaiting the
+        // bounded-channel send — holding `sessions` across a full stdin_tx
+        // would let a slow stdin writer starve every other PTY handler.
+        let sender = self
+            .sessions
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|s| s.stdin_tx.clone());
+        match sender {
+            Some(tx) => tx
                 .send(data.as_bytes().to_vec())
                 .await
-                .map_err(|e| e.to_string())
-        } else {
-            Err(format!("Session {} not found", session_id))
+                .map_err(|e| e.to_string()),
+            None => Err(format!("Session {} not found", session_id)),
         }
     }
 
@@ -388,15 +457,17 @@ impl PtyManager {
 
     /// Close a PTY session.
     pub async fn close_session(&self, session_id: Uuid) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.remove(&session_id) {
+        // Remove under the lock, then release before awaiting the close
+        // channel send. close_tx is bounded; keeping the lock across a full
+        // send could starve the watcher task that also needs `sessions`.
+        let removed = self.sessions.lock().await.remove(&session_id);
+        if let Some(session) = removed {
             let workspace_id = session.meta.workspace_id;
             // Signal the stdin_writer task to exit; it will drop its tokio::fs::File,
             // closing the write half of the master PTY and sending EOF to the shell.
             // The stdout_reader task will exit when it sees EOF/error.
             // We do NOT call nix::libc::close() here — the Tokio Files own the fds.
             let _ = session.close_tx.send(()).await;
-            drop(sessions);
             self.emit(workspace_id, &AppEvent::TerminalSessionClosed { session_id })
                 .await;
             Ok(())
@@ -423,10 +494,83 @@ impl PtyManager {
     }
 }
 
+/// Return the index at which `bytes` can be safely split without cutting a
+/// UTF-8 codepoint. Any trailing start-of-multi-byte-sequence bytes (bytes
+/// whose top two bits are `11`) are held back, up to the maximum of 3
+/// continuation bytes a UTF-8 codepoint can take.
+fn utf8_safe_split(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    // A codepoint is 1–4 bytes; look back at most 3 bytes from the end.
+    for back in 1..=3.min(len) {
+        let i = len - back;
+        let b = bytes[i];
+        // UTF-8 lead byte for a multi-byte sequence: 110xxxxx / 1110xxxx / 11110xxx.
+        // Top two bits == 11.
+        if (b & 0b1100_0000) == 0b1100_0000 {
+            // Number of bytes this codepoint should occupy.
+            let needed = if b >= 0b1111_0000 {
+                4
+            } else if b >= 0b1110_0000 {
+                3
+            } else {
+                2
+            };
+            if len - i < needed {
+                // Not enough bytes yet for this codepoint — hold from here.
+                return i;
+            }
+            // Otherwise the codepoint is complete; split after it.
+            return len;
+        }
+        // Continuation byte (10xxxxxx) — keep walking back.
+        if (b & 0b1100_0000) != 0b1000_0000 {
+            // ASCII or single-byte codepoint — safe to split after.
+            return len;
+        }
+    }
+    // Only continuation bytes in the last 3 positions implies a malformed or
+    // partial codepoint larger than UTF-8 allows; split at `len` and let
+    // lossy decoding handle it.
+    len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::sync::broadcast;
+
+    #[test]
+    fn utf8_safe_split_ascii_is_full_length() {
+        let s = b"hello world";
+        assert_eq!(utf8_safe_split(s), s.len());
+    }
+
+    #[test]
+    fn utf8_safe_split_holds_back_incomplete_codepoint() {
+        // "€" is 0xE2 0x82 0xAC — a 3-byte codepoint.
+        // First two bytes alone must be held back.
+        let s = &[0xE2, 0x82];
+        assert_eq!(utf8_safe_split(s), 0);
+        // Complete codepoint: split after it.
+        let s = &[0xE2, 0x82, 0xAC];
+        assert_eq!(utf8_safe_split(s), s.len());
+    }
+
+    #[test]
+    fn utf8_safe_split_holds_back_partial_4byte() {
+        // "🎉" (U+1F389) is 0xF0 0x9F 0x8E 0x89.
+        let s = &[0xF0, 0x9F, 0x8E];
+        assert_eq!(utf8_safe_split(s), 0);
+        let s = &[0xF0, 0x9F, 0x8E, 0x89];
+        assert_eq!(utf8_safe_split(s), s.len());
+    }
+
+    #[test]
+    fn utf8_safe_split_mixed_ascii_tail() {
+        // "ab" then start of "€" — split after the "b".
+        let s = &[b'a', b'b', 0xE2, 0x82];
+        assert_eq!(utf8_safe_split(s), 2);
+    }
 
     #[tokio::test]
     async fn close_nonexistent_session_returns_error() {

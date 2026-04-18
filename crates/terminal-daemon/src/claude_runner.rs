@@ -230,7 +230,18 @@ impl ClaudeRunner {
             let mut lines = reader.lines();
             let mut parser = StreamParser::new();
 
-            while let Ok(Some(line)) = lines.next_line().await {
+            loop {
+                let line = match lines.next_line().await {
+                    Ok(Some(l)) => l,
+                    Ok(None) => break, // clean EOF
+                    Err(e) => {
+                        // Surface IO errors instead of silently exiting — a
+                        // truncated read otherwise looks like a successful
+                        // run with missing metrics.
+                        error!("claude stdout read error: {}", e);
+                        break;
+                    }
+                };
                 for ev in parser.feed_line(&line) {
                     match ev {
                         ParseEvent::AssistantText(text) => {
@@ -303,8 +314,17 @@ impl ClaudeRunner {
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        error!("claude stderr read error: {}", e);
+                        break;
+                    }
+                }
             }
         });
 

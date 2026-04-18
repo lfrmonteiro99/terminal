@@ -70,9 +70,14 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
     send({ type: 'GetChangedFiles', mode: 'working' });
   }, [send]);
 
-  // Clear error when new status arrives and pick up git errors from global state
+  // Any fresh RepoStatusResult clears the refresh + stage in-flight flags.
+  // This replaces the defensive setTimeout below; the timeout stays only as a
+  // safety net for the rare case the reply never arrives.
   useEffect(() => {
-    if (state.repoStatus) setRefreshing(false);
+    if (state.repoStatus) {
+      setRefreshing(false);
+      setStagingPath(null);
+    }
   }, [state.repoStatus]);
 
   // Surface GitOperationFailed from global error state
