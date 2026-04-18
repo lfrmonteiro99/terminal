@@ -1,6 +1,6 @@
 // AiRunPane — wraps the existing RunPanel + DecisionPanel as a pane (M2-04)
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Bot, Eye, AlertTriangle, X } from 'lucide-react';
 import { RunPanel } from '../../components/RunPanel';
 import { DecisionPanel } from '../../components/DecisionPanel';
@@ -10,6 +10,8 @@ import { useAppState, useAppDispatch } from '../../context/AppContext';
 import type { PaneProps } from '../registry';
 import type { AutonomyLevel, RunMode, RunState } from '../../types/protocol';
 import { registerPane } from '../registry';
+import { CommandBus } from '../../core/commands/commandBus';
+import { RunService } from '../../core/services/runService';
 
 const AUTONOMY_STORAGE_KEY = 'terminal:autonomy';
 
@@ -24,6 +26,7 @@ function isTerminalState(rs: RunState): boolean {
 
 export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps) {
   const send = useSend();
+  const runService = useMemo(() => new RunService(new CommandBus(send)), [send]);
   const state = useAppState();
   const dispatch = useAppDispatch();
   const [prompt, setPrompt] = useState('');
@@ -42,9 +45,8 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     const p = (overridePrompt ?? prompt).trim();
     if (!state.activeSession || !p) return;
     lastPromptRef.current = p;
-    send({
-      type: 'StartRun',
-      session_id: state.activeSession,
+    runService.startRun({
+      sessionId: state.activeSession,
       prompt: p,
       mode: 'Free' as RunMode,
       autonomy: overrideAutonomy ?? autonomy,

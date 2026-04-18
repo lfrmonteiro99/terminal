@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { debug } from './util/log';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
@@ -26,6 +26,8 @@ import { ToastContainer } from './components/ToastContainer';
 import { SshConnectDialog } from './components/SshConnectDialog';
 import type { SshConnectConfig } from './components/SshConnectDialog';
 import { resolveDaemonWsUrl } from './core/daemon/resolveDaemonWsUrl';
+import { CommandBus } from './core/commands/commandBus';
+import { RunService } from './core/services/runService';
 
 // Side-effect imports: register panes and modes
 import './panes/terminal/TerminalPane';
@@ -395,6 +397,7 @@ function AppContent() {
     token: authToken,
     onEvent: handleEvent,
   });
+  const runService = useMemo(() => new RunService(new CommandBus(send)), [send]);
 
   // Track previous activeSession to detect transitions from null -> value
   const prevSessionRef = useRef<string | null>(null);
@@ -640,12 +643,14 @@ function AppContent() {
             }}
             onRunAnyway={() => {
               const dw = state.dirtyWarning!;
-              send({
-                type: 'StartRun',
-                session_id: dw.session_id,
+              const savedAutonomy = localStorage.getItem('terminal:autonomy');
+              const autonomy = savedAutonomy === 'ReviewPlan' ? 'ReviewPlan' as const : 'Autonomous' as const;
+              runService.startRun({
+                sessionId: dw.session_id,
                 prompt: dw.prompt,
                 mode: dw.mode,
-                skip_dirty_check: true,
+                autonomy,
+                skipDirtyCheck: true,
               });
               dispatch({ type: 'DISMISS_DIRTY_WARNING' });
             }}

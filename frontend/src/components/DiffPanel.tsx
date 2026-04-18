@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
 import { ResizeHandle } from './ResizeHandle';
 import type { FileStatus } from '../types/protocol';
+import { CommandBus } from '../core/commands/commandBus';
+import { RunService } from '../core/services/runService';
 
 // --- Helpers ---
 
@@ -198,6 +200,7 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
+  const runService = useMemo(() => new RunService(new CommandBus(send)), [send]);
   const [height, setHeight] = useState(getStoredHeight);
   const [closeBtnHover, setCloseBtnHover] = useState(false);
 
@@ -245,11 +248,11 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
   const canExplain = state.activeRun === null && state.activeSession !== null && diff !== null;
   const handleExplain = () => {
     if (!canExplain || !diff || !state.activeSession) return;
-    send({
-      type: 'StartRun',
-      session_id: state.activeSession,
+    runService.startRun({
+      sessionId: state.activeSession,
       prompt: `Explain the following code changes concisely. Focus on what changed, why it likely changed, and any risks.\n\n\`\`\`diff\n${diff}\n\`\`\``,
       mode: 'Free',
+      autonomy: 'Autonomous',
     });
   };
 
