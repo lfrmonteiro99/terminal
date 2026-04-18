@@ -131,6 +131,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   // Dynamically load xterm.js to keep bundle lean
   useEffect(() => {
     let disposed = false;
+    // These refs live in the outer effect scope so the cleanup can actually
+    // tear them down. Previously the ResizeObserver was only disconnected by
+    // a `return () => ro.disconnect()` inside the async `initXterm`, which
+    // the useEffect cleanup never sees — so the observer (and its pending
+    // resize timer) leaked on every unmount.
+    let ro: ResizeObserver | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
     const initXterm = async () => {
       try {
@@ -161,11 +168,11 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         });
 
         // Resize observer — fit immediately (cheap), debounce only the stty ResizeTerminal IPC
-        let resizeTimer: ReturnType<typeof setTimeout>;
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           fitAddon.fit();
-          clearTimeout(resizeTimer);
+          if (resizeTimer) clearTimeout(resizeTimer);
           resizeTimer = setTimeout(() => {
+            if (disposed) return;
             if (sessionIdRef.current) {
               const dims = fitAddon.proposeDimensions();
               if (dims) {
@@ -180,8 +187,6 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           }, 80);
         });
         if (termRef.current) ro.observe(termRef.current);
-
-        return () => ro.disconnect();
       } catch {
         // xterm not installed — show fallback
       }
@@ -190,6 +195,8 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     initXterm();
     return () => {
       disposed = true;
+      if (ro) ro.disconnect();
+      if (resizeTimer) clearTimeout(resizeTimer);
       xtermRef.current?.dispose();
       xtermRef.current = null;
     };
