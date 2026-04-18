@@ -203,7 +203,6 @@ export type AppCommand =
   | { type: 'ListSessions' }
   | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel }
   | { type: 'CancelRun'; run_id: string; reason: string }
-  | { type: 'RespondToBlocking'; run_id: string; response: string }
   | { type: 'GetRunStatus'; run_id: string }
   | { type: 'ListRuns'; session_id: string }
   | { type: 'GetRunOutput'; run_id: string; offset: number; limit: number }
@@ -272,7 +271,6 @@ export type AppEvent =
   | { type: 'AuthFailed'; reason: string }
   | { type: 'RunStateChanged'; run_id: string; new_state: RunState }
   | { type: 'RunOutput'; run_id: string; line: string; line_number: number }
-  | { type: 'RunBlocking'; run_id: string; question: string; context: string[] }
   | { type: 'RunCompleted'; run_id: string; summary: RunSummary; diff_stat: DiffStat | null }
   | { type: 'RunDiff'; run_id: string; stat: DiffStat; diff: string }
   | { type: 'RunReverted'; run_id: string }

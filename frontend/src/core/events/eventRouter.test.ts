@@ -23,7 +23,6 @@ const SAMPLES: Record<AppEvent['type'], AppEvent> = {
   AuthFailed: { type: 'AuthFailed', reason: 'nope' },
   RunStateChanged: { type: 'RunStateChanged', run_id: 'r1', new_state: { type: 'Running' } },
   RunOutput: { type: 'RunOutput', run_id: 'r1', line: 'hi', line_number: 1 },
-  RunBlocking: { type: 'RunBlocking', run_id: 'r1', question: 'ok?', context: [] },
   RunCompleted: {
     type: 'RunCompleted',
     run_id: 'r1',

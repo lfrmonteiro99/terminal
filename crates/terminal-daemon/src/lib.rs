@@ -49,6 +49,11 @@ pub async fn start_server(
 ) -> Result<DaemonHandle, Box<dyn std::error::Error + Send + Sync>> {
     // Create data directory (needed for persistence in both modes)
     tokio::fs::create_dir_all(&config.data_dir).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&config.data_dir, std::fs::Permissions::from_mode(0o700)).await?;
+    }
 
     // Use TERMINAL_AUTH_TOKEN env var if set, otherwise generate random
     let token: String = std::env::var("TERMINAL_AUTH_TOKEN").unwrap_or_else(|_| {
@@ -63,6 +68,11 @@ pub async fn start_server(
     if config.mode == DaemonMode::Standalone {
         let token_path = config.data_dir.join("auth_token");
         tokio::fs::write(&token_path, &token).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).await?;
+        }
     }
 
     // Event broadcast channel
@@ -102,6 +112,11 @@ pub async fn start_server(
     if config.mode == DaemonMode::Standalone {
         let port_path = config.data_dir.join("port");
         tokio::fs::write(&port_path, actual_port.to_string()).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&port_path, std::fs::Permissions::from_mode(0o600)).await?;
+        }
     }
 
     // Recovery on startup — synchronous pass (metadata + run-state fixes).

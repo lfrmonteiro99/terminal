@@ -66,6 +66,11 @@
     100% { background-position: calc(200px + 100%) 0; }
   }
 
+  @keyframes skeleton-shimmer {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 0.7; }
+  }
+
   /* Reusable helpers */
   .anim-fade-in-up {
     animation: fade-in-up 180ms var(--ease-out-expo) both;

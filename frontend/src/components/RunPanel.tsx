@@ -184,6 +184,36 @@ export function RunPanel() {
   const toolCalls = Array.from(state.runToolCalls.values());
   const lines = state.outputLines.filter(shouldRenderLine);
 
+  if (state.activeRun && lines.length === 0 && toolCalls.length === 0) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          padding: '18px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          backgroundColor: 'var(--bg-surface)',
+        }}
+        aria-label="Preparing run"
+        aria-busy="true"
+      >
+        {[100, 72, 88].map((w, i) => (
+          <div
+            key={i}
+            style={{
+              height: 12,
+              width: `${w}%`,
+              borderRadius: 4,
+              background: 'var(--bg-overlay)',
+              animation: `skeleton-shimmer 1.6s ${i * 0.15}s ease-in-out infinite`,
+            }}
+          />
+        ))}
+      </div>
+    );
+  }
+
   if (!state.activeRun && lines.length === 0 && toolCalls.length === 0) {
     return (
       <div

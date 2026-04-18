@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use terminal_core::config::DaemonConfig;
 use terminal_core::models::{AutonomyLevel, RunMode};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -60,6 +60,8 @@ pub enum RunnerEvent {
         input_tokens: u64,
         output_tokens: u64,
     },
+    /// The stream-json `result` event was observed (signals a proper exit).
+    ResultSeen,
     /// Pre-spawn failure: binary missing, unauthenticated, etc. Surfaced
     /// separately from `SpawnError` so the UI can show an actionable message.
     Preflight { reason: String, suggestion: String },
@@ -181,7 +183,7 @@ impl ClaudeRunner {
         mode: &RunMode,
         autonomy: AutonomyLevel,
         working_dir: &Path,
-    ) -> Result<(mpsc::Receiver<RunnerEvent>, mpsc::Sender<String>, Child), String> {
+    ) -> Result<(mpsc::Receiver<RunnerEvent>, Child), String> {
         // Reject empty / whitespace-only prompts before we touch the CLI.
         // Preserved from the safety hardening pass in #61.
         if prompt.trim().is_empty() {
@@ -221,7 +223,6 @@ impl ClaudeRunner {
         let stderr = child.stderr.take().ok_or("no stderr")?;
 
         let (event_tx, event_rx) = mpsc::channel::<RunnerEvent>(256);
-        let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);
 
         // Stdout reader — parse stream-json line by line.
         let event_tx_stdout = event_tx.clone();
@@ -281,6 +282,9 @@ impl ClaudeRunner {
                             output_tokens,
                             error_text,
                         } => {
+                            if success {
+                                let _ = event_tx_stdout.send(RunnerEvent::ResultSeen).await;
+                            }
                             let _ = event_tx_stdout
                                 .send(RunnerEvent::Metrics {
                                     num_turns,
@@ -328,31 +332,8 @@ impl ClaudeRunner {
             }
         });
 
-        // Stdin writer — unused for now in stream-json mode (Claude doesn't
-        // wait for stdin when run headless) but kept wired so future
-        // interactive modes can reuse the channel.
-        let mut stdin_handle = child.stdin.take();
-        tokio::spawn(async move {
-            if let Some(ref mut stdin) = stdin_handle {
-                while let Some(response) = stdin_rx.recv().await {
-                    if let Err(e) = stdin.write_all(response.as_bytes()).await {
-                        error!("failed to write to claude stdin: {}", e);
-                        break;
-                    }
-                    if let Err(e) = stdin.write_all(b"\n").await {
-                        error!("failed to write newline to claude stdin: {}", e);
-                        break;
-                    }
-                    if let Err(e) = stdin.flush().await {
-                        error!("failed to flush claude stdin: {}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
         info!("claude stream-json process spawned for run {}", run_id);
-        Ok((event_rx, stdin_tx, child))
+        Ok((event_rx, child))
     }
 }
 

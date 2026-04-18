@@ -51,7 +51,6 @@ export interface WorkspaceStore {
   activeRun: string | null;
   runState: RunState | null;
   outputLines: string[];
-  blocking: { question: string; context: string[] } | null;
   runs: Map<string, RunSummary>;
   selectedRun: string | null;
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
@@ -116,7 +115,6 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     activeRun: null,
     runState: null,
     outputLines: [],
-    blocking: null,
     runs: new Map(),
     selectedRun: null,
     diffCache: new Map(),
@@ -164,8 +162,6 @@ export type WorkspaceAction =
   | { type: 'SET_RUN_STATE'; runState: RunState | null }
   | { type: 'APPEND_OUTPUT'; line: string }
   | { type: 'CLEAR_OUTPUT' }
-  | { type: 'SET_BLOCKING'; question: string; context: string[] }
-  | { type: 'CLEAR_BLOCKING' }
   | { type: 'UPSERT_RUN'; run: RunSummary }
   | { type: 'SET_RUNS'; runs: RunSummary[] }
   | { type: 'SELECT_RUN'; runId: string | null }
@@ -236,12 +232,6 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
 
     case 'CLEAR_OUTPUT':
       return { ...state, outputLines: [] };
-
-    case 'SET_BLOCKING':
-      return { ...state, blocking: { question: action.question, context: action.context } };
-
-    case 'CLEAR_BLOCKING':
-      return { ...state, blocking: null };
 
     case 'UPSERT_RUN': {
       const runs = new Map(state.runs);

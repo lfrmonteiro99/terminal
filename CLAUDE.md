@@ -4,6 +4,13 @@
 > [`docs/git-flow.md`](./docs/git-flow.md) ·
 > [`docs/next-steps.md`](./docs/next-steps.md) ·
 > [`docs/bin-cc.md`](./docs/bin-cc.md) (optional shell helper, not the app).
+>
+> **Contributor guides**: [`docs/modes.md`](./docs/modes.md) ·
+> [`docs/panes.md`](./docs/panes.md) ·
+> [`docs/workspaces.md`](./docs/workspaces.md) ·
+> [`docs/keybindings.md`](./docs/keybindings.md) ·
+> [`docs/ux-conventions.md`](./docs/ux-conventions.md) ·
+> [`docs/naming-conventions.md`](./docs/naming-conventions.md).
 
 ## Workspace
 

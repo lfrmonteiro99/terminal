@@ -3,7 +3,6 @@ use crate::daemon_context::{ActiveRun, ClientId, DaemonContext};
 use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
-use crate::safety::broadcast_event;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -445,7 +444,7 @@ impl Dispatcher {
                 skip_dirty_check,
                 autonomy,
             } => {
-                self.do_start_run(session_id, prompt, mode, autonomy, skip_dirty_check, reply_tx).await;
+                self.do_start_run(client_id, session_id, prompt, mode, autonomy, skip_dirty_check, reply_tx).await;
             }
 
             AppCommand::CancelRun { run_id, reason } => {
@@ -457,29 +456,6 @@ impl Dispatcher {
                 match sender {
                     Some(tx) => {
                         let _ = tx.send(reason).await;
-                    }
-                    None => {
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "RUN_NOT_FOUND".into(),
-                                message: format!("No active run {}", run_id),
-                            })
-                            .await;
-                    }
-                }
-            }
-
-            AppCommand::RespondToBlocking { run_id, response } => {
-                // Same pattern as CancelRun — don't hold active_runs across
-                // a bounded-channel send.
-                let sender = self.context.active_runs.lock().await.get(&run_id).map(|r| r.stdin_tx.clone());
-                match sender {
-                    Some(tx) => {
-                        let _ = tx.send(response).await;
-                        self.broadcast(&AppEvent::RunStateChanged {
-                            run_id,
-                            new_state: RunState::Running,
-                        });
                     }
                     None => {
                         let _ = reply_tx
@@ -779,7 +755,7 @@ impl Dispatcher {
 
                 // Stash succeeded -- proceed with start run, skipping dirty check.
                 // Stash-and-run flows default to Autonomous (legacy behaviour).
-                self.do_start_run(session_id, prompt, mode, AutonomyLevel::default(), true, reply_tx).await;
+                self.do_start_run(client_id, session_id, prompt, mode, AutonomyLevel::default(), true, reply_tx).await;
             }
 
             AppCommand::ListStashes => {
@@ -1411,6 +1387,7 @@ impl Dispatcher {
     /// Core StartRun logic, shared by both `StartRun` and `StashAndRun` commands.
     async fn do_start_run(
         &self,
+        client_id: ClientId,
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
@@ -1418,12 +1395,18 @@ impl Dispatcher {
         skip_dirty_check: bool,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
-        // Read everything we need from the session, then release the lock
-        // before any async IO or git subprocess. Previously the lock was held
-        // across create_dir_all, is_git_repo, guard_repo_state, head_oid,
-        // worktree_add and the dirty-check — a window of several seconds
-        // during which every other sessions-touching handler
-        // (ListSessions / GetStatus / StartSession / ...) blocked.
+        // Resolve the workspace this run belongs to (SEC-02 event routing).
+        let workspace_id: Option<Uuid> = self
+            .context
+            .active_workspaces
+            .lock()
+            .await
+            .get(&client_id.0)
+            .copied();
+
+        // Read session data then release the lock before any async IO or git
+        // subprocess — previously the lock was held for several seconds blocking
+        // all other session-touching handlers.
         let (project_root, already_active) = {
             let sessions = self.context.sessions.lock().await;
             match sessions.get(&session_id) {
@@ -1674,7 +1657,7 @@ impl Dispatcher {
         // Ownership of the concurrency entry transfers to the supervisor task
         // on success; `forget()` prevents the guard from clearing it on drop.
         match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
-            Ok((mut event_rx, stdin_tx, mut child)) => {
+            Ok((mut event_rx, mut child)) => {
                 if let Some(g) = concurrency_guard.take() {
                     g.forget();
                 }
@@ -1683,7 +1666,6 @@ impl Dispatcher {
                 let active_run = ActiveRun {
                     run: run.clone(),
                     cancel_tx,
-                    stdin_tx: stdin_tx.clone(),
                 };
                 self.context.active_runs.lock().await.insert(run_id, active_run);
 
@@ -1695,6 +1677,7 @@ impl Dispatcher {
 
                 // Supervisor task
                 let event_tx = self.context.event_tx.clone();
+                let workspace_channels = self.context.workspace_channels.clone();
                 let active_runs = self.context.active_runs.clone();
                 let sessions = self.context.sessions.clone();
                 let timeout_secs = self.context.config.run_timeout_secs;
@@ -1707,9 +1690,43 @@ impl Dispatcher {
                 let is_git_run = is_git;
                 let run_started_at = run.started_at;
                 let autonomy_clone = autonomy;
+                let supervisor_workspace_id = workspace_id;
 
                 tokio::spawn(async move {
+                    // Helper: broadcast to workspace channel, falling back to global (SEC-02).
+                    let broadcast_ws = {
+                        let event_tx = event_tx.clone();
+                        let workspace_channels = workspace_channels.clone();
+                        let ws_id = supervisor_workspace_id;
+                        move |evt: &AppEvent| {
+                            let json = match serde_json::to_string(evt) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    tracing::error!("Failed to serialize event: {}", e);
+                                    return;
+                                }
+                            };
+                            let event_tx = event_tx.clone();
+                            let workspace_channels = workspace_channels.clone();
+                            // Fire-and-forget: spawn a micro-task to send without blocking.
+                            tokio::spawn(async move {
+                                if let Some(wid) = ws_id {
+                                    let tx = {
+                                        let ch = workspace_channels.lock().await;
+                                        ch.get(&wid).cloned()
+                                    };
+                                    if let Some(tx) = tx {
+                                        let _ = tx.send(json);
+                                        return;
+                                    }
+                                }
+                                let _ = event_tx.send(json);
+                            });
+                        }
+                    };
+
                     let mut line_number: usize = 0;
+                    let mut result_event_seen = false;
                     let mut output_file = match tokio::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -1749,13 +1766,13 @@ impl Dispatcher {
                                                 format!("{}\n", line).as_bytes(),
                                             ).await;
                                         }
-                                        // Broadcast to clients
+                                        // Broadcast to workspace clients (SEC-02)
                                         let evt = AppEvent::RunOutput {
                                             run_id,
                                             line,
                                             line_number,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                     }
                                     Some(RunnerEvent::StderrLine(line)) => {
                                         line_number += 1;
@@ -1770,13 +1787,9 @@ impl Dispatcher {
                                             line: format!("[stderr] {}", line),
                                             line_number,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                     }
                                     Some(RunnerEvent::AssistantText(text)) => {
-                                        // Assistant text is the "normal" model output
-                                        // that used to come out as raw stdout. Keep
-                                        // streaming it through RunOutput so existing
-                                        // UI continues to render it unchanged.
                                         line_number += 1;
                                         if let Some(ref mut f) = output_file {
                                             let _ = tokio::io::AsyncWriteExt::write_all(
@@ -1789,11 +1802,9 @@ impl Dispatcher {
                                             line: text.trim_end_matches('\n').to_string(),
                                             line_number,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                     }
                                     Some(RunnerEvent::ToolUse { id, name, input_preview }) => {
-                                        // Log as a text line for persistence + legacy UI,
-                                        // and emit a structured event for rich rendering.
                                         line_number += 1;
                                         let log_line = format!("▸ tool: {name} {input_preview}");
                                         if let Some(ref mut f) = output_file {
@@ -1807,14 +1818,14 @@ impl Dispatcher {
                                             line: log_line,
                                             line_number,
                                         };
-                                        broadcast_event(&event_tx, &out_evt);
+                                        broadcast_ws(&out_evt);
                                         let tool_evt = AppEvent::RunToolUse {
                                             run_id,
                                             tool_id: id,
                                             tool_name: name,
                                             tool_input_preview: input_preview,
                                         };
-                                        broadcast_event(&event_tx, &tool_evt);
+                                        broadcast_ws(&tool_evt);
                                     }
                                     Some(RunnerEvent::ToolResult { tool_use_id, is_error, preview }) => {
                                         line_number += 1;
@@ -1831,18 +1842,16 @@ impl Dispatcher {
                                             line: log_line,
                                             line_number,
                                         };
-                                        broadcast_event(&event_tx, &out_evt);
+                                        broadcast_ws(&out_evt);
                                         let result_evt = AppEvent::RunToolResult {
                                             run_id,
                                             tool_id: tool_use_id,
                                             is_error,
                                             preview,
                                         };
-                                        broadcast_event(&event_tx, &result_evt);
+                                        broadcast_ws(&result_evt);
                                     }
                                     Some(RunnerEvent::SessionInit { model, session_id }) => {
-                                        // Log session metadata as a single RunOutput
-                                        // line. No dedicated protocol event yet.
                                         line_number += 1;
                                         let log_line = format!(
                                             "session init: model={} session_id={}",
@@ -1856,7 +1865,7 @@ impl Dispatcher {
                                             ).await;
                                         }
                                         let evt = AppEvent::RunOutput { run_id, line: log_line, line_number };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                     }
                                     Some(RunnerEvent::Metrics { num_turns, cost_usd, input_tokens, output_tokens }) => {
                                         let evt = AppEvent::RunMetrics {
@@ -1866,18 +1875,19 @@ impl Dispatcher {
                                             input_tokens,
                                             output_tokens,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
+                                    }
+                                    Some(RunnerEvent::ResultSeen) => {
+                                        // Stream-json result event received — run completed normally.
+                                        result_event_seen = true;
                                     }
                                     Some(RunnerEvent::Preflight { reason, suggestion }) => {
-                                        // Runner shouldn't emit this at stream time
-                                        // (preflight runs before spawn), but forward
-                                        // defensively if it does.
                                         let evt = AppEvent::RunPreflightFailed {
                                             run_id,
                                             reason,
                                             suggestion,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                     }
                                     Some(RunnerEvent::SpawnError(e)) => {
                                         let evt = AppEvent::RunFailed {
@@ -1885,7 +1895,7 @@ impl Dispatcher {
                                             error: e,
                                             phase: FailPhase::Execution,
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
                                         break;
                                     }
                                     Some(RunnerEvent::ProcessExited { .. }) => {
@@ -1897,13 +1907,27 @@ impl Dispatcher {
                                             .map(|s| s.code().unwrap_or(-1))
                                             .unwrap_or(-1);
 
+                                        // If stream ended without a result event, the run failed
+                                        // mid-stream (AI-BUG-01: #113).
+                                        if !result_event_seen {
+                                            let evt = AppEvent::RunFailed {
+                                                run_id,
+                                                error: format!(
+                                                    "stream ended without result event (exit_code={})",
+                                                    exit_code
+                                                ),
+                                                phase: FailPhase::Execution,
+                                            };
+                                            broadcast_ws(&evt);
+                                            break;
+                                        }
+
                                         // Compute git diff info if this was a git run
                                         let mut modified_files_list = vec![];
                                         let mut run_diff_stat = None;
 
                                         if is_git_run {
                                             if let Some(ref wt_path) = worktree_path_clone {
-                                                // Get current HEAD in worktree
                                                 match crate::git_engine::head_oid(wt_path).await {
                                                     Ok(wt_head) => {
                                                         if let Ok(changes) = crate::git_engine::changed_files(
@@ -1942,7 +1966,7 @@ impl Dispatcher {
                                             summary,
                                             diff_stat: run_diff_stat.clone(),
                                         };
-                                        broadcast_event(&event_tx, &evt);
+                                        broadcast_ws(&evt);
 
                                         // Persist completed run
                                         let completed_run = Run {
@@ -1975,20 +1999,41 @@ impl Dispatcher {
                                 if let Some(reason) = reason {
                                     info!("Cancelling run {}: {}", run_id, reason);
                                     let _ = child.kill().await;
+                                    // Wait for child to exit (BUG-01: #123) before emitting event.
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        child.wait(),
+                                    ).await;
                                     let evt = AppEvent::RunCancelled { run_id };
-                                    broadcast_event(&event_tx, &evt);
+                                    broadcast_ws(&evt);
                                     break;
                                 }
                             }
                             _ = &mut timeout => {
                                 warn!("Run {} timed out", run_id);
                                 let _ = child.kill().await;
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    child.wait(),
+                                ).await;
+                                // Teardown worktree on timeout (BUG-01: #123).
+                                if is_git_run {
+                                    if let Some(ref wt_path) = worktree_path_clone {
+                                        let repo_root = project_root_clone.clone();
+                                        if let Err(e) = crate::git_engine::worktree_remove(&repo_root, wt_path).await {
+                                            warn!("Failed to remove worktree {:?} on timeout: {}", wt_path, e);
+                                        }
+                                    }
+                                    if let Err(e) = persistence.delete_worktree_meta(run_id) {
+                                        warn!("Failed to delete worktree meta {} on timeout: {}", run_id, e);
+                                    }
+                                }
                                 let evt = AppEvent::RunFailed {
                                     run_id,
                                     error: "Run timed out".into(),
                                     phase: FailPhase::Execution,
                                 };
-                                broadcast_event(&event_tx, &evt);
+                                broadcast_ws(&evt);
                                 break;
                             }
                         }

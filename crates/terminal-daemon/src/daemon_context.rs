@@ -28,7 +28,6 @@ pub struct ActiveRun {
     #[allow(dead_code)]
     pub run: terminal_core::models::Run,
     pub cancel_tx: mpsc::Sender<String>,
-    pub stdin_tx: mpsc::Sender<String>,
 }
 
 /// Shared daemon state passed to all domain dispatchers.
@@ -82,8 +81,13 @@ impl DaemonContext {
     pub async fn broadcast_workspace(&self, workspace_id: Uuid, event: &AppEvent) {
         match serde_json::to_string(event) {
             Ok(json) => {
-                let channels = self.workspace_channels.lock().await;
-                if let Some(tx) = channels.get(&workspace_id) {
+                // Clone the sender out of the mutex before calling send() so
+                // the lock is not held across the channel operation (BUG-02).
+                let tx = {
+                    let channels = self.workspace_channels.lock().await;
+                    channels.get(&workspace_id).cloned()
+                };
+                if let Some(tx) = tx {
                     let _ = tx.send(json);
                 } else {
                     tracing::warn!(

@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
     FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta, Workspace,
@@ -33,11 +34,15 @@ pub struct Persistence {
 impl Persistence {
     /// Creates a new Persistence instance, ensuring the required subdirectories exist.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(base_dir.join("sessions"))?;
-        fs::create_dir_all(base_dir.join("runs"))?;
-        fs::create_dir_all(base_dir.join("worktrees"))?;
-        fs::create_dir_all(base_dir.join("terminals"))?;
-        fs::create_dir_all(base_dir.join("workspaces"))?;
+        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+            let dir = base_dir.join(sub);
+            fs::create_dir_all(&dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+            }
+        }
         Ok(Self { base_dir })
     }
 
@@ -46,18 +51,24 @@ impl Persistence {
     // -----------------------------------------------------------------------
 
     fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-        // Include a random suffix in the tmp path so concurrent writers to the
-        // same target path don't stomp on each other's temp file. With a fixed
-        // `{path}.tmp` the two writes would interleave, the final rename would
-        // be a race, and the winning file could contain a mix of both payloads.
-        // Using a unique suffix makes each rename a clean, atomic replacement.
+        // Unique suffix prevents concurrent writers from stomping each other's
+        // temp file (races between two writes to the same target path).
         let suffix = Uuid::new_v4().simple().to_string();
         let tmp_path = path.with_extension(format!("json.tmp.{}", suffix));
-        fs::write(&tmp_path, data)?;
-        // On rename failure, try to clean up the orphan temp file. Best-effort.
+        {
+            let mut f = fs::File::create(&tmp_path)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
         if let Err(e) = fs::rename(&tmp_path, path) {
             let _ = fs::remove_file(&tmp_path);
             return Err(e.into());
+        }
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            if let Ok(dir_file) = fs::File::open(dir) {
+                let _ = dir_file.sync_all();
+            }
         }
         Ok(())
     }

@@ -11,6 +11,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use terminal_core::protocol::v1::{AppCommand, AppEvent};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{error, info, warn};
@@ -118,13 +119,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     // Step 2: Subscribe to broadcast events
     let mut event_rx = state.event_tx.subscribe();
 
+    // Heartbeat timeout: read from env, default 90 s (issue #112).
+    let heartbeat_timeout_secs: u64 = std::env::var("TERMINAL_HEARTBEAT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90);
+
+    // Shared last-pong timestamp: updated by recv loop, checked by send task.
+    let last_pong_at = Arc::new(Mutex::new(Instant::now()));
+    let last_pong_at_send = last_pong_at.clone();
+
     // Step 3: Sender task — forwards broadcast events + heartbeat pings
     let sender = Arc::new(Mutex::new(sender));
     let sender_clone = sender.clone();
 
     let send_task = tokio::spawn(async move {
+        let ping_interval_secs = 30u64;
         let mut heartbeat_interval =
-            tokio::time::interval(std::time::Duration::from_secs(30));
+            tokio::time::interval(std::time::Duration::from_secs(ping_interval_secs));
 
         loop {
             tokio::select! {
@@ -140,6 +152,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                     }
                 }
                 _ = heartbeat_interval.tick() => {
+                    // Check if the client has responded to pings within the timeout window.
+                    let elapsed = last_pong_at_send.lock().await.elapsed();
+                    if elapsed.as_secs() > heartbeat_timeout_secs {
+                        warn!(
+                            "Heartbeat timeout: no pong received in {}s, disconnecting",
+                            elapsed.as_secs()
+                        );
+                        break;
+                    }
                     let mut s = sender_clone.lock().await;
                     if s.send(Message::Ping(vec![].into())).await.is_err() {
                         break;
@@ -191,7 +212,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                 }
             }
             Ok(Message::Pong(_)) => {
-                // Client responded to our ping — heartbeat OK
+                // Client responded to our ping — reset the timeout window.
+                *last_pong_at.lock().await = Instant::now();
             }
             Ok(Message::Close(_)) => {
                 info!("Client disconnected gracefully");
