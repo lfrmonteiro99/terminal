@@ -88,17 +88,6 @@ describe('workspaceReducer', () => {
     expect(next.outputLines).toEqual([]);
   });
 
-  it('SET_BLOCKING', () => {
-    const next = run(base(), { type: 'SET_BLOCKING', question: 'ok?', context: ['a'] });
-    expect(next.blocking).toEqual({ question: 'ok?', context: ['a'] });
-  });
-
-  it('CLEAR_BLOCKING', () => {
-    const seeded = workspaceReducer(base(), { type: 'SET_BLOCKING', question: 'q', context: [] });
-    const next = run(seeded, { type: 'CLEAR_BLOCKING' });
-    expect(next.blocking).toBeNull();
-  });
-
   it('UPSERT_RUN / SET_RUNS', () => {
     const one = run(base(), { type: 'UPSERT_RUN', run: runSummary('r1') });
     expect(one.runs.get('r1')).toBeDefined();
@@ -410,8 +399,6 @@ describe('workspaceReducer', () => {
       'SET_RUN_STATE',
       'APPEND_OUTPUT',
       'CLEAR_OUTPUT',
-      'SET_BLOCKING',
-      'CLEAR_BLOCKING',
       'UPSERT_RUN',
       'SET_RUNS',
       'SELECT_RUN',

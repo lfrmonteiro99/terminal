@@ -24,7 +24,6 @@ describe('CommandBus', () => {
       { type: 'StartSession', project_root: '/root' },
       { type: 'StartRun', session_id: 's1', prompt: 'p', mode: 'Free' },
       { type: 'CancelRun', run_id: 'r1', reason: 'user' },
-      { type: 'RespondToBlocking', run_id: 'r1', response: 'yes' },
       { type: 'GetDiff', run_id: 'r1' },
       { type: 'ListWorkspaces' },
       { type: 'CreateWorkspace', name: 'w', root_path: '/', mode: 'Terminal' },
