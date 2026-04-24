@@ -40,26 +40,20 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<DaemonState>>)
 /// Serialize an event, returning a fallback error JSON on failure.
 fn event_json(event: &AppEvent) -> String {
     serde_json::to_string(event).unwrap_or_else(|e| {
-        format!(
-            r#"{{"type":"Error","code":"SERIALIZATION","message":"{}"}}"#,
-            e
-        )
+        format!(r#"{{"type":"Error","code":"SERIALIZATION","message":"{e}"}}"#)
     })
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     let client_id = ClientId::new();
     let (mut sender, mut receiver) = socket.split();
-    info!(
-        "New WebSocket connection ({:?}), awaiting auth...",
-        client_id
-    );
+    info!("New WebSocket connection ({client_id:?}), awaiting auth...");
 
     // Step 1: Auth handshake — first message must be Auth command
     let authed =
         match tokio::time::timeout(std::time::Duration::from_secs(10), receiver.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
-                info!("Auth message received: {}", &*text);
+                info!("Auth message received: {text}");
                 match serde_json::from_str::<AppCommand>(&text) {
                     Ok(AppCommand::Auth { token }) if token == state.auth_token => {
                         let resp = event_json(&AppEvent::AuthSuccess);
@@ -75,7 +69,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                         false
                     }
                     Ok(other) => {
-                        warn!("Auth failed: expected Auth command, got {:?}", other);
+                        warn!("Auth failed: expected Auth command, got {other:?}");
                         let resp = event_json(&AppEvent::AuthFailed {
                             reason: "Expected Auth command".into(),
                         });
@@ -83,7 +77,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                         false
                     }
                     Err(e) => {
-                        warn!("Auth failed: could not parse message: {}", e);
+                        warn!("Auth failed: could not parse message: {e}");
                         let resp = event_json(&AppEvent::AuthFailed {
                             reason: "Invalid token".into(),
                         });
@@ -93,11 +87,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                 }
             }
             Ok(Some(Ok(other))) => {
-                warn!("Auth failed: expected Text message, got {:?}", other);
+                warn!("Auth failed: expected Text message, got {other:?}");
                 false
             }
             Ok(Some(Err(e))) => {
-                warn!("Auth failed: WebSocket error: {}", e);
+                warn!("Auth failed: WebSocket error: {e}");
                 false
             }
             Ok(None) => {
@@ -151,9 +145,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                     // Check if the client has responded to pings within the timeout window.
                     let elapsed = last_pong_at_send.lock().await.elapsed();
                     if elapsed.as_secs() > heartbeat_timeout_secs {
+                        let elapsed_secs = elapsed.as_secs();
                         warn!(
-                            "Heartbeat timeout: no pong received in {}s, disconnecting",
-                            elapsed.as_secs()
+                            "Heartbeat timeout: no pong received in {elapsed_secs}s, disconnecting"
                         );
                         break;
                     }
@@ -196,11 +190,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                         .send((client_id, cmd, response_tx.clone()))
                         .await
                     {
-                        error!("Failed to forward command: {}", e);
+                        error!("Failed to forward command: {e}");
                     }
                 }
                 Err(e) => {
-                    warn!("Invalid command from client: {}", e);
+                    warn!("Invalid command from client: {e}");
                     let err = event_json(&AppEvent::Error {
                         code: "INVALID_COMMAND".into(),
                         message: e.to_string(),
@@ -218,7 +212,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
                 break;
             }
             Err(e) => {
-                warn!("WebSocket error: {}", e);
+                warn!("WebSocket error: {e}");
                 break;
             }
             _ => {}
@@ -229,7 +223,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     response_task.abort();
     // M5b: scrub this client's active-workspace entry on disconnect.
     state.active_workspaces.lock().await.remove(&client_id.0);
-    info!("Client connection closed ({:?})", client_id);
+    info!("Client connection closed ({client_id:?})");
 }
 
 #[cfg(test)]
@@ -270,7 +264,7 @@ mod tests {
         port: u16,
     ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
     {
-        let url = format!("ws://127.0.0.1:{}/ws", port);
+        let url = format!("ws://127.0.0.1:{port}/ws");
         let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         ws
     }
@@ -292,7 +286,7 @@ mod tests {
             match ws.next().await.unwrap().unwrap() {
                 TungMessage::Text(t) => return t.to_string(),
                 TungMessage::Ping(_) | TungMessage::Pong(_) => continue,
-                other => panic!("unexpected message: {:?}", other),
+                other => panic!("unexpected message: {other:?}"),
             }
         }
     }
@@ -308,8 +302,7 @@ mod tests {
         let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(
             event["type"], "AuthSuccess",
-            "expected AuthSuccess, got: {}",
-            resp
+            "expected AuthSuccess, got: {resp}"
         );
     }
 
@@ -324,8 +317,7 @@ mod tests {
         let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(
             event["type"], "AuthFailed",
-            "expected AuthFailed, got: {}",
-            resp
+            "expected AuthFailed, got: {resp}"
         );
     }
 
@@ -342,8 +334,7 @@ mod tests {
         let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(
             event["type"], "AuthFailed",
-            "expected AuthFailed, got: {}",
-            resp
+            "expected AuthFailed, got: {resp}"
         );
     }
 
@@ -360,8 +351,7 @@ mod tests {
         let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(
             event["type"], "AuthFailed",
-            "expected AuthFailed, got: {}",
-            resp
+            "expected AuthFailed, got: {resp}"
         );
     }
 
@@ -383,7 +373,7 @@ mod tests {
         let resp = recv_text(&mut ws).await;
 
         let event: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(event["type"], "Error", "expected Error, got: {}", resp);
+        assert_eq!(event["type"], "Error", "expected Error, got: {resp}");
         assert_eq!(event["code"], "INVALID_COMMAND");
     }
 }

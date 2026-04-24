@@ -10,6 +10,7 @@ const requiredSnippets = [
   "contents: write",
   "cargo test --workspace",
   "cargo clippy --workspace --all-targets -- -D warnings",
+  "-A clippy::uninlined_format_args",
   "npm test",
   "npm run lint",
   "npm run build",

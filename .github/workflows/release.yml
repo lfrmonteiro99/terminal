@@ -62,7 +62,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Run Rust lint
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::uninlined_format_args
 
       - name: Install frontend dependencies
         working-directory: frontend

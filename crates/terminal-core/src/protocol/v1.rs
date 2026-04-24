@@ -1053,7 +1053,7 @@ mod tests {
         let json = serde_json::to_string(cmd).expect("serialize");
         let back: AppCommand = serde_json::from_str(&json).expect("deserialize");
         let json2 = serde_json::to_string(&back).expect("re-serialize");
-        assert_eq!(json, json2, "roundtrip stability failed for {}", json);
+        assert_eq!(json, json2, "roundtrip stability failed for {json}");
         json
     }
 
@@ -1061,7 +1061,7 @@ mod tests {
         let json = serde_json::to_string(evt).expect("serialize");
         let back: AppEvent = serde_json::from_str(&json).expect("deserialize");
         let json2 = serde_json::to_string(&back).expect("re-serialize");
-        assert_eq!(json, json2, "roundtrip stability failed for {}", json);
+        assert_eq!(json, json2, "roundtrip stability failed for {json}");
         json
     }
 
@@ -1227,10 +1227,8 @@ mod tests {
             seen.insert(tag);
             let json = roundtrip_command(cmd);
             assert!(
-                json.contains(&format!("\"type\":\"{}\"", tag)),
-                "expected tag {} in {}",
-                tag,
-                json
+                json.contains(&format!("\"type\":\"{tag}\"")),
+                "expected tag {tag} in {json}"
             );
         }
         // Sanity-check the table covers every tag the exhaustive match knows.
@@ -1528,10 +1526,8 @@ mod tests {
             seen.insert(tag);
             let json = roundtrip_event(evt);
             assert!(
-                json.contains(&format!("\"type\":\"{}\"", tag)),
-                "expected tag {} in {}",
-                tag,
-                json
+                json.contains(&format!("\"type\":\"{tag}\"")),
+                "expected tag {tag} in {json}"
             );
         }
         assert_eq!(
