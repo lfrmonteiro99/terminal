@@ -40,9 +40,11 @@ fn main() {
             let handle = app.handle().clone();
 
             let join = tauri::async_runtime::spawn(async move {
-                let mut config = DaemonConfig::default();
-                config.mode = DaemonMode::Embedded;
-                config.port = 0; // OS picks free port
+                let config = DaemonConfig {
+                    mode: DaemonMode::Embedded,
+                    port: 0, // OS picks free port
+                    ..Default::default()
+                };
 
                 match terminal_daemon::start_server(config).await {
                     Ok(daemon) => {

@@ -1794,14 +1794,24 @@ impl Dispatcher {
             }
         }
 
-        // Broadcast state change
-        self.broadcast(&AppEvent::RunStateChanged {
-            run_id,
-            new_state: RunState::Preparing,
-        });
+        // Route run lifecycle events through workspace isolation (SEC-02).
+        self.context
+            .send_run_event(
+                workspace_id,
+                &reply_tx,
+                AppEvent::RunStateChanged {
+                    run_id,
+                    new_state: RunState::Preparing,
+                },
+            )
+            .await;
 
         // Pre-flight check (delegated to helper)
-        if self.run_preflight(run_id, &run).await.is_err() {
+        if self
+            .run_preflight(run_id, &run, workspace_id, &reply_tx)
+            .await
+            .is_err()
+        {
             return;
         }
 
@@ -1830,14 +1840,20 @@ impl Dispatcher {
                     .insert(run_id, active_run);
 
                 // Transition to Running
-                self.broadcast(&AppEvent::RunStateChanged {
-                    run_id,
-                    new_state: RunState::Running,
-                });
+                self.context
+                    .send_run_event(
+                        workspace_id,
+                        &reply_tx,
+                        AppEvent::RunStateChanged {
+                            run_id,
+                            new_state: RunState::Running,
+                        },
+                    )
+                    .await;
 
                 // Supervisor task
-                let event_tx = self.context.event_tx.clone();
-                let workspace_channels = self.context.workspace_channels.clone();
+                let run_event_context = self.context.clone();
+                let run_reply_tx = reply_tx.clone();
                 let active_runs = self.context.active_runs.clone();
                 let sessions = self.context.sessions.clone();
                 let timeout_secs = self.context.config.run_timeout_secs;
@@ -1854,34 +1870,17 @@ impl Dispatcher {
                 let supervisor_workspace_id = workspace_id;
 
                 tokio::spawn(async move {
-                    // Helper: broadcast to workspace channel, falling back to global (SEC-02).
+                    // Helper: route run events through workspace isolation.
                     let broadcast_ws = {
-                        let event_tx = event_tx.clone();
-                        let workspace_channels = workspace_channels.clone();
+                        let context = run_event_context.clone();
+                        let reply_tx = run_reply_tx.clone();
                         let ws_id = supervisor_workspace_id;
                         move |evt: &AppEvent| {
-                            let json = match serde_json::to_string(evt) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize event: {}", e);
-                                    return;
-                                }
-                            };
-                            let event_tx = event_tx.clone();
-                            let workspace_channels = workspace_channels.clone();
-                            // Fire-and-forget: spawn a micro-task to send without blocking.
+                            let context = context.clone();
+                            let reply_tx = reply_tx.clone();
+                            let evt = evt.clone();
                             tokio::spawn(async move {
-                                if let Some(wid) = ws_id {
-                                    let tx = {
-                                        let ch = workspace_channels.lock().await;
-                                        ch.get(&wid).cloned()
-                                    };
-                                    if let Some(tx) = tx {
-                                        let _ = tx.send(json);
-                                        return;
-                                    }
-                                }
-                                let _ = event_tx.send(json);
+                                context.send_run_event(ws_id, &reply_tx, evt).await;
                             });
                         }
                     };
@@ -2208,13 +2207,6 @@ impl Dispatcher {
                     concurrency.lock().await.remove(&concurrency_key_clone);
                     info!("Run {} finished", run_id);
                 });
-
-                let _ = reply_tx
-                    .send(AppEvent::RunStateChanged {
-                        run_id,
-                        new_state: RunState::Running,
-                    })
-                    .await;
             }
             Err(e) => {
                 // Cleanup session
@@ -2313,18 +2305,36 @@ impl Dispatcher {
     /// Run the Claude binary preflight check and emit structured events on failure.
     ///
     /// Returns `Ok(())` when preflight passes, `Err(())` when it fails (events already broadcast).
-    async fn run_preflight(&self, run_id: Uuid, run: &Run) -> Result<(), ()> {
+    async fn run_preflight(
+        &self,
+        run_id: Uuid,
+        run: &Run,
+        workspace_id: Option<Uuid>,
+        reply_tx: &mpsc::Sender<AppEvent>,
+    ) -> Result<(), ()> {
         if let Err(pf) = self.context.runner.preflight().await {
-            self.broadcast(&AppEvent::RunPreflightFailed {
-                run_id,
-                reason: pf.reason.clone(),
-                suggestion: pf.suggestion.clone(),
-            });
-            self.broadcast(&AppEvent::RunFailed {
-                run_id,
-                error: pf.reason,
-                phase: FailPhase::Preflight,
-            });
+            self.context
+                .send_run_event(
+                    workspace_id,
+                    reply_tx,
+                    AppEvent::RunPreflightFailed {
+                        run_id,
+                        reason: pf.reason.clone(),
+                        suggestion: pf.suggestion.clone(),
+                    },
+                )
+                .await;
+            self.context
+                .send_run_event(
+                    workspace_id,
+                    reply_tx,
+                    AppEvent::RunFailed {
+                        run_id,
+                        error: pf.reason,
+                        phase: FailPhase::Preflight,
+                    },
+                )
+                .await;
             let failed_run = Run {
                 state: RunState::Failed {
                     error: pf.suggestion,

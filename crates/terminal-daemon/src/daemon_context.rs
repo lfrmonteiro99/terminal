@@ -109,6 +109,43 @@ impl DaemonContext {
         }
     }
 
+    /// Send a run event without leaking it to unrelated clients.
+    ///
+    /// Run events are workspace-scoped when possible. Legacy runs without a
+    /// workspace, or runs whose workspace channel has disappeared, are sent
+    /// only to the originating client rather than the global broadcast channel.
+    pub async fn send_run_event(
+        &self,
+        workspace_id: Option<Uuid>,
+        reply_tx: &mpsc::Sender<AppEvent>,
+        event: AppEvent,
+    ) {
+        if let Some(workspace_id) = workspace_id {
+            match serde_json::to_string(&event) {
+                Ok(json) => {
+                    let tx = {
+                        let channels = self.workspace_channels.lock().await;
+                        channels.get(&workspace_id).cloned()
+                    };
+                    if let Some(tx) = tx {
+                        let _ = tx.send(json);
+                        return;
+                    }
+                    tracing::warn!(
+                        "send_run_event: no channel for workspace {}, falling back to originating client",
+                        workspace_id,
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serialize run event: {}", e);
+                    return;
+                }
+            }
+        }
+
+        let _ = reply_tx.send(event).await;
+    }
+
     /// Find the project root for the currently-active session.
     ///
     /// Picks the most-recently-started not-yet-ended session, falling back to
@@ -203,5 +240,81 @@ mod tests {
 
         let msg = global_rx.recv().await.expect("global fallback");
         assert!(msg.contains("AuthSuccess"));
+    }
+
+    #[tokio::test]
+    async fn run_event_with_workspace_only_reaches_workspace_channel() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = make_ctx(&tmp);
+        let mut global_rx = ctx.event_tx.subscribe();
+        let ws_a = Uuid::new_v4();
+        let ws_b = Uuid::new_v4();
+        let (tx_a, mut rx_a) = broadcast::channel::<String>(16);
+        let (tx_b, mut rx_b) = broadcast::channel::<String>(16);
+        ctx.workspace_channels.lock().await.insert(ws_a, tx_a);
+        ctx.workspace_channels.lock().await.insert(ws_b, tx_b);
+        let (reply_tx, mut reply_rx) = mpsc::channel(8);
+
+        ctx.send_run_event(
+            Some(ws_a),
+            &reply_tx,
+            AppEvent::RunOutput {
+                run_id: Uuid::new_v4(),
+                line: "secret".into(),
+                line_number: 1,
+            },
+        )
+        .await;
+
+        assert!(rx_a.try_recv().is_ok());
+        assert!(rx_b.try_recv().is_err());
+        assert!(reply_rx.try_recv().is_err());
+        assert!(global_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_event_without_workspace_goes_only_to_originating_client() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = make_ctx(&tmp);
+        let mut global_rx = ctx.event_tx.subscribe();
+        let (reply_tx, mut reply_rx) = mpsc::channel(8);
+
+        ctx.send_run_event(
+            None,
+            &reply_tx,
+            AppEvent::RunCancelled {
+                run_id: Uuid::new_v4(),
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            reply_rx.try_recv(),
+            Ok(AppEvent::RunCancelled { .. })
+        ));
+        assert!(global_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_event_missing_workspace_channel_uses_originating_client_not_global() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = make_ctx(&tmp);
+        let mut global_rx = ctx.event_tx.subscribe();
+        let (reply_tx, mut reply_rx) = mpsc::channel(8);
+
+        ctx.send_run_event(
+            Some(Uuid::new_v4()),
+            &reply_tx,
+            AppEvent::RunCancelled {
+                run_id: Uuid::new_v4(),
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            reply_rx.try_recv(),
+            Ok(AppEvent::RunCancelled { .. })
+        ));
+        assert!(global_rx.try_recv().is_err());
     }
 }
