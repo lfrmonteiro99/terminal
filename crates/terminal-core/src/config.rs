@@ -41,7 +41,10 @@ impl Default for DaemonConfig {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(0),
             heartbeat_interval_secs: 30,
-            heartbeat_timeout_secs: 60,
+            heartbeat_timeout_secs: std::env::var("TERMINAL_HEARTBEAT_TIMEOUT_SECS")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(90),
             orphan_grace_secs: 60,
             run_timeout_secs: 600,
             data_dir: std::env::var("TERMINAL_DATA_DIR")
@@ -63,8 +66,19 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 0);
         assert_eq!(config.heartbeat_interval_secs, 30);
+        assert_eq!(config.heartbeat_timeout_secs, 90);
         assert_eq!(config.run_timeout_secs, 600);
         assert_eq!(config.claude_binary, "claude");
+    }
+
+
+    #[test]
+    fn heartbeat_timeout_can_be_configured_from_env() {
+        std::env::set_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS", "7");
+        let config = DaemonConfig::default();
+        std::env::remove_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS");
+
+        assert_eq!(config.heartbeat_timeout_secs, 7);
     }
 
     #[test]

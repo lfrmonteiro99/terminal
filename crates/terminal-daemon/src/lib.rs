@@ -97,6 +97,7 @@ pub async fn start_server(
         auth_token: token.clone(),
         event_tx: event_tx.clone(),
         command_tx,
+        heartbeat_timeout_secs: config.heartbeat_timeout_secs,
         active_workspaces: dispatcher.context().active_workspaces.clone(),
     });
 

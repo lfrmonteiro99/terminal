@@ -21,6 +21,7 @@ pub struct DaemonState {
     pub auth_token: String,
     pub event_tx: broadcast::Sender<String>,
     pub command_tx: mpsc::Sender<(ClientId, AppCommand, mpsc::Sender<AppEvent>)>,
+    pub heartbeat_timeout_secs: u64,
     /// Shared with `DaemonContext` so the WS handler can scrub a client's
     /// entry on disconnect (M5b, issue #100).
     pub active_workspaces: Arc<Mutex<HashMap<Uuid, Uuid>>>,
@@ -118,11 +119,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<DaemonState>) {
     // Step 2: Subscribe to broadcast events
     let mut event_rx = state.event_tx.subscribe();
 
-    // Heartbeat timeout: read from env, default 90 s (issue #112).
-    let heartbeat_timeout_secs: u64 = std::env::var("TERMINAL_HEARTBEAT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(90);
+    let heartbeat_timeout_secs = state.heartbeat_timeout_secs;
 
     // Shared last-pong timestamp: updated by recv loop, checked by send task.
     let last_pong_at = Arc::new(Mutex::new(Instant::now()));
@@ -254,6 +251,7 @@ mod tests {
             auth_token: token.clone(),
             event_tx,
             command_tx,
+            heartbeat_timeout_secs: 90,
             active_workspaces: Arc::new(Mutex::new(HashMap::new())),
         });
 
