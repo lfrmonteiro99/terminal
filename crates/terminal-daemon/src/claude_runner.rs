@@ -299,6 +299,9 @@ impl ClaudeRunner {
                                 })
                                 .await;
                         }
+                        ParseEvent::ExitPlanMode { .. } => {
+                            // Parser support lands before runner forwarding in the chat-mode sequence.
+                        }
                         ParseEvent::ToolResult {
                             tool_use_id,
                             is_error,

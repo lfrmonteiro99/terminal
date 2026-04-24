@@ -29,6 +29,11 @@ pub enum ParseEvent {
         /// first line of a bash command). Full input is in the raw log.
         input_preview: String,
     },
+    /// Claude called the built-in ExitPlanMode tool with a plan ready for review.
+    ExitPlanMode {
+        tool_use_id: String,
+        plan: String,
+    },
     /// A tool call returned a result.
     ToolResult {
         tool_use_id: String,
@@ -181,11 +186,23 @@ impl StreamParser {
                             }
                         }
                         AssistantBlock::ToolUse { id, name, input } => {
-                            out.push(ParseEvent::ToolUse {
-                                id,
-                                input_preview: tool_input_preview(&name, &input),
-                                name,
-                            });
+                            if name == "ExitPlanMode" {
+                                let plan = input
+                                    .get("plan")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                out.push(ParseEvent::ExitPlanMode {
+                                    tool_use_id: id,
+                                    plan,
+                                });
+                            } else {
+                                out.push(ParseEvent::ToolUse {
+                                    id,
+                                    input_preview: tool_input_preview(&name, &input),
+                                    name,
+                                });
+                            }
                         }
                         AssistantBlock::Other => {}
                     }
@@ -356,6 +373,32 @@ mod tests {
             }
             _ => panic!("expected ToolUse"),
         }
+    }
+
+    #[test]
+    fn parses_exit_plan_mode_tool_use() {
+        let mut p = StreamParser::new();
+        let events = p.feed_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"abc123","name":"ExitPlanMode","input":{"plan":"1. edit foo\n2. add test"}}]}}"#,
+        );
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            ParseEvent::ExitPlanMode { tool_use_id, plan } => {
+                assert_eq!(tool_use_id, "abc123");
+                assert_eq!(plan, "1. edit foo\n2. add test");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn other_tool_use_still_emits_tool_use() {
+        let mut p = StreamParser::new();
+        let events = p.feed_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x","name":"Edit","input":{"file_path":"/tmp/a"}}]}}"#,
+        );
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], ParseEvent::ToolUse { .. }));
     }
 
     #[test]
