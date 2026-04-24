@@ -481,6 +481,7 @@ impl Dispatcher {
                 mode,
                 skip_dirty_check,
                 autonomy,
+                kind: _,
             } => {
                 self.do_start_run(
                     client_id,
@@ -492,6 +493,18 @@ impl Dispatcher {
                     reply_tx,
                 )
                 .await;
+            }
+
+            AppCommand::SendChatMessage { run_id, .. }
+            | AppCommand::EndChat { run_id }
+            | AppCommand::ApprovePlan { run_id }
+            | AppCommand::RejectPlan { run_id, .. } => {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "CHAT_MODE_NOT_IMPLEMENTED".into(),
+                        message: format!("Chat mode command for run {run_id} is not implemented yet"),
+                    })
+                    .await;
             }
 
             AppCommand::CancelRun { run_id, reason } => {
@@ -1750,6 +1763,7 @@ impl Dispatcher {
             branch: branch_name.clone(),
             mode: mode.clone(),
             autonomy,
+            kind: RunKind::OneShot,
             state: RunState::Preparing,
             prompt: prompt.clone(),
             provided_files: vec![],
@@ -2134,6 +2148,7 @@ impl Dispatcher {
                                             branch: branch_name_clone.clone(),
                                             mode,
                                             autonomy: autonomy_clone,
+                                            kind: RunKind::OneShot,
                                             state: RunState::Completed { exit_code },
                                             prompt,
                                             provided_files: vec![],

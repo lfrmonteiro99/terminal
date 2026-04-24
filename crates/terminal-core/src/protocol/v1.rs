@@ -2,7 +2,7 @@
 use crate::models::{
     AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
     FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot,
-    RestorableTerminalSession, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
+    RestorableTerminalSession, RunKind, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
     SshConfig, StashEntry, TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,9 @@ pub enum AppCommand {
         /// client omits the field — keeps legacy requests working).
         #[serde(default)]
         autonomy: AutonomyLevel,
+        /// OneShot (default) or Chat.
+        #[serde(default)]
+        kind: RunKind,
     },
     CancelRun {
         run_id: Uuid,
@@ -72,6 +75,22 @@ pub enum AppCommand {
         prompt: String,
         mode: RunMode,
         stash_message: String,
+    },
+
+    // Chat mode
+    SendChatMessage {
+        run_id: Uuid,
+        prompt: String,
+    },
+    EndChat {
+        run_id: Uuid,
+    },
+    ApprovePlan {
+        run_id: Uuid,
+    },
+    RejectPlan {
+        run_id: Uuid,
+        feedback: String,
     },
 
     // Stash mutations (M4)
@@ -270,6 +289,15 @@ pub enum AppEvent {
         run_id: Uuid,
         reason: String,
         suggestion: String,
+    },
+    /// Chat-only: a turn finished while the process remains alive.
+    ChatTurnEnded {
+        run_id: Uuid,
+    },
+    /// Plan-mode chat: Claude proposed a plan that needs approval.
+    PlanProposed {
+        run_id: Uuid,
+        plan: String,
     },
 
     // Git results (Phase 2)
@@ -589,6 +617,7 @@ mod tests {
             mode: RunMode::Free,
             skip_dirty_check: false,
             autonomy: AutonomyLevel::ReviewPlan,
+            kind: RunKind::OneShot,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"autonomy\":\"ReviewPlan\""));
@@ -618,6 +647,83 @@ mod tests {
                 assert!(!skip_dirty_check);
             }
             _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn start_run_without_kind_defaults_to_oneshot() {
+        let legacy_json = serde_json::json!({
+            "type": "StartRun",
+            "session_id": Uuid::new_v4(),
+            "prompt": "hi",
+            "mode": "Free",
+        })
+        .to_string();
+
+        let cmd: AppCommand = serde_json::from_str(&legacy_json).unwrap();
+        match cmd {
+            AppCommand::StartRun { kind, .. } => assert_eq!(kind, RunKind::OneShot),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn start_run_with_kind_chat_roundtrip() {
+        let cmd = AppCommand::StartRun {
+            session_id: Uuid::new_v4(),
+            prompt: "talk".into(),
+            mode: RunMode::Free,
+            skip_dirty_check: false,
+            autonomy: AutonomyLevel::Autonomous,
+            kind: RunKind::Chat,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"kind\":\"Chat\""));
+        let back: AppCommand = serde_json::from_str(&json).unwrap();
+        match back {
+            AppCommand::StartRun { kind, .. } => assert_eq!(kind, RunKind::Chat),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn chat_commands_roundtrip() {
+        let run_id = Uuid::new_v4();
+        let commands = vec![
+            AppCommand::SendChatMessage {
+                run_id,
+                prompt: "continue".into(),
+            },
+            AppCommand::EndChat { run_id },
+            AppCommand::ApprovePlan { run_id },
+            AppCommand::RejectPlan {
+                run_id,
+                feedback: "revise the approach".into(),
+            },
+        ];
+
+        for cmd in commands {
+            let json = serde_json::to_string(&cmd).unwrap();
+            let back: AppCommand = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn chat_events_roundtrip() {
+        let run_id = Uuid::new_v4();
+        let events = vec![
+            AppEvent::ChatTurnEnded { run_id },
+            AppEvent::PlanProposed {
+                run_id,
+                plan: "do it carefully".into(),
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: AppEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
         }
     }
 
@@ -1080,6 +1186,7 @@ mod tests {
                 mode: RunMode::Free,
                 skip_dirty_check: false,
                 autonomy: AutonomyLevel::default(),
+                kind: RunKind::OneShot,
             },
             AppCommand::CancelRun { run_id: uuid(), reason: "user".into() },
             AppCommand::GetRunStatus { run_id: uuid() },
@@ -1098,6 +1205,10 @@ mod tests {
                 mode: RunMode::Free,
                 stash_message: "m".into(),
             },
+            AppCommand::SendChatMessage { run_id: uuid(), prompt: "next".into() },
+            AppCommand::EndChat { run_id: uuid() },
+            AppCommand::ApprovePlan { run_id: uuid() },
+            AppCommand::RejectPlan { run_id: uuid(), feedback: "revise".into() },
             AppCommand::ListBranches,
             AppCommand::ListDirectory { path: path() },
             AppCommand::GetChangedFiles { mode: "working".into(), run_id: None },
@@ -1183,6 +1294,10 @@ mod tests {
                 AppCommand::GetStashDiff { .. } => "GetStashDiff",
                 AppCommand::CheckDirtyState => "CheckDirtyState",
                 AppCommand::StashAndRun { .. } => "StashAndRun",
+                AppCommand::SendChatMessage { .. } => "SendChatMessage",
+                AppCommand::EndChat { .. } => "EndChat",
+                AppCommand::ApprovePlan { .. } => "ApprovePlan",
+                AppCommand::RejectPlan { .. } => "RejectPlan",
                 AppCommand::ListBranches => "ListBranches",
                 AppCommand::ListDirectory { .. } => "ListDirectory",
                 AppCommand::GetChangedFiles { .. } => "GetChangedFiles",
@@ -1305,6 +1420,8 @@ mod tests {
                 reason: "r".into(),
                 suggestion: "s".into(),
             },
+            AppEvent::ChatTurnEnded { run_id: uuid() },
+            AppEvent::PlanProposed { run_id: uuid(), plan: "plan".into() },
             AppEvent::RunDiff {
                 run_id: uuid(),
                 stat: diff_stat(),
@@ -1469,6 +1586,8 @@ mod tests {
                 AppEvent::RunToolResult { .. } => "RunToolResult",
                 AppEvent::RunMetrics { .. } => "RunMetrics",
                 AppEvent::RunPreflightFailed { .. } => "RunPreflightFailed",
+                AppEvent::ChatTurnEnded { .. } => "ChatTurnEnded",
+                AppEvent::PlanProposed { .. } => "PlanProposed",
                 AppEvent::RunDiff { .. } => "RunDiff",
                 AppEvent::RunReverted { .. } => "RunReverted",
                 AppEvent::RunMerged { .. } => "RunMerged",

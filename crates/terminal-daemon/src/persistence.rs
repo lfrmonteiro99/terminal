@@ -563,6 +563,7 @@ mod tests {
             branch: "llm/test".into(),
             mode: RunMode::Free,
             autonomy: terminal_core::models::AutonomyLevel::default(),
+            kind: terminal_core::models::RunKind::OneShot,
             state,
             prompt: "do something".into(),
             provided_files: vec![],

@@ -145,6 +145,12 @@ pub enum RunState {
         question: String,
         context: Vec<String>,
     },
+    /// Chat-only: a completed turn is waiting for the next user message.
+    AwaitingUserInput,
+    /// Plan-mode chat: a proposed plan is waiting for approval or feedback.
+    AwaitingPlanApproval {
+        plan: String,
+    },
     Completed {
         exit_code: i32,
     },
@@ -196,6 +202,13 @@ pub enum AutonomyLevel {
     ReviewPlan,
 }
 
+/// How the run is driven.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum RunKind {
+    #[default]
+    OneShot,
+    Chat,
+}
 // --- Output ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +239,9 @@ pub struct Run {
     /// User-facing autonomy choice. Absent in old persisted runs → Autonomous.
     #[serde(default)]
     pub autonomy: AutonomyLevel,
+    /// Run driving strategy. Defaults to OneShot for old persisted runs.
+    #[serde(default)]
+    pub kind: RunKind,
     pub state: RunState,
     pub prompt: String,
     pub provided_files: Vec<PathBuf>,
@@ -483,13 +499,78 @@ impl RunState {
 
     /// Returns true if this state represents an active (non-terminal) state.
     pub fn is_active(&self) -> bool {
-        !self.is_terminal()
+        matches!(
+            self,
+            RunState::Preparing
+                | RunState::Running
+                | RunState::Pausing { .. }
+                | RunState::WaitingInput { .. }
+                | RunState::AwaitingUserInput
+                | RunState::AwaitingPlanApproval { .. }
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_kind_defaults_to_oneshot() {
+        let kind: RunKind = Default::default();
+        assert_eq!(kind, RunKind::OneShot);
+    }
+
+    #[test]
+    fn run_kind_serde_roundtrip() {
+        let json = serde_json::to_string(&RunKind::Chat).unwrap();
+        assert_eq!(json, "\"Chat\"");
+        let back: RunKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, RunKind::Chat);
+    }
+
+    #[test]
+    fn legacy_run_without_kind_defaults_to_oneshot() {
+        let run_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let json = format!(
+            r#"{{
+                "id": "{run_id}",
+                "session_id": "{session_id}",
+                "branch": "main",
+                "mode": "Free",
+                "autonomy": "Autonomous",
+                "state": "Running",
+                "prompt": "hello",
+                "provided_files": [],
+                "modified_files": [],
+                "expanded_files": [],
+                "output_path": "/tmp/run.log",
+                "output_line_count": 0,
+                "output_byte_count": 0,
+                "started_at": "2026-01-01T00:00:00Z",
+                "ended_at": null,
+                "last_modified": "2026-01-01T00:00:00Z"
+            }}"#
+        );
+
+        let run: Run = serde_json::from_str(&json).unwrap();
+        assert_eq!(run.kind, RunKind::OneShot);
+    }
+
+    #[test]
+    fn awaiting_user_input_is_active_not_terminal() {
+        let state = RunState::AwaitingUserInput;
+        assert!(state.is_active());
+        assert!(!state.is_terminal());
+    }
+
+    #[test]
+    fn awaiting_plan_approval_is_active_not_terminal() {
+        let state = RunState::AwaitingPlanApproval { plan: "test".into() };
+        assert!(state.is_active());
+        assert!(!state.is_terminal());
+    }
 
     #[test]
     fn run_state_terminal_states() {
