@@ -117,6 +117,49 @@ fn permission_mode_for(mode: &RunMode, autonomy: AutonomyLevel) -> PermissionMod
     }
 }
 
+fn claude_args_for(
+    prompt: &str,
+    mode: &RunMode,
+    autonomy: AutonomyLevel,
+    config: &DaemonConfig,
+) -> Vec<String> {
+    let perm = permission_mode_for(mode, autonomy);
+    let mut args = vec![
+        "-p".to_string(),
+        prompt.to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--permission-mode".to_string(),
+        perm.cli_value().to_string(),
+    ];
+
+    if matches!(perm, PermissionMode::BypassAll) {
+        args.push("--dangerously-skip-permissions".to_string());
+    }
+
+    if let Some(path) = &config.mcp_config_path {
+        args.push("--mcp-config".to_string());
+        args.push(path.to_string_lossy().into_owned());
+    }
+
+    if let Some(tools) = &config.allowed_tools {
+        if !tools.is_empty() {
+            args.push("--allowed-tools".to_string());
+            args.push(tools.join(","));
+        }
+    }
+
+    if let Some(tools) = &config.disallowed_tools {
+        if !tools.is_empty() {
+            args.push("--disallowed-tools".to_string());
+            args.push(tools.join(","));
+        }
+    }
+
+    args
+}
+
 pub struct ClaudeRunner {
     config: DaemonConfig,
 }
@@ -194,25 +237,10 @@ impl ClaudeRunner {
             return Err("Cannot start run with empty prompt".into());
         }
 
-        let perm = permission_mode_for(mode, autonomy);
-
-        // Headless JSONL stream. `--verbose` is required alongside
-        // `--output-format stream-json` for Claude to emit every event.
+        // Headless JSONL stream. The argument builder is unit-tested so new
+        // Claude flags stay visible without spawning the real binary.
         let mut cmd = Command::new(&self.config.claude_binary);
-        cmd.arg("-p")
-            .arg(prompt)
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose")
-            .arg("--permission-mode")
-            .arg(perm.cli_value());
-
-        // For Free mode, also pass the explicit bypass flag. Some Claude Code
-        // versions require it in addition to `--permission-mode
-        // bypassPermissions` to actually engage.
-        if matches!(perm, PermissionMode::BypassAll) {
-            cmd.arg("--dangerously-skip-permissions");
-        }
+        cmd.args(claude_args_for(prompt, mode, autonomy, &self.config));
 
         let mut child = cmd
             .current_dir(working_dir)
@@ -409,6 +437,28 @@ mod tests {
         assert_eq!(PermissionMode::AcceptEdits.cli_value(), "acceptEdits");
         assert_eq!(PermissionMode::Plan.cli_value(), "plan");
         assert_eq!(PermissionMode::Default.cli_value(), "default");
+    }
+
+    #[test]
+    fn claude_args_include_mcp_and_tool_filters_when_configured() {
+        let cfg = DaemonConfig {
+            mcp_config_path: Some(PathBuf::from("/tmp/mcp.json")),
+            allowed_tools: Some(vec!["mcp__github__search".into(), "Read".into()]),
+            disallowed_tools: Some(vec!["Bash".into()]),
+            ..Default::default()
+        };
+
+        let args = claude_args_for("ship it", &RunMode::Free, AutonomyLevel::Autonomous, &cfg);
+
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--mcp-config", "/tmp/mcp.json"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--allowed-tools", "mcp__github__search,Read"])
+        );
+        assert!(args.windows(2).any(|w| w == ["--disallowed-tools", "Bash"]));
     }
 
     #[tokio::test]

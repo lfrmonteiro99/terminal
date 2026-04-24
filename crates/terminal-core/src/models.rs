@@ -23,6 +23,12 @@ pub struct Workspace {
     pub mode: WorkspaceMode,
     pub layout: PaneLayout,
     pub linked_session_id: Option<Uuid>,
+    #[serde(default)]
+    pub mcp_config: Option<PathBuf>,
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub last_active_at: DateTime<Utc>,
 }
@@ -641,6 +647,9 @@ mod tests {
             mode: WorkspaceMode::AiSession,
             layout: PaneLayout::default_ai_session(),
             linked_session_id: None,
+            mcp_config: None,
+            allowed_tools: None,
+            disallowed_tools: None,
             created_at: chrono::Utc::now(),
             last_active_at: chrono::Utc::now(),
         };
@@ -648,6 +657,29 @@ mod tests {
         let deserialized: Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.name, "My Project");
         assert_eq!(deserialized.mode, WorkspaceMode::AiSession);
+    }
+
+    #[test]
+    fn workspace_mcp_fields_default_when_missing_from_json() {
+        let json = format!(
+            r#"{{
+                "id": "{}",
+                "name": "Repo",
+                "root_path": "/repo",
+                "mode": "AiSession",
+                "layout": {{ "Single": {{ "id": "main", "kind": "AiRun", "resource_id": null }} }},
+                "linked_session_id": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_active_at": "2026-01-01T00:00:00Z"
+            }}"#,
+            Uuid::new_v4()
+        );
+
+        let ws: Workspace = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(ws.mcp_config, None);
+        assert_eq!(ws.allowed_tools, None);
+        assert_eq!(ws.disallowed_tools, None);
     }
 
     #[test]
@@ -659,6 +691,9 @@ mod tests {
             mode: WorkspaceMode::Terminal,
             layout: PaneLayout::default_terminal(),
             linked_session_id: None,
+            mcp_config: None,
+            allowed_tools: None,
+            disallowed_tools: None,
             created_at: chrono::Utc::now(),
             last_active_at: chrono::Utc::now(),
         };

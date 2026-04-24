@@ -28,6 +28,12 @@ pub struct DaemonConfig {
     pub data_dir: PathBuf,
     /// Path to claude CLI binary
     pub claude_binary: String,
+    /// Optional Claude MCP config file forwarded with --mcp-config
+    pub mcp_config_path: Option<PathBuf>,
+    /// Optional global Claude tool allowlist forwarded with --allowed-tools
+    pub allowed_tools: Option<Vec<String>>,
+    /// Optional global Claude tool denylist forwarded with --disallowed-tools
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 impl Default for DaemonConfig {
@@ -52,8 +58,23 @@ impl Default for DaemonConfig {
                 .unwrap_or_else(|_| home.join(".terminal-daemon")),
             claude_binary: std::env::var("TERMINAL_CLAUDE_BINARY")
                 .unwrap_or_else(|_| "claude".into()),
+            mcp_config_path: std::env::var("TERMINAL_MCP_CONFIG").ok().map(PathBuf::from),
+            allowed_tools: parse_csv_env("TERMINAL_ALLOWED_TOOLS"),
+            disallowed_tools: parse_csv_env("TERMINAL_DISALLOWED_TOOLS"),
         }
     }
+}
+
+fn parse_csv_env(name: &str) -> Option<Vec<String>> {
+    std::env::var(name).ok().and_then(|value| {
+        let items: Vec<String> = value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        if items.is_empty() { None } else { Some(items) }
+    })
 }
 
 #[cfg(test)]
@@ -71,7 +92,6 @@ mod tests {
         assert_eq!(config.claude_binary, "claude");
     }
 
-
     #[test]
     fn heartbeat_timeout_can_be_configured_from_env() {
         std::env::set_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS", "7");
@@ -79,6 +99,15 @@ mod tests {
         std::env::remove_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS");
 
         assert_eq!(config.heartbeat_timeout_secs, 7);
+    }
+
+    #[test]
+    fn mcp_config_path_can_be_configured_from_env() {
+        std::env::set_var("TERMINAL_MCP_CONFIG", "/tmp/mcp.json");
+        let config = DaemonConfig::default();
+        std::env::remove_var("TERMINAL_MCP_CONFIG");
+
+        assert_eq!(config.mcp_config_path, Some(PathBuf::from("/tmp/mcp.json")));
     }
 
     #[test]

@@ -45,6 +45,9 @@ impl WorkspaceDispatcher {
                     mode: mode.clone(),
                     layout,
                     linked_session_id: None,
+                    mcp_config: None,
+                    allowed_tools: None,
+                    disallowed_tools: None,
                     created_at: now,
                     last_active_at: now,
                 };

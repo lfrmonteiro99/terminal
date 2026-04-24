@@ -2,7 +2,7 @@
 
 A desktop application for managing AI coding sessions with git-integrated sandboxing. Each AI run executes in an isolated git worktree, keeping the user's working directory untouched. Sessions, runs, and worktree metadata are persisted to disk with atomic writes and crash recovery.
 
-> **Docs**: [`architecture`](./docs/architecture.md) · [`git-flow`](./docs/git-flow.md) · [`next-steps`](./docs/next-steps.md) · [`bin/cc` helper](./docs/bin-cc.md)
+> **Docs**: [`architecture`](./docs/architecture.md) · [`git-flow`](./docs/git-flow.md) · [`next-steps`](./docs/next-steps.md) · [`bin/cc` helper](./docs/bin-cc.md) · [`mcp`](./docs/mcp.md)
 
 ## Architecture
 
