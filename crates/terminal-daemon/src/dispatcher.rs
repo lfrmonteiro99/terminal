@@ -2427,4 +2427,17 @@ mod tests {
         let key = concurrency_key_for_run(&root, Some(&wt));
         assert_eq!(key, wt);
     }
+    #[test]
+    fn run_supervisor_treats_missing_result_as_failed() {
+        let source = include_str!("dispatcher.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap();
+
+        assert!(production_source.contains("let mut result_event_seen = false"));
+        assert!(production_source.contains("Some(RunnerEvent::ResultSeen)"));
+        assert!(production_source.contains("if !result_event_seen"));
+        assert!(production_source.contains("AppEvent::RunFailed"));
+        assert!(production_source.contains("stream ended without result event"));
+        assert!(production_source.contains("phase: FailPhase::Execution"));
+    }
+
 }
