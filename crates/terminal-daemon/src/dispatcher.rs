@@ -502,7 +502,9 @@ impl Dispatcher {
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "CHAT_MODE_NOT_IMPLEMENTED".into(),
-                        message: format!("Chat mode command for run {run_id} is not implemented yet"),
+                        message: format!(
+                            "Chat mode command for run {run_id} is not implemented yet"
+                        ),
                     })
                     .await;
             }
@@ -2000,6 +2002,11 @@ impl Dispatcher {
                                         };
                                         broadcast_ws(&tool_evt);
                                     }
+                                    Some(RunnerEvent::ExitPlanMode { plan, .. }) => {
+                                        let state = RunState::AwaitingPlanApproval { plan: plan.clone() };
+                                        broadcast_ws(&AppEvent::RunStateChanged { run_id, new_state: state });
+                                        broadcast_ws(&AppEvent::PlanProposed { run_id, plan });
+                                    }
                                     Some(RunnerEvent::ToolResult { tool_use_id, is_error, preview }) => {
                                         line_number += 1;
                                         let tag = if is_error { "error" } else { "ok" };
@@ -2454,5 +2461,4 @@ mod tests {
         assert!(production_source.contains("stream ended without result event"));
         assert!(production_source.contains("phase: FailPhase::Execution"));
     }
-
 }

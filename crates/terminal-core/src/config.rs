@@ -73,16 +73,61 @@ fn parse_csv_env(name: &str) -> Option<Vec<String>> {
             .filter(|item| !item.is_empty())
             .map(ToOwned::to_owned)
             .collect();
-        if items.is_empty() { None } else { Some(items) }
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
+    const CONFIG_ENV_KEYS: &[&str] = &[
+        "TERMINAL_HOST",
+        "TERMINAL_PORT",
+        "TERMINAL_HEARTBEAT_TIMEOUT_SECS",
+        "TERMINAL_DATA_DIR",
+        "TERMINAL_CLAUDE_BINARY",
+        "TERMINAL_MCP_CONFIG",
+        "TERMINAL_ALLOWED_TOOLS",
+        "TERMINAL_DISALLOWED_TOOLS",
+    ];
+
+    struct EnvSnapshot(Vec<(String, Option<String>)>);
+
+    impl EnvSnapshot {
+        fn clear_terminal_env() -> Self {
+            let snapshot = CONFIG_ENV_KEYS
+                .iter()
+                .map(|&key| (key.to_string(), std::env::var(key).ok()))
+                .collect();
+            for key in CONFIG_ENV_KEYS {
+                std::env::remove_var(key);
+            }
+            Self(snapshot)
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn default_config_values() {
+        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let _env = EnvSnapshot::clear_terminal_env();
         let config = DaemonConfig::default();
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 0);
@@ -94,6 +139,8 @@ mod tests {
 
     #[test]
     fn heartbeat_timeout_can_be_configured_from_env() {
+        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let _env = EnvSnapshot::clear_terminal_env();
         std::env::set_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS", "7");
         let config = DaemonConfig::default();
         std::env::remove_var("TERMINAL_HEARTBEAT_TIMEOUT_SECS");
@@ -103,6 +150,8 @@ mod tests {
 
     #[test]
     fn mcp_config_path_can_be_configured_from_env() {
+        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let _env = EnvSnapshot::clear_terminal_env();
         std::env::set_var("TERMINAL_MCP_CONFIG", "/tmp/mcp.json");
         let config = DaemonConfig::default();
         std::env::remove_var("TERMINAL_MCP_CONFIG");
@@ -112,6 +161,8 @@ mod tests {
 
     #[test]
     fn config_serialization_roundtrip() {
+        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let _env = EnvSnapshot::clear_terminal_env();
         let config = DaemonConfig::default();
         let json = serde_json::to_string_pretty(&config).unwrap();
         let deserialized: DaemonConfig = serde_json::from_str(&json).unwrap();
