@@ -143,7 +143,8 @@ describe('workspaceReducer', () => {
   });
 
   it('SET_RUN_METRICS', () => {
-    const next = run(base(), {
+    const withActiveRun = run(base(), { type: 'SET_ACTIVE_RUN', runId: 'r1' });
+    const next = run(withActiveRun, {
       type: 'SET_RUN_METRICS',
       runId: 'r1',
       metrics: { num_turns: 1, cost_usd: 0.1, input_tokens: 10, output_tokens: 20 },

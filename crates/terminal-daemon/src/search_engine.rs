@@ -9,6 +9,7 @@ use tokio::process::Command;
 /// Search for `query` across files under `root` using grep.
 ///
 /// Falls back gracefully: `rg` if available, otherwise `grep -rn`.
+#[allow(clippy::too_many_arguments)]
 pub async fn search_files(
     root: &Path,
     query: &str,
@@ -30,9 +31,27 @@ pub async fn search_files(
         .unwrap_or(false);
 
     let output = if rg_available {
-        run_ripgrep(root, query, is_regex, case_sensitive, include_glob, exclude_glob, context_lines).await?
+        run_ripgrep(
+            root,
+            query,
+            is_regex,
+            case_sensitive,
+            include_glob,
+            exclude_glob,
+            context_lines,
+        )
+        .await?
     } else {
-        run_grep(root, query, is_regex, case_sensitive, include_glob, exclude_glob, context_lines).await?
+        run_grep(
+            root,
+            query,
+            is_regex,
+            case_sensitive,
+            include_glob,
+            exclude_glob,
+            context_lines,
+        )
+        .await?
     };
 
     let duration_ms = start.elapsed().as_millis() as u64;
@@ -141,10 +160,7 @@ async fn run_grep(
 ///   - `--`               — group separator
 ///
 /// We group context lines with the match that follows them.
-fn parse_grep_output(
-    raw: &str,
-    max_results: usize,
-) -> (Vec<SearchMatch>, usize, usize, bool) {
+fn parse_grep_output(raw: &str, max_results: usize) -> (Vec<SearchMatch>, usize, usize, bool) {
     // pending_context accumulates lines that precede the next match
     let mut pending_context: Vec<String> = Vec::new();
     // partial_match holds a match we have emitted but may still receive "after" context for

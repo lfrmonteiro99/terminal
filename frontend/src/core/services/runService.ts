@@ -3,6 +3,14 @@
 import type { AutonomyLevel, RunMode } from '../../types/protocol';
 import type { CommandBus } from '../commands/commandBus';
 
+export interface RunServiceStartRunParams {
+  sessionId: string;
+  prompt: string;
+  mode: RunMode;
+  autonomy: AutonomyLevel;
+  skipDirtyCheck?: boolean;
+}
+
 export class RunService {
   private readonly bus: CommandBus;
 
@@ -10,7 +18,7 @@ export class RunService {
     this.bus = bus;
   }
 
-  startRun(params: { sessionId: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; skipDirtyCheck?: boolean }): void {
+  startRun(params: RunServiceStartRunParams): void {
     this.bus.dispatch({
       type: 'StartRun',
       session_id: params.sessionId,

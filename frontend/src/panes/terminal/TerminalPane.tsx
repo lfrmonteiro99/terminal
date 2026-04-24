@@ -274,7 +274,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
       clearTimeout(timer);
       window.removeEventListener('terminal-event', handler);
     };
-  }, [workspaceId, sessionState.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspaceId, sessionState.tag]);
 
   // Step 3: Create a PTY session when component mounts — uses FIFO queue for reliable matching
   useEffect(() => {

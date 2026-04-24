@@ -1,7 +1,7 @@
 //! RAII guards for daemon-wide concurrency maps (issue #103, Minor3b).
 //!
 //! `do_start_run` registers the run in two shared maps (concurrency by
-//! project root, active runs by session uuid) and used to remove entries by
+//! actual working directory path, active runs by session uuid) and used to remove entries by
 //! hand on every early-return path. That is fragile — missing a cleanup
 //! site leaks the entry forever and permanently blocks the repo.
 //!
@@ -85,7 +85,7 @@ where
     }
 }
 
-/// Guard for the per-project-root concurrency map
+/// Guard for the per-working-directory concurrency map
 /// (`DaemonContext::concurrency`).
 pub type ConcurrencyGuard = MapKeyGuard<PathBuf, Uuid>;
 

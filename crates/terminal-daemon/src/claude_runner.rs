@@ -141,8 +141,7 @@ impl ClaudeRunner {
 
         match result {
             Ok(out) if out.status.success() => {
-                let version =
-                    String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 Ok(PreflightInfo { version })
             }
             Ok(out) => {
@@ -152,9 +151,14 @@ impl ClaudeRunner {
                         "`{} --version` exited with {}: {}",
                         binary,
                         out.status.code().unwrap_or(-1),
-                        if stderr.is_empty() { "no output".into() } else { stderr }
+                        if stderr.is_empty() {
+                            "no output".into()
+                        } else {
+                            stderr
+                        }
                     ),
-                    suggestion: "verify Claude Code is installed and authenticated: `claude doctor`".into(),
+                    suggestion:
+                        "verify Claude Code is installed and authenticated: `claude doctor`".into(),
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(PreflightFailure {
@@ -254,12 +258,24 @@ impl ClaudeRunner {
                                     .await;
                             }
                         }
-                        ParseEvent::ToolUse { id, name, input_preview } => {
+                        ParseEvent::ToolUse {
+                            id,
+                            name,
+                            input_preview,
+                        } => {
                             let _ = event_tx_stdout
-                                .send(RunnerEvent::ToolUse { id, name, input_preview })
+                                .send(RunnerEvent::ToolUse {
+                                    id,
+                                    name,
+                                    input_preview,
+                                })
                                 .await;
                         }
-                        ParseEvent::ToolResult { tool_use_id, is_error, preview } => {
+                        ParseEvent::ToolResult {
+                            tool_use_id,
+                            is_error,
+                            preview,
+                        } => {
                             let _ = event_tx_stdout
                                 .send(RunnerEvent::ToolResult {
                                     tool_use_id,
@@ -296,9 +312,7 @@ impl ClaudeRunner {
                             if !success {
                                 let reason = error_text
                                     .unwrap_or_else(|| format!("claude result: {subtype}"));
-                                let _ = event_tx_stdout
-                                    .send(RunnerEvent::StderrLine(reason))
-                                    .await;
+                                let _ = event_tx_stdout.send(RunnerEvent::StderrLine(reason)).await;
                             }
                         }
                         ParseEvent::RawLine(l) => {
@@ -353,7 +367,10 @@ pub struct PreflightFailure {
 
 /// Get the output file path for a given run.
 pub fn output_file_path(data_dir: &Path, run_id: &Uuid) -> PathBuf {
-    data_dir.join("runs").join(run_id.to_string()).join("output.jsonl")
+    data_dir
+        .join("runs")
+        .join(run_id.to_string())
+        .join("output.jsonl")
 }
 
 #[cfg(test)]
@@ -396,8 +413,10 @@ mod tests {
 
     #[tokio::test]
     async fn preflight_reports_missing_binary() {
-        let mut cfg = DaemonConfig::default();
-        cfg.claude_binary = "definitely_not_a_real_binary_xyz_123".into();
+        let cfg = DaemonConfig {
+            claude_binary: "definitely_not_a_real_binary_xyz_123".into(),
+            ..Default::default()
+        };
         let runner = ClaudeRunner::new(cfg);
         let err = runner.preflight().await.unwrap_err();
         assert!(err.reason.contains("not found"));
@@ -406,22 +425,38 @@ mod tests {
 
     #[test]
     fn empty_prompt_rejected() {
-        let mut cfg = DaemonConfig::default();
-        cfg.claude_binary = "echo".into();
+        let cfg = DaemonConfig {
+            claude_binary: "echo".into(),
+            ..Default::default()
+        };
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
+            .spawn(
+                Uuid::new_v4(),
+                "",
+                &RunMode::Free,
+                AutonomyLevel::Autonomous,
+                Path::new("/tmp"),
+            )
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
     }
 
     #[test]
     fn whitespace_only_prompt_rejected() {
-        let mut cfg = DaemonConfig::default();
-        cfg.claude_binary = "echo".into();
+        let cfg = DaemonConfig {
+            claude_binary: "echo".into(),
+            ..Default::default()
+        };
         let runner = ClaudeRunner::new(cfg);
         let err = runner
-            .spawn(Uuid::new_v4(), "   \n\t  ", &RunMode::Free, AutonomyLevel::Autonomous, Path::new("/tmp"))
+            .spawn(
+                Uuid::new_v4(),
+                "   \n\t  ",
+                &RunMode::Free,
+                AutonomyLevel::Autonomous,
+                Path::new("/tmp"),
+            )
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
     }

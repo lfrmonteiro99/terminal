@@ -3,6 +3,7 @@
 // Supports interactive programs (vim, htop, less), signal delivery (Ctrl+C),
 // and terminal resize via TIOCSWINSZ.
 
+use crate::safety::broadcast_event;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
@@ -14,7 +15,8 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{info, warn};
 use uuid::Uuid;
-use crate::safety::broadcast_event;
+
+type WorkspaceChannels = Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>;
 
 /// A live PTY session.
 pub struct PtySession {
@@ -32,8 +34,7 @@ pub struct PtyManager {
     event_tx: broadcast::Sender<String>,
     /// Shared workspace-scoped broadcast channels (M5c, issue #101). Kept as
     /// an `Option` so tests that don't wire this can still run.
-    workspace_channels:
-        Option<Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
+    workspace_channels: Option<WorkspaceChannels>,
 }
 
 impl PtyManager {
@@ -48,10 +49,7 @@ impl PtyManager {
     /// Attach the shared workspace broadcast channel map. When set, terminal
     /// events route to the owning workspace only, with fallback to the global
     /// channel if the workspace has no subscribers.
-    pub fn with_workspace_channels(
-        mut self,
-        channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
-    ) -> Self {
+    pub fn with_workspace_channels(mut self, channels: WorkspaceChannels) -> Self {
         self.workspace_channels = Some(channels);
         self
     }
@@ -68,7 +66,7 @@ impl PtyManager {
 
     async fn emit_via(
         global: &broadcast::Sender<String>,
-        channels: Option<&Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
+        channels: Option<&WorkspaceChannels>,
         workspace_id: Uuid,
         event: &AppEvent,
     ) {
@@ -153,13 +151,12 @@ impl PtyManager {
             (path, vec!["-i".to_string()], false, None)
         };
 
-        let work_dir = cwd.unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
-        });
+        let work_dir =
+            cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
 
         // Open PTY pair. openpty returns master + slave OwnedFds.
-        let pty_result = nix::pty::openpty(None, None)
-            .map_err(|e| format!("openpty failed: {}", e))?;
+        let pty_result =
+            nix::pty::openpty(None, None).map_err(|e| format!("openpty failed: {}", e))?;
 
         let master_fd = pty_result.master;
         let slave_fd = pty_result.slave;
@@ -225,7 +222,9 @@ impl PtyManager {
             });
         }
 
-        let child = cmd.spawn().map_err(|e| format!("Failed to spawn shell: {}", e))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
         // Drop slave in parent — parent only ever touches master.
         drop(slave_fd);
@@ -331,7 +330,10 @@ impl PtyManager {
         };
         self.emit(workspace_id, &created_event).await;
 
-        info!("PTY session {} created for workspace {}", session_id, workspace_id);
+        info!(
+            "PTY session {} created for workspace {}",
+            session_id, workspace_id
+        );
         Ok(session_id)
     }
 
@@ -355,8 +357,7 @@ impl PtyManager {
         workspace_id: Uuid,
         mut reader: impl AsyncReadExt + Unpin,
         event_tx: broadcast::Sender<String>,
-        workspace_channels:
-            Option<Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>>,
+        workspace_channels: Option<WorkspaceChannels>,
     ) {
         let mut buf = vec![0u8; 4096];
         // UTF-8 codepoints are 1–4 bytes. A codepoint can straddle the read
@@ -398,13 +399,8 @@ impl PtyManager {
                         continue;
                     }
                     let event = AppEvent::TerminalOutput { session_id, data };
-                    Self::emit_via(
-                        &event_tx,
-                        workspace_channels.as_ref(),
-                        workspace_id,
-                        &event,
-                    )
-                    .await;
+                    Self::emit_via(&event_tx, workspace_channels.as_ref(), workspace_id, &event)
+                        .await;
                 }
             }
         }
@@ -468,8 +464,11 @@ impl PtyManager {
             // The stdout_reader task will exit when it sees EOF/error.
             // We do NOT call nix::libc::close() here — the Tokio Files own the fds.
             let _ = session.close_tx.send(()).await;
-            self.emit(workspace_id, &AppEvent::TerminalSessionClosed { session_id })
-                .await;
+            self.emit(
+                workspace_id,
+                &AppEvent::TerminalSessionClosed { session_id },
+            )
+            .await;
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -605,14 +604,16 @@ mod tests {
         let manager = PtyManager::new(tx);
         let workspace_id = Uuid::new_v4();
 
-        let result = manager.create_session(
-            workspace_id,
-            "pane-1".to_string(),
-            Some("/bin/sh".to_string()),
-            Some(PathBuf::from("/tmp")),
-            None,
-            None,
-        ).await;
+        let result = manager
+            .create_session(
+                workspace_id,
+                "pane-1".to_string(),
+                Some("/bin/sh".to_string()),
+                Some(PathBuf::from("/tmp")),
+                None,
+                None,
+            )
+            .await;
 
         assert!(result.is_ok(), "create_session failed: {:?}", result.err());
         let session_id = result.unwrap();

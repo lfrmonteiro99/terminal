@@ -132,11 +132,23 @@ impl PaneLayout {
 pub enum RunState {
     Preparing,
     Running,
-    Pausing { reason: PauseReason },
-    WaitingInput { question: String, context: Vec<String> },
-    Completed { exit_code: i32 },
-    Failed { error: String, phase: FailPhase },
-    Cancelled { reason: String },
+    Pausing {
+        reason: PauseReason,
+    },
+    WaitingInput {
+        question: String,
+        context: Vec<String>,
+    },
+    Completed {
+        exit_code: i32,
+    },
+    Failed {
+        error: String,
+        phase: FailPhase,
+    },
+    Cancelled {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -171,16 +183,11 @@ pub enum RunMode {
 ///   does not execute any edit/write/bash tools. The UI surfaces an
 ///   "Approve & execute" button that fires a fresh autonomous run with the
 ///   same prompt. Maps to `--permission-mode plan`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum AutonomyLevel {
+    #[default]
     Autonomous,
     ReviewPlan,
-}
-
-impl Default for AutonomyLevel {
-    fn default() -> Self {
-        AutonomyLevel::Autonomous
-    }
 }
 
 // --- Output ---
@@ -605,7 +612,10 @@ mod tests {
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: WorktreeMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.branch_name, "llm/test");
-        assert_eq!(deserialized.repo_root.as_deref(), Some(std::path::Path::new("/tmp/project")));
+        assert_eq!(
+            deserialized.repo_root.as_deref(),
+            Some(std::path::Path::new("/tmp/project"))
+        );
     }
 
     #[test]

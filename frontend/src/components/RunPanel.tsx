@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import {
   Edit3,
   FileText,
@@ -13,6 +13,46 @@ import {
 } from 'lucide-react';
 import { useAppState } from '../context/AppContext';
 import type { ToolCall } from '../types/protocol';
+import { extractFileLineRefs } from './runPanelFileLinks';
+
+function openFileViewer(path: string): void {
+  window.dispatchEvent(new CustomEvent('open-file-viewer', { detail: { path } }));
+}
+
+function renderLineWithFileLinks(line: string): ReactNode {
+  const refs = extractFileLineRefs(line);
+  if (refs.length === 0) return line;
+
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  for (const ref of refs) {
+    if (ref.start > cursor) nodes.push(line.slice(cursor, ref.start));
+    nodes.push(
+      <button
+        key={`${ref.path}:${ref.line}:${ref.start}`}
+        onClick={() => openFileViewer(ref.path)}
+        style={{
+          border: 'none',
+          background: 'transparent',
+          padding: 0,
+          margin: 0,
+          color: 'var(--accent-primary)',
+          textDecoration: 'underline',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          fontSize: 'inherit',
+          lineHeight: 'inherit',
+        }}
+        title={`Open ${ref.path} (line ${ref.line})`}
+      >
+        {line.slice(ref.start, ref.end)}
+      </button>
+    );
+    cursor = ref.end;
+  }
+  if (cursor < line.length) nodes.push(line.slice(cursor));
+  return nodes;
+}
 
 /** Render a lucide icon for common Claude Code tool names. Rendered inline
  * (rather than assigning the component to a local `Icon`) so React's
@@ -281,7 +321,7 @@ export function RunPanel() {
               opacity: isStderr ? 0.95 : 1,
             }}
           >
-            {line}
+            {renderLineWithFileLinks(line)}
           </div>
         );
       })}
