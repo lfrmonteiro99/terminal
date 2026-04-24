@@ -254,3 +254,38 @@ fn derive_repo_root_from_worktree(worktree_path: &std::path::Path) -> Option<std
     }
     parent.parent().map(|p| p.to_path_buf())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    fn mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn standalone_files_are_owner_only_on_unix() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = DaemonConfig {
+            data_dir: tmp.path().to_path_buf(),
+            mode: DaemonMode::Standalone,
+            host: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+
+        let handle = start_server(config).await.unwrap();
+
+        assert_eq!(mode(tmp.path()), 0o700);
+        assert_eq!(mode(&tmp.path().join("auth_token")), 0o600);
+        assert_eq!(mode(&tmp.path().join("port")), 0o600);
+        for subdir in ["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+            assert_eq!(mode(&tmp.path().join(subdir)), 0o700, "{subdir}");
+        }
+
+        handle.shutdown();
+    }
+}
