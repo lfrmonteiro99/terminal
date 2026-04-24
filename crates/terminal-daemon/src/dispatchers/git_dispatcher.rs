@@ -1,8 +1,9 @@
 // Git domain dispatcher — extended git operations (M1-04, M5-03, M5-04, M5-05)
 
 use crate::daemon_context::DaemonContext;
+use std::path::PathBuf;
 use std::sync::Arc;
-use terminal_core::protocol::v1::{AppEvent, AppCommand};
+use terminal_core::protocol::v1::{AppCommand, AppEvent};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -15,26 +16,31 @@ impl GitDispatcher {
         Self { ctx }
     }
 
-    pub async fn handle(&self, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
-        // Every handler needs an active project root. Resolve once so the
-        // failure path is uniform: emit NO_ACTIVE_SESSION and return rather
-        // than silently dropping the command (which leaves the client
-        // waiting indefinitely for a reply event).
-        let root = match self.ctx.find_active_project_root().await {
-            Some(r) => r,
+    async fn require_project_root(
+        &self,
+        operation: &str,
+        reply_tx: &mpsc::Sender<AppEvent>,
+    ) -> Option<PathBuf> {
+        match self.ctx.find_active_project_root().await {
+            Some(root) => Some(root),
             None => {
                 let _ = reply_tx
-                    .send(AppEvent::Error {
-                        code: "NO_ACTIVE_SESSION".into(),
-                        message: "No active session to resolve project root".into(),
+                    .send(AppEvent::GitOperationFailed {
+                        operation: operation.into(),
+                        reason: "no active session".into(),
                     })
                     .await;
-                return;
+                None
             }
-        };
+        }
+    }
 
+    pub async fn handle(&self, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
         match cmd {
             AppCommand::PushBranch { remote, branch } => {
+                let Some(root) = self.require_project_root("push", &reply_tx).await else {
+                    return;
+                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 let branch_name = branch.unwrap_or_else(|| "HEAD".into());
                 match crate::git_engine::push_branch(&root, &remote, &branch_name).await {
@@ -58,6 +64,9 @@ impl GitDispatcher {
             }
 
             AppCommand::PullBranch { remote, branch } => {
+                let Some(root) = self.require_project_root("pull", &reply_tx).await else {
+                    return;
+                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 match crate::git_engine::pull_branch(&root, &remote, branch.as_deref()).await {
                     Ok(commits_applied) => {
@@ -81,12 +90,13 @@ impl GitDispatcher {
             }
 
             AppCommand::FetchRemote { remote } => {
+                let Some(root) = self.require_project_root("fetch", &reply_tx).await else {
+                    return;
+                };
                 let remote = remote.unwrap_or_else(|| "origin".into());
                 match crate::git_engine::fetch_remote(&root, &remote).await {
                     Ok(()) => {
-                        let _ = reply_tx
-                            .send(AppEvent::FetchCompleted { remote })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::FetchCompleted { remote }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -100,24 +110,37 @@ impl GitDispatcher {
             }
 
             AppCommand::GetMergeConflicts => {
+                let Some(root) = self
+                    .require_project_root("get_merge_conflicts", &reply_tx)
+                    .await
+                else {
+                    return;
+                };
                 match crate::git_engine::list_merge_conflicts(&root).await {
                     Ok(files) => {
-                        let _ = reply_tx
-                            .send(AppEvent::MergeConflicts { files })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::MergeConflicts { files }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "MERGE_CONFLICTS_FAILED".into(),
-                                message: e.to_string(),
+                            .send(AppEvent::GitOperationFailed {
+                                operation: "get_merge_conflicts".into(),
+                                reason: e.to_string(),
                             })
                             .await;
                     }
                 }
             }
 
-            AppCommand::ResolveConflict { file_path, resolution } => {
+            AppCommand::ResolveConflict {
+                file_path,
+                resolution,
+            } => {
+                let Some(root) = self
+                    .require_project_root("resolve_conflict", &reply_tx)
+                    .await
+                else {
+                    return;
+                };
                 match crate::git_engine::resolve_conflict(&root, &file_path, &resolution).await {
                     Ok(()) => {
                         let _ = reply_tx
@@ -126,9 +149,9 @@ impl GitDispatcher {
                     }
                     Err(e) => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "RESOLVE_CONFLICT_FAILED".into(),
-                                message: e.to_string(),
+                            .send(AppEvent::GitOperationFailed {
+                                operation: "resolve_conflict".into(),
+                                reason: e.to_string(),
                             })
                             .await;
                     }
@@ -138,6 +161,71 @@ impl GitDispatcher {
             _ => {
                 warn!("GitDispatcher received unexpected command");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use terminal_core::config::DaemonConfig;
+    use terminal_core::protocol::v1::ConflictResolution;
+    use tokio::sync::broadcast;
+
+    fn make_dispatcher(tmp: &TempDir) -> GitDispatcher {
+        let cfg = DaemonConfig {
+            data_dir: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let (event_tx, _) = broadcast::channel::<String>(8);
+        let persistence =
+            Arc::new(crate::persistence::Persistence::new(tmp.path().to_path_buf()).unwrap());
+        let ctx = Arc::new(DaemonContext::new(cfg, event_tx, persistence));
+        GitDispatcher::new(ctx)
+    }
+
+    #[tokio::test]
+    async fn get_merge_conflicts_without_active_session_returns_typed_failure() {
+        let tmp = TempDir::new().unwrap();
+        let dispatcher = make_dispatcher(&tmp);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        dispatcher.handle(AppCommand::GetMergeConflicts, tx).await;
+
+        let event = rx.recv().await.expect("expected one event");
+        match event {
+            AppEvent::GitOperationFailed { operation, reason } => {
+                assert_eq!(operation, "get_merge_conflicts");
+                assert_eq!(reason, "no active session");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_conflict_without_active_session_returns_typed_failure() {
+        let tmp = TempDir::new().unwrap();
+        let dispatcher = make_dispatcher(&tmp);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        dispatcher
+            .handle(
+                AppCommand::ResolveConflict {
+                    file_path: PathBuf::from("foo.rs"),
+                    resolution: ConflictResolution::TakeOurs,
+                },
+                tx,
+            )
+            .await;
+
+        let event = rx.recv().await.expect("expected one event");
+        match event {
+            AppEvent::GitOperationFailed { operation, reason } => {
+                assert_eq!(operation, "resolve_conflict");
+                assert_eq!(reason, "no active session");
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
     }
 }

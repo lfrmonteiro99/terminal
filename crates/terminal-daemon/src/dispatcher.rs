@@ -18,6 +18,15 @@ pub struct Dispatcher {
     pty_manager: Arc<PtyManager>,
 }
 
+fn concurrency_key_for_run(
+    project_root: &std::path::Path,
+    worktree_path: Option<&std::path::Path>,
+) -> PathBuf {
+    worktree_path
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| project_root.to_path_buf())
+}
+
 impl Dispatcher {
     pub fn new(
         config: DaemonConfig,
@@ -28,7 +37,10 @@ impl Dispatcher {
         let pty_manager = Arc::new(
             PtyManager::new(event_tx).with_workspace_channels(context.workspace_channels.clone()),
         );
-        Self { context, pty_manager }
+        Self {
+            context,
+            pty_manager,
+        }
     }
 
     /// Broadcast an event to all connected clients.
@@ -54,7 +66,9 @@ impl Dispatcher {
         let mut channels = self.context.workspace_channels.lock().await;
         for ws in persisted {
             let id = ws.id;
-            channels.entry(id).or_insert_with(|| broadcast::channel(512).0);
+            channels
+                .entry(id)
+                .or_insert_with(|| broadcast::channel(512).0);
             workspaces.insert(id, ws);
         }
         info!("Recovered {} persisted workspace(s)", workspaces.len());
@@ -67,7 +81,12 @@ impl Dispatcher {
     }
 
     /// Handle a command and send response to the requesting client.
-    pub async fn handle(&self, client_id: ClientId, cmd: AppCommand, reply_tx: mpsc::Sender<AppEvent>) {
+    pub async fn handle(
+        &self,
+        client_id: ClientId,
+        cmd: AppCommand,
+        reply_tx: mpsc::Sender<AppEvent>,
+    ) {
         let _ = client_id; // forwarded to workspace_dispatcher; suppressed elsewhere
         match cmd {
             AppCommand::Auth { .. } => {
@@ -75,7 +94,6 @@ impl Dispatcher {
             }
 
             // --- File viewer (TERMINAL-005) ---
-
             AppCommand::ReadFile { path, max_bytes } => {
                 let limit = max_bytes.unwrap_or(1_048_576u64); // 1 MB default
 
@@ -96,10 +114,7 @@ impl Dispatcher {
                 if let Some(ref root) = project_root {
                     if let Err(e) = crate::safety::validate_path(root, &resolved) {
                         let _ = reply_tx
-                            .send(AppEvent::FileReadError {
-                                path,
-                                error: e,
-                            })
+                            .send(AppEvent::FileReadError { path, error: e })
                             .await;
                         return;
                     }
@@ -141,7 +156,8 @@ impl Dispatcher {
                             // `take` caps reads at read_limit bytes. One extra
                             // byte would be needed to *detect* truncation, but
                             // size_bytes already tells us that for regular files.
-                            if let Err(e) = file.take(read_limit as u64).read_to_end(&mut buf).await {
+                            if let Err(e) = file.take(read_limit as u64).read_to_end(&mut buf).await
+                            {
                                 let _ = reply_tx
                                     .send(AppEvent::FileReadError {
                                         path,
@@ -172,11 +188,8 @@ impl Dispatcher {
                         let (content, truncated) = {
                             let line_count = text.lines().count();
                             if size_bytes > limit || line_count > MAX_LINES {
-                                let truncated_text: String = text
-                                    .lines()
-                                    .take(MAX_LINES)
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
+                                let truncated_text: String =
+                                    text.lines().take(MAX_LINES).collect::<Vec<_>>().join("\n");
                                 (truncated_text + "\n[truncated]", true)
                             } else {
                                 (text, false)
@@ -299,7 +312,11 @@ impl Dispatcher {
                     started_at: session.started_at,
                 };
 
-                self.context.sessions.lock().await.insert(session_id, session);
+                self.context
+                    .sessions
+                    .lock()
+                    .await
+                    .insert(session_id, session);
                 let _ = reply_tx
                     .send(AppEvent::SessionStarted { session: summary })
                     .await;
@@ -316,9 +333,7 @@ impl Dispatcher {
                         warn!("Failed to persist ended session {}: {}", session_id, e);
                     }
 
-                    let _ = reply_tx
-                        .send(AppEvent::SessionEnded { session_id })
-                        .await;
+                    let _ = reply_tx.send(AppEvent::SessionEnded { session_id }).await;
                 } else {
                     let _ = reply_tx
                         .send(AppEvent::Error {
@@ -353,9 +368,15 @@ impl Dispatcher {
                 match sessions.get(&session_id) {
                     Some(_session) => {
                         // Load persisted runs
-                        let persisted_runs = self.context.persistence.list_runs_for_session(session_id)
+                        let persisted_runs = self
+                            .context
+                            .persistence
+                            .list_runs_for_session(session_id)
                             .unwrap_or_else(|e| {
-                                warn!("Failed to load persisted runs for session {}: {}", session_id, e);
+                                warn!(
+                                    "Failed to load persisted runs for session {}: {}",
+                                    session_id, e
+                                );
                                 vec![]
                             });
 
@@ -367,31 +388,42 @@ impl Dispatcher {
 
                         // First, add persisted runs
                         for run in &persisted_runs {
-                            summaries_map.insert(run.id, RunSummary {
-                                id: run.id,
-                                state: run.state.clone(),
-                                prompt_preview: run.prompt.chars().take(100).collect(),
-                                modified_file_count: run.modified_files.len(),
-                                diff_stat: None,
-                                started_at: run.started_at,
-                                ended_at: run.ended_at,
-                                autonomy: run.autonomy,
-                            });
+                            summaries_map.insert(
+                                run.id,
+                                RunSummary {
+                                    id: run.id,
+                                    state: run.state.clone(),
+                                    prompt_preview: run.prompt.chars().take(100).collect(),
+                                    modified_file_count: run.modified_files.len(),
+                                    diff_stat: None,
+                                    started_at: run.started_at,
+                                    ended_at: run.ended_at,
+                                    autonomy: run.autonomy,
+                                },
+                            );
                         }
 
                         // Then, override with active runs (more current state)
                         for active in active_runs.values() {
                             if active.run.session_id == session_id {
-                                summaries_map.insert(active.run.id, RunSummary {
-                                    id: active.run.id,
-                                    state: active.run.state.clone(),
-                                    prompt_preview: active.run.prompt.chars().take(100).collect(),
-                                    modified_file_count: active.run.modified_files.len(),
-                                    diff_stat: None,
-                                    started_at: active.run.started_at,
-                                    ended_at: active.run.ended_at,
-                                    autonomy: active.run.autonomy,
-                                });
+                                summaries_map.insert(
+                                    active.run.id,
+                                    RunSummary {
+                                        id: active.run.id,
+                                        state: active.run.state.clone(),
+                                        prompt_preview: active
+                                            .run
+                                            .prompt
+                                            .chars()
+                                            .take(100)
+                                            .collect(),
+                                        modified_file_count: active.run.modified_files.len(),
+                                        diff_stat: None,
+                                        started_at: active.run.started_at,
+                                        ended_at: active.run.ended_at,
+                                        autonomy: active.run.autonomy,
+                                    },
+                                );
                             }
                         }
 
@@ -419,7 +451,13 @@ impl Dispatcher {
             AppCommand::GetRunStatus { run_id } => {
                 // Read the state, then release the lock before awaiting the
                 // reply send — don't hold active_runs across a channel await.
-                let state = self.context.active_runs.lock().await.get(&run_id).map(|a| a.run.state.clone());
+                let state = self
+                    .context
+                    .active_runs
+                    .lock()
+                    .await
+                    .get(&run_id)
+                    .map(|a| a.run.state.clone());
                 match state {
                     Some(new_state) => {
                         let _ = reply_tx
@@ -444,7 +482,16 @@ impl Dispatcher {
                 skip_dirty_check,
                 autonomy,
             } => {
-                self.do_start_run(client_id, session_id, prompt, mode, autonomy, skip_dirty_check, reply_tx).await;
+                self.do_start_run(
+                    client_id,
+                    session_id,
+                    prompt,
+                    mode,
+                    autonomy,
+                    skip_dirty_check,
+                    reply_tx,
+                )
+                .await;
             }
 
             AppCommand::CancelRun { run_id, reason } => {
@@ -452,7 +499,13 @@ impl Dispatcher {
                 // cancel_tx has capacity 1 and a blocked send would hold the
                 // active_runs lock, starving the supervisor that needs it to
                 // remove the entry on completion.
-                let sender = self.context.active_runs.lock().await.get(&run_id).map(|r| r.cancel_tx.clone());
+                let sender = self
+                    .context
+                    .active_runs
+                    .lock()
+                    .await
+                    .get(&run_id)
+                    .map(|r| r.cancel_tx.clone());
                 match sender {
                     Some(tx) => {
                         let _ = tx.send(reason).await;
@@ -528,8 +581,12 @@ impl Dispatcher {
                         };
 
                         let stat = match crate::git_engine::diff_stat(
-                            &meta.worktree_path, &meta.base_head, &wt_head
-                        ).await {
+                            &meta.worktree_path,
+                            &meta.base_head,
+                            &wt_head,
+                        )
+                        .await
+                        {
                             Ok(s) => s,
                             Err(e) => {
                                 let _ = reply_tx
@@ -543,8 +600,12 @@ impl Dispatcher {
                         };
 
                         let diff = match crate::git_engine::diff_full(
-                            &meta.worktree_path, &meta.base_head, &wt_head
-                        ).await {
+                            &meta.worktree_path,
+                            &meta.base_head,
+                            &wt_head,
+                        )
+                        .await
+                        {
                             Ok(d) => d,
                             Err(e) => {
                                 let _ = reply_tx
@@ -558,11 +619,7 @@ impl Dispatcher {
                         };
 
                         let _ = reply_tx
-                            .send(AppEvent::RunDiff {
-                                run_id,
-                                stat,
-                                diff,
-                            })
+                            .send(AppEvent::RunDiff { run_id, stat, diff })
                             .await;
                     }
                     Err(e) => {
@@ -608,26 +665,34 @@ impl Dispatcher {
 
                 // Remove worktree if it exists
                 if meta.worktree_path.exists() {
-                    if let Err(e) = crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await {
+                    if let Err(e) =
+                        crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await
+                    {
                         warn!("Failed to remove worktree for run {}: {}", run_id, e);
                     }
                 }
 
                 // Delete branch (force)
-                if let Err(e) = crate::git_engine::branch_delete(&project_root, &meta.branch_name, true).await {
-                    warn!("Failed to delete branch {} for run {}: {}", meta.branch_name, run_id, e);
+                if let Err(e) =
+                    crate::git_engine::branch_delete(&project_root, &meta.branch_name, true).await
+                {
+                    warn!(
+                        "Failed to delete branch {} for run {}: {}",
+                        meta.branch_name, run_id, e
+                    );
                 }
 
                 // Delete worktree metadata
                 if let Err(e) = self.context.persistence.delete_worktree_meta(run_id) {
-                    warn!("Failed to delete worktree metadata for run {}: {}", run_id, e);
+                    warn!(
+                        "Failed to delete worktree metadata for run {}: {}",
+                        run_id, e
+                    );
                 }
 
                 // Broadcast RunReverted
                 self.broadcast(&AppEvent::RunReverted { run_id });
-                let _ = reply_tx
-                    .send(AppEvent::RunReverted { run_id })
-                    .await;
+                let _ = reply_tx.send(AppEvent::RunReverted { run_id }).await;
             }
 
             AppCommand::MergeRun { run_id } => {
@@ -662,8 +727,13 @@ impl Dispatcher {
 
                 // Remove worktree before merging (can't merge into a checked-out branch)
                 if meta.worktree_path.exists() {
-                    if let Err(e) = crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await {
-                        warn!("Failed to remove worktree before merge for run {}: {}", run_id, e);
+                    if let Err(e) =
+                        crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await
+                    {
+                        warn!(
+                            "Failed to remove worktree before merge for run {}: {}",
+                            run_id, e
+                        );
                     }
                 }
 
@@ -688,11 +758,20 @@ impl Dispatcher {
                     }
                     Ok(merge_result) => {
                         // Success: clean up branch and metadata
-                        if let Err(e) = crate::git_engine::branch_delete(&project_root, &meta.branch_name, true).await {
-                            warn!("Failed to delete branch after merge for run {}: {}", run_id, e);
+                        if let Err(e) =
+                            crate::git_engine::branch_delete(&project_root, &meta.branch_name, true)
+                                .await
+                        {
+                            warn!(
+                                "Failed to delete branch after merge for run {}: {}",
+                                run_id, e
+                            );
                         }
                         if let Err(e) = self.context.persistence.delete_worktree_meta(run_id) {
-                            warn!("Failed to delete worktree metadata after merge for run {}: {}", run_id, e);
+                            warn!(
+                                "Failed to delete worktree metadata after merge for run {}: {}",
+                                run_id, e
+                            );
                         }
 
                         self.broadcast(&AppEvent::RunMerged {
@@ -718,7 +797,6 @@ impl Dispatcher {
             }
 
             // --- Stash operations (Phase 2.1) ---
-
             AppCommand::StashAndRun {
                 session_id,
                 prompt,
@@ -755,7 +833,16 @@ impl Dispatcher {
 
                 // Stash succeeded -- proceed with start run, skipping dirty check.
                 // Stash-and-run flows default to Autonomous (legacy behaviour).
-                self.do_start_run(client_id, session_id, prompt, mode, AutonomyLevel::default(), true, reply_tx).await;
+                self.do_start_run(
+                    client_id,
+                    session_id,
+                    prompt,
+                    mode,
+                    AutonomyLevel::default(),
+                    true,
+                    reply_tx,
+                )
+                .await;
             }
 
             AppCommand::ListStashes => {
@@ -774,9 +861,7 @@ impl Dispatcher {
 
                 match crate::git_engine::stash_list(&project_root).await {
                     Ok(stashes) => {
-                        let _ = reply_tx
-                            .send(AppEvent::StashList { stashes })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::StashList { stashes }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -820,7 +905,10 @@ impl Dispatcher {
                 }
             }
 
-            AppCommand::GetStashDiff { stash_index, file_path } => {
+            AppCommand::GetStashDiff {
+                stash_index,
+                file_path,
+            } => {
                 let project_root = match self.find_active_project_root().await {
                     Some(pr) => pr,
                     None => {
@@ -880,9 +968,7 @@ impl Dispatcher {
 
                 match crate::git_engine::working_dir_status(&project_root).await {
                     Ok(status) => {
-                        let _ = reply_tx
-                            .send(AppEvent::DirtyState { status })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::DirtyState { status }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -896,28 +982,27 @@ impl Dispatcher {
             }
 
             // --- Sidebar commands (Phase 3) ---
-
             AppCommand::ListDirectory { path } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 // Keep the listing confined to the project root. Without
                 // validation, an absolute path or one with `..` components
                 // would let a client enumerate any directory on the host
                 // filesystem.
-                let full_path = match crate::safety::validate_path(
-                    &root,
-                    std::path::Path::new(&path),
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "LIST_DIR_FAILED".into(),
-                                message: e,
-                            })
-                            .await;
-                        return;
-                    }
-                };
+                let full_path =
+                    match crate::safety::validate_path(&root, std::path::Path::new(&path)) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = reply_tx
+                                .send(AppEvent::Error {
+                                    code: "LIST_DIR_FAILED".into(),
+                                    message: e,
+                                })
+                                .await;
+                            return;
+                        }
+                    };
                 match crate::git_engine::list_directory(&full_path).await {
                     Ok(entries) => {
                         let _ = reply_tx
@@ -936,7 +1021,9 @@ impl Dispatcher {
             }
 
             AppCommand::GetChangedFiles { mode, run_id } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 let result: std::result::Result<Vec<FileChange>, String> = if mode == "working" {
                     match crate::git_engine::working_dir_status(&root).await {
                         Ok(s) => {
@@ -995,7 +1082,9 @@ impl Dispatcher {
                 mode,
                 run_id,
             } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 let result: std::result::Result<String, String> = if mode == "working" {
                     crate::git_engine::working_dir_file_diff(&root, &file_path)
                         .await
@@ -1033,12 +1122,12 @@ impl Dispatcher {
             }
 
             AppCommand::GetRepoStatus => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::repo_status_snapshot(&root).await {
                     Ok(status) => {
-                        let _ = reply_tx
-                            .send(AppEvent::RepoStatusResult { status })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::RepoStatusResult { status }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -1052,7 +1141,9 @@ impl Dispatcher {
             }
 
             AppCommand::GetCommitHistory { limit } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::commit_history(&root, limit).await {
                     Ok(commits) => {
                         let _ = reply_tx
@@ -1071,7 +1162,9 @@ impl Dispatcher {
             }
 
             AppCommand::StageFile { path } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 if let Err(e) = crate::git_engine::stage_file(&root, &path).await {
                     let _ = reply_tx
                         .send(AppEvent::Error {
@@ -1080,35 +1173,33 @@ impl Dispatcher {
                         })
                         .await;
                 } else if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
-                    let _ = reply_tx
-                        .send(AppEvent::RepoStatusResult { status })
-                        .await;
+                    let _ = reply_tx.send(AppEvent::RepoStatusResult { status }).await;
                 }
             }
 
             AppCommand::UnstageFile { path } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 if let Err(e) = crate::git_engine::unstage_file(&root, &path).await {
                     let _ = reply_tx
                         .send(AppEvent::Error {
-                                code: "UNSTAGE_FAILED".into(),
-                                message: e.to_string(),
+                            code: "UNSTAGE_FAILED".into(),
+                            message: e.to_string(),
                         })
                         .await;
                 } else if let Ok(status) = crate::git_engine::repo_status_snapshot(&root).await {
-                    let _ = reply_tx
-                        .send(AppEvent::RepoStatusResult { status })
-                        .await;
+                    let _ = reply_tx.send(AppEvent::RepoStatusResult { status }).await;
                 }
             }
 
             AppCommand::CreateCommit { message } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::create_commit(&root, &message).await {
                     Ok(hash) => {
-                        let _ = reply_tx
-                            .send(AppEvent::CommitCreated { hash })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::CommitCreated { hash }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -1122,7 +1213,9 @@ impl Dispatcher {
             }
 
             AppCommand::ListBranches => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::list_branches(&root).await {
                     Ok((branches, current)) => {
                         let _ = reply_tx
@@ -1141,12 +1234,12 @@ impl Dispatcher {
             }
 
             AppCommand::CheckoutBranch { name } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::checkout_branch(&root, &name).await {
                     Ok(()) => {
-                        let _ = reply_tx
-                            .send(AppEvent::BranchChanged { name })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::BranchChanged { name }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -1160,12 +1253,12 @@ impl Dispatcher {
             }
 
             AppCommand::CreateBranch { name, from } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::create_branch(&root, &name, from.as_deref()).await {
                     Ok(()) => {
-                        let _ = reply_tx
-                            .send(AppEvent::BranchChanged { name })
-                            .await;
+                        let _ = reply_tx.send(AppEvent::BranchChanged { name }).await;
                     }
                     Err(e) => {
                         let _ = reply_tx
@@ -1190,9 +1283,16 @@ impl Dispatcher {
             }
 
             // --- PTY commands (M4-01) ---
-            AppCommand::CreateTerminalSession { workspace_id, shell, cwd, env, ssh } => {
+            AppCommand::CreateTerminalSession {
+                workspace_id,
+                shell,
+                cwd,
+                env,
+                ssh,
+            } => {
                 let pane_id = format!("terminal-{}", workspace_id);
-                let result = self.pty_manager
+                let result = self
+                    .pty_manager
                     .create_session(workspace_id, pane_id, shell, cwd, env, ssh)
                     .await;
                 match result {
@@ -1230,29 +1330,41 @@ impl Dispatcher {
                 }
             }
 
-            AppCommand::ResizeTerminal { session_id, cols, rows } => {
-                match self.pty_manager.resize(session_id, cols, rows).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "RESIZE_FAILED".into(),
-                                message: e,
-                            })
-                            .await;
-                    }
+            AppCommand::ResizeTerminal {
+                session_id,
+                cols,
+                rows,
+            } => match self.pty_manager.resize(session_id, cols, rows).await {
+                Ok(()) => {}
+                Err(e) => {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "RESIZE_FAILED".into(),
+                            message: e,
+                        })
+                        .await;
                 }
-            }
+            },
 
             AppCommand::ListTerminalSessions { workspace_id } => {
                 let sessions = self.pty_manager.list_sessions(workspace_id).await;
                 let _ = reply_tx
-                    .send(AppEvent::TerminalSessionList { workspace_id, sessions })
+                    .send(AppEvent::TerminalSessionList {
+                        workspace_id,
+                        sessions,
+                    })
                     .await;
             }
 
-            AppCommand::RestoreTerminalSession { previous_session_id, workspace_id } => {
-                let meta = match self.context.persistence.load_terminal_session(previous_session_id) {
+            AppCommand::RestoreTerminalSession {
+                previous_session_id,
+                workspace_id,
+            } => {
+                let meta = match self
+                    .context
+                    .persistence
+                    .load_terminal_session(previous_session_id)
+                {
                     Ok(m) => m,
                     Err(crate::persistence::PersistenceError::NotFound(_)) => {
                         let _ = reply_tx
@@ -1276,12 +1388,23 @@ impl Dispatcher {
                 let shell = meta.shell_path.to_string_lossy().to_string();
                 let cwd = meta.cwd.clone();
                 let pane_id = format!("terminal-restored-{}", workspace_id);
-                match self.pty_manager
-                    .create_session(workspace_id, pane_id, Some(shell.clone()), Some(cwd.clone()), None, None)
+                match self
+                    .pty_manager
+                    .create_session(
+                        workspace_id,
+                        pane_id,
+                        Some(shell.clone()),
+                        Some(cwd.clone()),
+                        None,
+                        None,
+                    )
                     .await
                 {
                     Ok(new_session_id) => {
-                        let _ = self.context.persistence.delete_terminal_session(previous_session_id);
+                        let _ = self
+                            .context
+                            .persistence
+                            .delete_terminal_session(previous_session_id);
                         let _ = reply_tx
                             .send(AppEvent::TerminalSessionRestored {
                                 previous_session_id,
@@ -1303,7 +1426,11 @@ impl Dispatcher {
             }
 
             AppCommand::ListRestoredTerminalSessions { workspace_id } => {
-                match self.context.persistence.list_terminal_sessions(workspace_id) {
+                match self
+                    .context
+                    .persistence
+                    .list_terminal_sessions(workspace_id)
+                {
                     Ok(sessions) => {
                         let _ = reply_tx
                             .send(AppEvent::RestorableTerminalSessions {
@@ -1324,48 +1451,69 @@ impl Dispatcher {
             }
 
             // --- Stash mutations (M4) ---
-
             AppCommand::PopStash { index } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::stash_pop(&root, index).await {
                     Ok(had_conflicts) => {
-                        let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                        let _ = reply_tx
+                            .send(AppEvent::StashApplied {
+                                index,
+                                had_conflicts,
+                            })
+                            .await;
                     }
                     Err(e) => {
-                        let _ = reply_tx.send(AppEvent::Error {
-                            code: "STASH_FAILED".into(),
-                            message: e.to_string(),
-                        }).await;
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::ApplyStash { index } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::stash_apply(&root, index).await {
                     Ok(had_conflicts) => {
-                        let _ = reply_tx.send(AppEvent::StashApplied { index, had_conflicts }).await;
+                        let _ = reply_tx
+                            .send(AppEvent::StashApplied {
+                                index,
+                                had_conflicts,
+                            })
+                            .await;
                     }
                     Err(e) => {
-                        let _ = reply_tx.send(AppEvent::Error {
-                            code: "STASH_FAILED".into(),
-                            message: e.to_string(),
-                        }).await;
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
 
             AppCommand::DropStash { index } => {
-                let Some(root) = self.active_root_or_err(&reply_tx).await else { return; };
+                let Some(root) = self.active_root_or_err(&reply_tx).await else {
+                    return;
+                };
                 match crate::git_engine::stash_drop(&root, index).await {
                     Ok(()) => {
                         let _ = reply_tx.send(AppEvent::StashDropped { index }).await;
                     }
                     Err(e) => {
-                        let _ = reply_tx.send(AppEvent::Error {
-                            code: "STASH_FAILED".into(),
-                            message: e.to_string(),
-                        }).await;
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "STASH_FAILED".into(),
+                                message: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             }
@@ -1376,15 +1524,15 @@ impl Dispatcher {
             | AppCommand::FetchRemote { .. }
             | AppCommand::GetMergeConflicts
             | AppCommand::ResolveConflict { .. } => {
-                let dispatcher = crate::dispatchers::git_dispatcher::GitDispatcher::new(
-                    self.context.clone(),
-                );
+                let dispatcher =
+                    crate::dispatchers::git_dispatcher::GitDispatcher::new(self.context.clone());
                 dispatcher.handle(cmd, reply_tx).await;
             }
         }
     }
 
     /// Core StartRun logic, shared by both `StartRun` and `StashAndRun` commands.
+    #[allow(clippy::too_many_arguments)]
     async fn do_start_run(
         &self,
         client_id: ClientId,
@@ -1460,34 +1608,9 @@ impl Dispatcher {
 
         // RAII concurrency guard — dropped on early return, `forget()` once
         // the supervisor task takes ownership of cleanup on successful spawn.
-        let mut concurrency_guard: Option<ConcurrencyGuard> = None;
+        let mut concurrency_guard: Option<ConcurrencyGuard>;
 
         if is_git {
-            // Concurrency guard (see crate::guards): removes the entry on
-            // any early return below without manual cleanup.
-            let guard = match ConcurrencyGuard::acquire(
-                self.context.concurrency.clone(),
-                project_root.clone(),
-                run_id,
-            )
-            .await
-            {
-                Some(g) => g,
-                None => {
-                    let _ = reply_tx
-                        .send(AppEvent::Error {
-                            code: "REPO_BUSY".into(),
-                            message: format!(
-                                "Repository {} already has an active run",
-                                project_root.display()
-                            ),
-                        })
-                        .await;
-                    return;
-                }
-            };
-            concurrency_guard = Some(guard);
-
             // Guard repo state
             if let Err(e) = crate::git_engine::guard_repo_state(&project_root).await {
                 let _ = reply_tx
@@ -1566,7 +1689,9 @@ impl Dispatcher {
             }
 
             // Create worktree
-            if let Err(e) = crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await {
+            if let Err(e) =
+                crate::git_engine::worktree_add(&project_root, &wt_path, &branch_name).await
+            {
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "GIT_ERROR".into(),
@@ -1592,6 +1717,32 @@ impl Dispatcher {
             actual_working_dir = wt_path.clone();
             worktree_path = Some(wt_path);
         }
+        let concurrency_key = concurrency_key_for_run(&project_root, worktree_path.as_deref());
+
+        // Concurrency guard (see crate::guards): removes the entry on
+        // any early return below without manual cleanup.
+        let guard = match ConcurrencyGuard::acquire(
+            self.context.concurrency.clone(),
+            concurrency_key.clone(),
+            run_id,
+        )
+        .await
+        {
+            Some(g) => g,
+            None => {
+                let _ = reply_tx
+                    .send(AppEvent::Error {
+                        code: "WORKING_DIR_BUSY".into(),
+                        message: format!(
+                            "Working directory {} already has an active run",
+                            concurrency_key.display()
+                        ),
+                    })
+                    .await;
+                return;
+            }
+        };
+        concurrency_guard = Some(guard);
 
         let run = Run {
             id: run_id,
@@ -1630,7 +1781,8 @@ impl Dispatcher {
                 // EndSession). Clean up what we already created.
                 if let Some(ref wt_path) = worktree_path {
                     let _ = crate::git_engine::worktree_remove(&project_root, wt_path).await;
-                    let _ = crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
+                    let _ =
+                        crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
                 }
                 let _ = reply_tx
                     .send(AppEvent::Error {
@@ -1656,7 +1808,11 @@ impl Dispatcher {
         // Spawn claude process in actual_working_dir (worktree if git).
         // Ownership of the concurrency entry transfers to the supervisor task
         // on success; `forget()` prevents the guard from clearing it on drop.
-        match self.context.runner.spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir) {
+        match self
+            .context
+            .runner
+            .spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir)
+        {
             Ok((mut event_rx, mut child)) => {
                 if let Some(g) = concurrency_guard.take() {
                     g.forget();
@@ -1667,7 +1823,11 @@ impl Dispatcher {
                     run: run.clone(),
                     cancel_tx,
                 };
-                self.context.active_runs.lock().await.insert(run_id, active_run);
+                self.context
+                    .active_runs
+                    .lock()
+                    .await
+                    .insert(run_id, active_run);
 
                 // Transition to Running
                 self.broadcast(&AppEvent::RunStateChanged {
@@ -1684,6 +1844,7 @@ impl Dispatcher {
                 let persistence = self.context.persistence.clone();
                 let concurrency = self.context.concurrency.clone();
                 let project_root_clone = project_root.clone();
+                let concurrency_key_clone = concurrency_key.clone();
                 let base_head_clone = base_head.clone();
                 let branch_name_clone = branch_name.clone();
                 let worktree_path_clone = worktree_path.clone();
@@ -1749,8 +1910,7 @@ impl Dispatcher {
                         }
                     };
 
-                    let timeout =
-                        tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
+                    let timeout = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
                     tokio::pin!(timeout);
 
                     loop {
@@ -2045,9 +2205,7 @@ impl Dispatcher {
                         session.active_run = None;
                     }
                     // Remove from concurrency registry
-                    if is_git_run {
-                        concurrency.lock().await.remove(&project_root_clone);
-                    }
+                    concurrency.lock().await.remove(&concurrency_key_clone);
                     info!("Run {} finished", run_id);
                 });
 
@@ -2068,10 +2226,15 @@ impl Dispatcher {
                 // `concurrency_guard` drops at end of scope.
                 if is_git {
                     if let Some(ref wt_path) = worktree_path {
-                        if let Err(e) = crate::git_engine::worktree_remove(&project_root, wt_path).await {
+                        if let Err(e) =
+                            crate::git_engine::worktree_remove(&project_root, wt_path).await
+                        {
                             warn!("Failed to cleanup worktree on spawn failure: {}", e);
                         }
-                        if let Err(e) = crate::git_engine::branch_delete(&project_root, &branch_name, true).await {
+                        if let Err(e) =
+                            crate::git_engine::branch_delete(&project_root, &branch_name, true)
+                                .await
+                        {
                             warn!("Failed to cleanup branch on spawn failure: {}", e);
                         }
                     }
@@ -2138,7 +2301,8 @@ impl Dispatcher {
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "NO_ACTIVE_SESSION".into(),
-                        message: "No active session — start a session before calling this command".into(),
+                        message: "No active session — start a session before calling this command"
+                            .into(),
                     })
                     .await;
                 None
@@ -2180,7 +2344,7 @@ impl Dispatcher {
 }
 
 /// Detect a display language name from a file path's extension.
-fn detect_language(path: &PathBuf) -> String {
+fn detect_language(path: &std::path::Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|ext| match ext {
@@ -2203,6 +2367,7 @@ fn detect_language(path: &PathBuf) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::concurrency_key_for_run;
     use crate::safety::validate_path;
     use std::path::PathBuf;
 
@@ -2236,5 +2401,20 @@ mod tests {
         let result = validate_path(&root, &tricky);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), root.join("Cargo.toml"));
+    }
+
+    #[test]
+    fn concurrency_key_uses_project_root_when_no_worktree() {
+        let root = PathBuf::from("/repo");
+        let key = concurrency_key_for_run(&root, None);
+        assert_eq!(key, root);
+    }
+
+    #[test]
+    fn concurrency_key_prefers_worktree_when_present() {
+        let root = PathBuf::from("/repo");
+        let wt = PathBuf::from("/repo/.terminal-worktrees/abc12345");
+        let key = concurrency_key_for_run(&root, Some(&wt));
+        assert_eq!(key, wt);
     }
 }

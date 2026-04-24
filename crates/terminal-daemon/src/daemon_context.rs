@@ -23,6 +23,12 @@ impl ClientId {
     }
 }
 
+impl Default for ClientId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Internal state for tracking active runs.
 pub struct ActiveRun {
     #[allow(dead_code)]
@@ -37,7 +43,8 @@ pub struct DaemonContext {
     pub persistence: Arc<Persistence>,
     pub sessions: Arc<Mutex<HashMap<Uuid, Session>>>,
     pub active_runs: Arc<Mutex<HashMap<Uuid, ActiveRun>>>,
-    /// project_root -> run_id (concurrency guard)
+    /// working_dir_path -> run_id (concurrency guard). For git runs this is
+    /// the per-run worktree path; for non-git runs this is the project root.
     pub concurrency: Arc<Mutex<HashMap<PathBuf, Uuid>>>,
     pub runner: Arc<ClaudeRunner>,
     /// Workspaces registry (M1-05)

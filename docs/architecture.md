@@ -125,9 +125,10 @@ Starting a run:
 1. User clicks **Run** in `AiRunPane` → `runService.start(prompt, mode)` →
    `commandBus.dispatch({ type: 'StartRun', … })`.
 2. `useWebSocket.ts` sends the JSON payload over the open socket.
-3. Daemon `Dispatcher` receives, routes to run handler, spawns the Claude
-   subprocess inside a git worktree, streams stdout/stderr via
-   `broadcast::Sender<String>`.
+3. Daemon `Dispatcher` receives, routes to run handler, acquires a concurrency
+   guard keyed by the run's **actual working directory** (worktree path for git
+   runs, project root for non-git runs), then spawns the Claude subprocess and
+   streams stdout/stderr via `broadcast::Sender<String>`.
 4. Each event lands back as `AppEvent` (`RunStateChanged`, `RunOutput`,
    `RunCompleted`, …).
 5. `eventRouter.ts` dispatches the matching store action; panes re-render.

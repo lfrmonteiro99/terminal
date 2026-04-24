@@ -66,9 +66,8 @@ impl Persistence {
         }
         #[cfg(unix)]
         if let Some(dir) = path.parent() {
-            if let Ok(dir_file) = fs::File::open(dir) {
-                let _ = dir_file.sync_all();
-            }
+            let dir_file = fs::File::open(dir)?;
+            dir_file.sync_all()?;
         }
         Ok(())
     }
@@ -747,6 +746,24 @@ mod tests {
                 name_str
             );
         }
+    }
+
+    #[test]
+    fn test_atomic_write_persists_non_empty_json() {
+        let dir = tempdir().unwrap();
+        let p = Persistence::new(dir.path().to_path_buf()).unwrap();
+
+        let session = make_session();
+        p.save_session(&session).unwrap();
+
+        let session_path = dir.path().join("sessions").join(format!("{}.json", session.id));
+        let bytes = fs::read(&session_path).unwrap();
+        assert!(
+            !bytes.is_empty(),
+            "session file should never be empty after atomic_write"
+        );
+        let loaded: Session = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(loaded.id, session.id);
     }
 
     #[test]

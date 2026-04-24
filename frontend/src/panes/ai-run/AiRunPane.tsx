@@ -1,12 +1,14 @@
 // AiRunPane — wraps the existing RunPanel + DecisionPanel as a pane (M2-04)
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Bot, Eye, AlertTriangle, X } from 'lucide-react';
 import { RunPanel } from '../../components/RunPanel';
 import { PostRunSummary } from '../../components/PostRunSummary';
 import { PromptComposer } from '../../components/PromptComposer';
 import { useSend } from '../../context/SendContext';
 import { useAppState, useAppDispatch } from '../../context/AppContext';
+import { CommandBus } from '../../core/commands/commandBus';
+import { RunService } from '../../core/services/runService';
 import type { PaneProps } from '../registry';
 import type { AutonomyLevel, RunMode, RunState } from '../../types/protocol';
 import { registerPane } from '../registry';
@@ -24,6 +26,7 @@ function isTerminalState(rs: RunState): boolean {
 
 export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps) {
   const send = useSend();
+  const runService = useMemo(() => new RunService(new CommandBus(send)), [send]);
   const state = useAppState();
   const dispatch = useAppDispatch();
   const [prompt, setPrompt] = useState('');
@@ -42,9 +45,8 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     const p = (overridePrompt ?? prompt).trim();
     if (!state.activeSession || !p) return;
     lastPromptRef.current = p;
-    send({
-      type: 'StartRun',
-      session_id: state.activeSession,
+    runService.startRun({
+      sessionId: state.activeSession,
       prompt: p,
       mode: 'Free' as RunMode,
       autonomy: overrideAutonomy ?? autonomy,
@@ -53,12 +55,12 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
   };
 
   const handleCancel = (runId: string) => {
-    send({ type: 'CancelRun', run_id: runId, reason: 'User cancelled' });
+    runService.cancelRun(runId, 'User cancelled');
   };
 
-  const handleGetDiff = (runId: string) => send({ type: 'GetDiff', run_id: runId });
-  const handleRevert = (runId: string) => send({ type: 'RevertRun', run_id: runId });
-  const handleMerge = (runId: string) => send({ type: 'MergeRun', run_id: runId });
+  const handleGetDiff = (runId: string) => runService.getDiff(runId);
+  const handleRevert = (runId: string) => runService.revertRun(runId);
+  const handleMerge = (runId: string) => runService.mergeRun(runId);
 
   const selectedRunObj = state.selectedRun ? state.runs.get(state.selectedRun) : undefined;
   const showPostRunSummary =
