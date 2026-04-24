@@ -78,12 +78,14 @@ impl PtyManager {
                     return;
                 }
             };
-            let guard = map.lock().await;
-            if let Some(tx) = guard.get(&workspace_id) {
+            let tx = {
+                let guard = map.lock().await;
+                guard.get(&workspace_id).cloned()
+            };
+            if let Some(tx) = tx {
                 let _ = tx.send(json);
                 return;
             }
-            drop(guard);
             // Fallback to global channel so we don't drop events.
             let _ = global.send(json);
             return;
@@ -537,6 +539,17 @@ fn utf8_safe_split(bytes: &[u8]) -> usize {
 mod tests {
     use super::*;
     use tokio::sync::broadcast;
+
+    #[test]
+    fn emit_via_does_not_hold_workspace_lock_across_send() {
+        let source = include_str!("manager.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !production_source.contains("if let Some(tx) = guard.get(&workspace_id) {
+                let _ = tx.send(json);"),
+            "workspace channel sender must be cloned before send so the mutex guard is dropped first"
+        );
+    }
 
     #[test]
     fn utf8_safe_split_ascii_is_full_length() {
