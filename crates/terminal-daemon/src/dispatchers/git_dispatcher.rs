@@ -185,6 +185,52 @@ mod tests {
         GitDispatcher::new(ctx)
     }
 
+    async fn assert_no_active_session_failure(cmd: AppCommand, expected_operation: &str) {
+        let tmp = TempDir::new().unwrap();
+        let dispatcher = make_dispatcher(&tmp);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        dispatcher.handle(cmd, tx).await;
+
+        let event = rx.recv().await.expect("expected one event");
+        match event {
+            AppEvent::GitOperationFailed { operation, reason } => {
+                assert_eq!(operation, expected_operation);
+                assert_eq!(reason, "no active session");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn push_without_active_session_returns_typed_failure() {
+        assert_no_active_session_failure(
+            AppCommand::PushBranch {
+                remote: None,
+                branch: None,
+            },
+            "push",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn pull_without_active_session_returns_typed_failure() {
+        assert_no_active_session_failure(
+            AppCommand::PullBranch {
+                remote: None,
+                branch: None,
+            },
+            "pull",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn fetch_without_active_session_returns_typed_failure() {
+        assert_no_active_session_failure(AppCommand::FetchRemote { remote: None }, "fetch").await;
+    }
+
     #[tokio::test]
     async fn get_merge_conflicts_without_active_session_returns_typed_failure() {
         let tmp = TempDir::new().unwrap();
