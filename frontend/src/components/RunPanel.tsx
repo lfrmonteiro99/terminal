@@ -12,6 +12,9 @@ import {
   Loader,
 } from 'lucide-react';
 import { useAppState } from '../context/AppContext';
+import { useSend } from '../context/SendContext';
+import { CommandBus } from '../core/commands/commandBus';
+import { RunService } from '../core/services/runService';
 import type { ToolCall } from '../types/protocol';
 import { extractFileLineRefs } from './runPanelFileLinks';
 
@@ -213,18 +216,65 @@ function shouldRenderLine(line: string): boolean {
   return !(line.startsWith('▸ tool:') || line.startsWith('◂ tool result'));
 }
 
+function StopRunButton({ onStop }: { onStop: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onStop}
+      aria-label="Stop run"
+      title="Stop run (Esc or Ctrl+.)"
+      style={{
+        padding: '6px 14px',
+        backgroundColor: 'transparent',
+        color: 'var(--accent-error)',
+        border: '1px solid var(--accent-error)',
+        borderRadius: 6,
+        cursor: 'pointer',
+        fontFamily: 'var(--font-display)',
+        fontWeight: 700,
+        fontSize: 12,
+        letterSpacing: '0.02em',
+      }}
+    >
+      Stop
+    </button>
+  );
+}
+
 export function RunPanel() {
   const state = useAppState();
+  const send = useSend();
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const stopRun = () => {
+    if (!state.activeRun) return;
+    new RunService(new CommandBus(send)).cancelRun(state.activeRun, 'User cancelled');
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (typeof bottomRef.current?.scrollIntoView === 'function') {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [state.outputLines.length, state.runToolCalls.size]);
+
+  useEffect(() => {
+    if (!state.activeRun) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const stopShortcut = event.key === 'Escape' || ((event.ctrlKey || event.metaKey) && event.key === '.');
+      if (!stopShortcut) return;
+      event.preventDefault();
+      new RunService(new CommandBus(send)).cancelRun(state.activeRun!, 'User cancelled');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [send, state.activeRun]);
 
   const toolCalls = Array.from(state.runToolCalls.values());
   const lines = state.outputLines.filter(shouldRenderLine);
 
-  if (state.activeRun && lines.length === 0 && toolCalls.length === 0) {
+  const isThinking = (state.activeRun || state.pendingRunStartedAt) && lines.length === 0 && toolCalls.length === 0;
+
+  if (isThinking) {
     return (
       <div
         style={{
@@ -235,9 +285,15 @@ export function RunPanel() {
           gap: 10,
           backgroundColor: 'var(--bg-surface)',
         }}
-        aria-label="Preparing run"
+        aria-label="Claude is thinking"
         aria-busy="true"
       >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ fontFamily: 'var(--font-display)', color: 'var(--text-primary)', fontSize: 13 }}>
+            Claude is thinking…
+          </div>
+          {state.activeRun && <StopRunButton onStop={stopRun} />}
+        </div>
         {[100, 72, 88].map((w, i) => (
           <div
             key={i}
@@ -289,18 +345,18 @@ export function RunPanel() {
   }
 
   return (
-    <div
-      style={{
-        flex: 1,
-        overflow: 'auto',
-        padding: '14px 18px',
-        fontFamily: 'var(--font-mono)',
-        fontSize: 13,
-        lineHeight: 1.55,
-        backgroundColor: 'var(--bg-surface)',
-        color: 'var(--text-primary)',
-      }}
-    >
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-surface)' }}>
+      <div
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          padding: '14px 18px',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 13,
+          lineHeight: 1.55,
+          color: 'var(--text-primary)',
+        }}
+      >
       {toolCalls.length > 0 && (
         <div style={{ marginBottom: 10 }}>
           {toolCalls.map((call) => (
@@ -353,7 +409,26 @@ export function RunPanel() {
           <span style={{ opacity: 0.85 }}>running</span>
         </div>
       )}
-      <div ref={bottomRef} />
+        <div ref={bottomRef} />
+      </div>
+      {state.activeRun && (
+        <div
+          style={{
+            padding: '8px 14px',
+            borderTop: '1px solid var(--border-default)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            background: 'var(--bg-surface)',
+          }}
+        >
+          <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-display)', fontSize: 12 }}>
+            Running… press Esc or Ctrl+. to stop
+          </span>
+          <StopRunButton onStop={stopRun} />
+        </div>
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ export interface AppState {
   sessions: Map<string, SessionSummary>;
   activeSession: string | null;
   activeRun: string | null;
+  pendingRunStartedAt: number | null;
   runState: RunState | null;
   // Bounded output buffer — NOT the full run output
   outputLines: string[];
@@ -79,6 +80,7 @@ const initialState: AppState = {
   sessions: new Map(),
   activeSession: null,
   activeRun: null,
+  pendingRunStartedAt: null,
   runState: null,
   outputLines: [],
   error: null,
@@ -127,6 +129,7 @@ type Action =
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'DISMISS_PREFLIGHT' }
+  | { type: 'MARK_RUN_PENDING' }
   | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
@@ -168,6 +171,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'DISMISS_PREFLIGHT':
       return { ...state, preflightError: null };
+
+    case 'MARK_RUN_PENDING':
+      return { ...state, pendingRunStartedAt: Date.now(), outputLines: [], runToolCalls: new Map(), runMetrics: null, preflightError: null };
 
     case 'SET_SIDEBAR_VIEW':
       return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
@@ -242,6 +248,7 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: event.run_id,
             runState: event.new_state,
+            pendingRunStartedAt: null,
             runToolCalls: startingFresh ? new Map() : state.runToolCalls,
             runMetrics: startingFresh ? null : state.runMetrics,
             preflightError: startingFresh ? null : state.preflightError,
@@ -255,7 +262,7 @@ function reducer(state: AppState, action: Action): AppState {
           const trimmed = lines.length > MAX_OUTPUT_LINES
             ? lines.slice(lines.length - MAX_OUTPUT_LINES)
             : lines;
-          return { ...state, outputLines: trimmed };
+          return { ...state, pendingRunStartedAt: null, outputLines: trimmed };
         }
 
         case 'RunCompleted': {
@@ -265,6 +272,7 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             activeRun: null,
             runState: { type: 'Completed', exit_code: event.summary.state.type === 'Completed' ? event.summary.state.exit_code : 0 },
+            pendingRunStartedAt: null,
             runs,
           };
         }
@@ -273,6 +281,7 @@ function reducer(state: AppState, action: Action): AppState {
           return {
             ...state,
             activeRun: null,
+            pendingRunStartedAt: null,
             runState: { type: 'Failed', error: event.error, phase: event.phase },
           };
 
@@ -280,6 +289,7 @@ function reducer(state: AppState, action: Action): AppState {
           return {
             ...state,
             activeRun: null,
+            pendingRunStartedAt: null,
             runState: { type: 'Cancelled', reason: 'User cancelled' },
           };
 
@@ -409,7 +419,7 @@ function reducer(state: AppState, action: Action): AppState {
             input_preview: event.tool_input_preview,
             status: 'pending',
           });
-          return { ...state, runToolCalls: next };
+          return { ...state, pendingRunStartedAt: null, runToolCalls: next };
         }
 
         case 'RunToolResult': {

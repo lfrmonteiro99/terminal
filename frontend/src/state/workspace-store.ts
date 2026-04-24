@@ -49,6 +49,7 @@ export interface WorkspaceStore {
   // AI session / run state
   activeSession: string | null;
   activeRun: string | null;
+  pendingRunStartedAt: number | null;
   runState: RunState | null;
   outputLines: string[];
   runs: Map<string, RunSummary>;
@@ -113,6 +114,7 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     workspaceId,
     activeSession: null,
     activeRun: null,
+    pendingRunStartedAt: null,
     runState: null,
     outputLines: [],
     runs: new Map(),
@@ -160,6 +162,8 @@ export type WorkspaceAction =
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string | null }
   | { type: 'SET_ACTIVE_RUN'; runId: string | null }
   | { type: 'SET_RUN_STATE'; runState: RunState | null }
+  | { type: 'START_PENDING_RUN'; startedAt: number }
+  | { type: 'CLEAR_PENDING_RUN' }
   | { type: 'APPEND_OUTPUT'; line: string }
   | { type: 'CLEAR_OUTPUT' }
   | { type: 'UPSERT_RUN'; run: RunSummary }
@@ -220,12 +224,19 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
       return { ...state, activeRun: action.runId };
 
     case 'SET_RUN_STATE':
-      return { ...state, runState: action.runState };
+      return { ...state, runState: action.runState, pendingRunStartedAt: null };
+
+    case 'START_PENDING_RUN':
+      return { ...state, pendingRunStartedAt: action.startedAt, outputLines: [], runToolCalls: new Map(), runMetrics: null, preflightError: null };
+
+    case 'CLEAR_PENDING_RUN':
+      return { ...state, pendingRunStartedAt: null };
 
     case 'APPEND_OUTPUT': {
       const lines = [...state.outputLines, action.line];
       return {
         ...state,
+        pendingRunStartedAt: null,
         outputLines: lines.length > MAX_OUTPUT_LINES ? lines.slice(-MAX_OUTPUT_LINES) : lines,
       };
     }
@@ -264,7 +275,7 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
       if (action.runId !== state.activeRun) return state;
       const runToolCalls = new Map(state.runToolCalls);
       runToolCalls.set(action.toolCall.tool_id, action.toolCall);
-      return { ...state, runToolCalls };
+      return { ...state, pendingRunStartedAt: null, runToolCalls };
     }
 
     case 'UPDATE_TOOL_RESULT': {

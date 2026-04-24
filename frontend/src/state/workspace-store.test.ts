@@ -73,6 +73,14 @@ describe('workspaceReducer', () => {
     expect(next.runState).toEqual({ type: 'Running' });
   });
 
+
+  it('START_PENDING_RUN / CLEAR_PENDING_RUN', () => {
+    const started = run(base(), { type: 'START_PENDING_RUN', startedAt: 123 });
+    expect(started.pendingRunStartedAt).toBe(123);
+    const cleared = run(started, { type: 'CLEAR_PENDING_RUN' });
+    expect(cleared.pendingRunStartedAt).toBeNull();
+  });
+
   it('APPEND_OUTPUT appends up to the max', () => {
     const once = run(base(), { type: 'APPEND_OUTPUT', line: 'a' });
     expect(once.outputLines).toEqual(['a']);
@@ -398,6 +406,8 @@ describe('workspaceReducer', () => {
       'SET_ACTIVE_SESSION',
       'SET_ACTIVE_RUN',
       'SET_RUN_STATE',
+      'START_PENDING_RUN',
+      'CLEAR_PENDING_RUN',
       'APPEND_OUTPUT',
       'CLEAR_OUTPUT',
       'UPSERT_RUN',

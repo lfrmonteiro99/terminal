@@ -8,6 +8,7 @@ interface PromptComposerProps {
   onSubmit: () => void;
   placeholder?: string;
   disabled?: boolean;
+  disabledHint?: string;
 }
 
 function lineHeightPx(el: HTMLTextAreaElement): number {
@@ -23,7 +24,7 @@ function lineHeightPx(el: HTMLTextAreaElement): number {
   return lineHeight <= fontSize ? lineHeight * fontSize : lineHeight;
 }
 
-export function PromptComposer({ value, onChange, onSubmit, placeholder, disabled }: PromptComposerProps) {
+export function PromptComposer({ value, onChange, onSubmit, placeholder, disabled, disabledHint }: PromptComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Grow the textarea to fit content, capped at 12 rows.
@@ -77,6 +78,11 @@ export function PromptComposer({ value, onChange, onSubmit, placeholder, disable
           e.currentTarget.style.boxShadow = 'none';
         }}
       />
+      {disabled && disabledHint && (
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: 11, color: 'var(--text-secondary)' }}>
+          {disabledHint}
+        </div>
+      )}
       {value.length > 400 && (
         <div
           aria-live="polite"

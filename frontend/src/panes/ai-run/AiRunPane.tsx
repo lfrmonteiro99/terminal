@@ -31,6 +31,7 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
   const dispatch = useAppDispatch();
   const [prompt, setPrompt] = useState('');
   const [autonomy, setAutonomy] = useState<AutonomyLevel>(loadAutonomy);
+  const isRunPending = state.pendingRunStartedAt !== null;
   // Remember the full prompt text for any active run so "Approve & execute"
   // can re-run a plan with the original text (RunSummary.prompt_preview is
   // truncated to 100 chars and unsafe to resubmit).
@@ -45,6 +46,7 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     const p = (overridePrompt ?? prompt).trim();
     if (!state.activeSession || !p) return;
     lastPromptRef.current = p;
+    dispatch({ type: 'MARK_RUN_PENDING' });
     runService.startRun({
       sessionId: state.activeSession,
       prompt: p,
@@ -54,9 +56,6 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     if (!overridePrompt) setPrompt('');
   };
 
-  const handleCancel = (runId: string) => {
-    runService.cancelRun(runId, 'User cancelled');
-  };
 
   const handleGetDiff = (runId: string) => runService.getDiff(runId);
   const handleRevert = (runId: string) => runService.revertRun(runId);
@@ -85,45 +84,7 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
       )}
 
       {state.activeRun ? (
-        <>
-          <RunPanel />
-          <div
-            style={{
-              padding: '8px 14px',
-              borderTop: '1px solid var(--border-default)',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              background: 'var(--bg-surface)',
-            }}
-          >
-            <button
-              onClick={() => handleCancel(state.activeRun!)}
-              style={{
-                padding: '6px 16px',
-                backgroundColor: 'transparent',
-                color: 'var(--accent-error)',
-                border: '1px solid var(--accent-error)',
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-display)',
-                fontWeight: 600,
-                fontSize: 12,
-                letterSpacing: '0.02em',
-                transition: 'background 160ms, box-shadow 160ms',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(var(--accent-error-rgb), 0.10)';
-                e.currentTarget.style.boxShadow = 'var(--glow-error)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </>
+        <RunPanel />
       ) : showPostRunSummary && state.selectedRun ? (
         <PostRunSummary
           runId={state.selectedRun}
@@ -153,6 +114,8 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
               value={prompt}
               onChange={setPrompt}
               onSubmit={startRun}
+              disabled={isRunPending}
+              disabledHint="Running… waiting for Claude to start"
               placeholder={
                 autonomy === 'Autonomous'
                   ? 'ask Claude to do something…'
@@ -161,20 +124,20 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
             />
             <button
               onClick={() => startRun()}
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() || isRunPending}
               style={{
                 padding: '8px 18px',
-                backgroundColor: prompt.trim() ? 'var(--accent-primary)' : 'var(--bg-overlay)',
-                color: prompt.trim() ? 'var(--bg-base)' : 'var(--text-muted)',
+                backgroundColor: prompt.trim() && !isRunPending ? 'var(--accent-primary)' : 'var(--bg-overlay)',
+                color: prompt.trim() && !isRunPending ? 'var(--bg-base)' : 'var(--text-muted)',
                 border: 'none',
                 borderRadius: 6,
-                cursor: prompt.trim() ? 'pointer' : 'not-allowed',
+                cursor: prompt.trim() && !isRunPending ? 'pointer' : 'not-allowed',
                 fontFamily: 'var(--font-display)',
                 fontWeight: 700,
                 fontSize: 12,
                 letterSpacing: '0.02em',
-                boxShadow: prompt.trim() ? 'var(--glow-accent)' : 'none',
-                opacity: prompt.trim() ? 1 : ('var(--disabled-opacity)' as unknown as number),
+                boxShadow: prompt.trim() && !isRunPending ? 'var(--glow-accent)' : 'none',
+                opacity: prompt.trim() && !isRunPending ? 1 : ('var(--disabled-opacity)' as unknown as number),
                 transition: 'box-shadow 160ms, background 160ms',
               }}
             >
