@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface DecisionPanelProps {
   runId: string;
@@ -16,6 +16,11 @@ export function DecisionPanel({
   onCancel,
 }: DecisionPanelProps) {
   const [response, setResponse] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
 
   const handleSubmit = () => {
     if (response.trim()) {
@@ -93,6 +98,8 @@ export function DecisionPanel({
 
       <div style={{ display: 'flex', gap: 8 }}>
         <textarea
+          ref={textareaRef}
+          aria-label="Response"
           value={response}
           onChange={(e) => setResponse(e.target.value)}
           onKeyDown={handleKeyDown}

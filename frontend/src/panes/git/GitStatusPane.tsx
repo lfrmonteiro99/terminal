@@ -297,6 +297,11 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
   const [msg, setMsg] = React.useState('');
   const [focused, setFocused] = React.useState(false);
   const [committing, setCommitting] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   return (
     <div
@@ -309,6 +314,7 @@ function CommitBar({ onCommit }: { onCommit: (msg: string) => void }) {
       }}
     >
       <input
+        ref={inputRef}
         value={msg}
         onChange={(e) => setMsg(e.target.value)}
         onFocus={() => setFocused(true)}

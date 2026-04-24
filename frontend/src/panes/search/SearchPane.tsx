@@ -243,6 +243,10 @@ export function SearchPane(_props: PaneProps) {
     setSearchState({ status: 'results', event: { type: 'SearchResults', ...storeResult } });
   }, [storeResult]);
 
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
   // Group matches by file
   const fileGroups: Map<string, SearchMatch[]> = (() => {
     if (searchState.status !== 'results') return new Map();
@@ -292,6 +296,7 @@ export function SearchPane(_props: PaneProps) {
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           <input
             ref={inputRef}
+            aria-label="Search files"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {

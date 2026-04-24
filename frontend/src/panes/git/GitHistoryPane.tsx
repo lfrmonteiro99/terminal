@@ -71,6 +71,7 @@ export function GitHistoryPane({ pane: _pane }: PaneProps) {
         <button
           onClick={() => send({ type: 'GetCommitHistory', limit: 50 })}
           title="Refresh"
+          aria-label="Refresh commit history"
           style={{
             marginLeft: 'auto',
             display: 'inline-flex',
