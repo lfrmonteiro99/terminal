@@ -1,4 +1,4 @@
-// AiRunPane — wraps the existing RunPanel + DecisionPanel as a pane (M2-04)
+// AiRunPane — wraps the existing RunPanel as a pane (M2-04)
 
 import { useMemo, useRef, useState } from 'react';
 import { Bot, Eye, AlertTriangle, X } from 'lucide-react';
