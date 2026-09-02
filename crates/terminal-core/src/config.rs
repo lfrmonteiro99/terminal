@@ -52,7 +52,10 @@ impl Default for DaemonConfig {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(90),
             orphan_grace_secs: 60,
-            run_timeout_secs: 600,
+            run_timeout_secs: std::env::var("TERMINAL_RUN_TIMEOUT_SECS")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(600),
             data_dir: std::env::var("TERMINAL_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| home.join(".terminal-daemon")),

@@ -655,6 +655,25 @@ pub async fn create_commit(cwd: &Path, message: &str) -> Result<String> {
     Ok(hash[..7.min(hash.len())].to_string())
 }
 
+/// Defensive checkpoint commit before worktree teardown. Stages everything
+/// (including untracked) and commits with `--allow-empty` so the operation
+/// never fails on clean trees. Used on timeout/cleanup paths to ensure the
+/// branch retains the work even when the daemon crashes mid-cleanup.
+///
+/// Returns Ok(()) regardless of git result — this is best-effort defensive
+/// commit, never blocks the cleanup path.
+pub async fn checkpoint_commit(worktree: &Path, message: &str) -> Result<()> {
+    // Configura identidade local apenas para esta operação — caso o user
+    // ainda não tenha git config user.name/email, evitamos um falhanço aqui.
+    let _ = run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
+        "-c", "user.email=daemon@jarvis.local",
+        "add", "-A"]).await;
+    let _ = run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
+        "-c", "user.email=daemon@jarvis.local",
+        "commit", "--allow-empty", "-m", message]).await;
+    Ok(())
+}
+
 /// Checkout an existing branch.
 pub async fn checkout_branch(cwd: &Path, name: &str) -> Result<()> {
     validate_git_ref(name).map_err(GitError::CommandFailed)?;

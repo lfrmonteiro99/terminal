@@ -2201,6 +2201,14 @@ impl Dispatcher {
                                 if is_git_run {
                                     if let Some(ref wt_path) = worktree_path_clone {
                                         let repo_root = project_root_clone.clone();
+                                        // Checkpoint defensivo: commit do que
+                                        // o Claude já produziu ANTES de
+                                        // remover o worktree. Sem isto, o
+                                        // user perde tudo se o run timed out.
+                                        let _ = crate::git_engine::checkpoint_commit(
+                                            wt_path,
+                                            &format!("auto-checkpoint: run {} timed out", run_id),
+                                        ).await;
                                         if let Err(e) = crate::git_engine::worktree_remove(&repo_root, wt_path).await {
                                             warn!("Failed to remove worktree {:?} on timeout: {}", wt_path, e);
                                         }
