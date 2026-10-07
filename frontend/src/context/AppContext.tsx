@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
 import type { AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
 
 // --- State ---
@@ -238,16 +239,19 @@ function reducer(state: AppState, action: Action): AppState {
         }
 
         case 'RunStateChanged': {
+          // The wire carries an externally-tagged enum ("Running" /
+          // {"Completed":{...}}); normalise before anything reads `.type`.
+          const nextState = normalizeRunState(event.new_state);
           // When a new run begins (or we're switching to a different run),
           // clear per-run accumulated state so the UI doesn't show stale
           // tool calls / metrics from an earlier run.
           const switchingRun = state.activeRun !== event.run_id;
           const startingFresh =
-            switchingRun && (event.new_state.type === 'Preparing' || event.new_state.type === 'Running');
+            switchingRun && (nextState.type === 'Preparing' || nextState.type === 'Running');
           return {
             ...state,
             activeRun: event.run_id,
-            runState: event.new_state,
+            runState: nextState,
             pendingRunStartedAt: null,
             runToolCalls: startingFresh ? new Map() : state.runToolCalls,
             runMetrics: startingFresh ? null : state.runMetrics,
@@ -267,11 +271,16 @@ function reducer(state: AppState, action: Action): AppState {
 
         case 'RunCompleted': {
           const runs = new Map(state.runs);
-          runs.set(event.run_id, event.summary);
+          // Without this the stored summary keeps the raw wire shape
+          // ({"Completed":{...}}), isTerminalState() reads `.type === undefined`
+          // and the post-run summary — diff, Merge, Revert — never renders.
+          const summary: RunSummary = { ...event.summary, state: normalizeRunState(event.summary.state) };
+          runs.set(event.run_id, summary);
+          const completed = summary.state.type === 'Completed' ? summary.state.exit_code : 0;
           return {
             ...state,
             activeRun: null,
-            runState: { type: 'Completed', exit_code: event.summary.state.type === 'Completed' ? event.summary.state.exit_code : 0 },
+            runState: { type: 'Completed', exit_code: completed },
             pendingRunStartedAt: null,
             runs,
           };
@@ -296,7 +305,7 @@ function reducer(state: AppState, action: Action): AppState {
         case 'RunList': {
           const runs = new Map(state.runs);
           for (const r of event.runs) {
-            runs.set(r.id, r);
+            runs.set(r.id, { ...r, state: normalizeRunState(r.state) });
           }
           return { ...state, runs };
         }

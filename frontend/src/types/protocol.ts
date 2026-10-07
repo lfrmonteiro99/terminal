@@ -58,6 +58,25 @@ export type RunState =
   | { type: 'Cancelled'; reason: string };
 
 export type PauseReason = 'BlockingQuestion' | 'SupervisorIntervention' | 'PolicyViolation';
+
+/**
+ * The daemon serialises `RunState` as an externally-tagged enum — `"Running"`,
+ * `{"Completed":{"exit_code":0}}` — while this UI models it as
+ * `{ type: 'Completed', exit_code: 0 }`. Convert at the edge so no consumer
+ * (post-run summary, session strip, status dot) has to know the wire shape.
+ */
+export function normalizeRunState(raw: unknown): RunState {
+  if (typeof raw === 'string') return { type: raw } as RunState;
+  if (raw && typeof raw === 'object') {
+    const [tag, payload] = Object.entries(raw as Record<string, unknown>)[0] ?? [];
+    if (typeof tag === 'string') {
+      return (payload && typeof payload === 'object'
+        ? { type: tag, ...(payload as Record<string, unknown>) }
+        : { type: tag }) as RunState;
+    }
+  }
+  return { type: 'Preparing' } as RunState;
+}
 export type FailPhase = 'Preflight' | 'Preparation' | 'Execution' | 'Parsing' | 'Cleanup';
 export type RunMode = 'Free' | 'Guided' | 'Strict';
 

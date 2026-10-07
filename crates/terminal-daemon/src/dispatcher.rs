@@ -458,6 +458,13 @@ impl Dispatcher {
                     .await
                     .get(&run_id)
                     .map(|a| a.run.state.clone());
+                // A run that is no longer active is still a valid subject for
+                // "what happened?" — fall back to the persisted record instead
+                // of answering RUN_NOT_FOUND for every finished run.
+                let state = match state {
+                    Some(s) => Some(s),
+                    None => self.context.persistence.load_run(run_id).ok().map(|r| r.state),
+                };
                 match state {
                     Some(new_state) => {
                         let _ = reply_tx
@@ -468,7 +475,7 @@ impl Dispatcher {
                         let _ = reply_tx
                             .send(AppEvent::Error {
                                 code: "RUN_NOT_FOUND".into(),
-                                message: format!("No active run {}", run_id),
+                                message: format!("No run {}", run_id),
                             })
                             .await;
                     }
@@ -740,8 +747,19 @@ impl Dispatcher {
                     }
                 };
 
-                // Remove worktree before merging (can't merge into a checked-out branch)
+                // Remove worktree before merging (can't merge into a checked-out branch).
+                // Commit whatever is still uncommitted first: the merge takes the
+                // branch as it stands, and removing the worktree destroys the rest.
                 if meta.worktree_path.exists() {
+                    if let Err(e) = crate::git_engine::checkpoint_commit(
+                        &meta.worktree_path,
+                        &format!("auto-checkpoint: run {} merged", run_id),
+                    ).await {
+                        warn!(
+                            "checkpoint commit before merge failed for run {}: {}",
+                            run_id, e
+                        );
+                    }
                     if let Err(e) =
                         crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await
                     {
@@ -1061,7 +1079,18 @@ impl Dispatcher {
                 } else if let Some(rid) = run_id {
                     match self.context.persistence.load_worktree_meta(rid) {
                         Ok(meta) => {
-                            crate::git_engine::changed_files(&root, &meta.base_head, "HEAD")
+                            // The run's work sits on its own branch in its own
+                            // worktree. Diffing *this* repo's HEAD against the base
+                            // only shows something once the run has been merged, so
+                            // an unmerged run always looked like it changed nothing.
+                            let target = if meta.worktree_path.exists() {
+                                meta.worktree_path.clone()
+                            } else {
+                                // Worktree gone (merged or reverted) — the branch is
+                                // what is left of the run.
+                                root.clone()
+                            };
+                            crate::git_engine::changed_files(&target, &meta.base_head, "HEAD")
                                 .await
                                 .map_err(|e| e.to_string())
                         }
@@ -1106,9 +1135,27 @@ impl Dispatcher {
                         .map_err(|e| e.to_string())
                 } else if let Some(rid) = run_id {
                     match self.context.persistence.load_worktree_meta(rid) {
-                        Ok(meta) => crate::git_engine::diff_full(&root, &meta.base_head, "HEAD")
+                        Ok(meta) => {
+                            // Same reasoning as GetChangedFiles, plus the caller
+                            // asked for one file — the old code returned the whole
+                            // repo's diff from the wrong ref.
+                            let target = if meta.worktree_path.exists() {
+                                meta.worktree_path.clone()
+                            } else {
+                                root.clone()
+                            };
+                            let head = crate::git_engine::head_oid(&target)
+                                .await
+                                .unwrap_or_else(|_| "HEAD".to_string());
+                            crate::git_engine::diff_full_file(
+                                &target,
+                                &meta.base_head,
+                                &head,
+                                &file_path,
+                            )
                             .await
-                            .map_err(|e| e.to_string()),
+                            .map_err(|e| e.to_string())
+                        }
                         Err(e) => Err(format!("worktree meta: {}", e)),
                     }
                 } else {
@@ -2108,6 +2155,21 @@ impl Dispatcher {
 
                                         if is_git_run {
                                             if let Some(ref wt_path) = worktree_path_clone {
+                                                // The AI leaves its edits uncommitted, so the
+                                                // branch still points at the base commit. Measure
+                                                // first and the diff is empty, the UI shows
+                                                // nothing, and MergeRun later merges an unchanged
+                                                // branch while deleting the worktree — silent data
+                                                // loss. Commit the work before measuring.
+                                                if let Err(e) = crate::git_engine::checkpoint_commit(
+                                                    wt_path,
+                                                    &format!("auto-checkpoint: run {} completed", run_id),
+                                                ).await {
+                                                    warn!(
+                                                        "checkpoint commit failed for run {}: {}",
+                                                        run_id, e
+                                                    );
+                                                }
                                                 match crate::git_engine::head_oid(wt_path).await {
                                                     Ok(wt_head) => {
                                                         if let Ok(changes) = crate::git_engine::changed_files(
@@ -2134,7 +2196,7 @@ impl Dispatcher {
                                         let summary = RunSummary {
                                             id: run_id,
                                             state: RunState::Completed { exit_code },
-                                            prompt_preview: String::new(),
+                                            prompt_preview: prompt.chars().take(100).collect(),
                                             modified_file_count: modified_files_list.len(),
                                             diff_stat: run_diff_stat.clone(),
                                             started_at: run_started_at,

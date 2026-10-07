@@ -82,7 +82,7 @@ impl PtyManager {
                 let guard = map.lock().await;
                 guard.get(&workspace_id).cloned()
             };
-            if let Some(tx) = tx {
+            if let Some(tx) = tx.filter(|tx| tx.receiver_count() > 0) {
                 let _ = tx.send(json);
                 return;
             }
@@ -592,6 +592,46 @@ mod tests {
         let result = manager.close_session(fake_id).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
+    }
+
+    // The per-workspace channels are created with their only receiver dropped
+    // (`let (ws_tx, _) = broadcast::channel(...)`), so a send into one is lost
+    // unless a client actually subscribed. Events must fall back, never vanish.
+
+    #[tokio::test]
+    async fn emit_via_falls_back_to_global_when_workspace_has_no_subscriber() {
+        let (global, mut global_rx) = broadcast::channel::<String>(16);
+        let channels: WorkspaceChannels = Arc::new(Mutex::new(HashMap::new()));
+        let workspace_id = Uuid::new_v4();
+        let (ws_tx, ws_rx) = broadcast::channel::<String>(16);
+        // Mirrors production, where the channel is built with `let (ws_tx, _)`:
+        // the only receiver is dropped, so nothing can ever be read from it.
+        drop(ws_rx);
+        channels.lock().await.insert(workspace_id, ws_tx);
+
+        PtyManager::emit_via(&global, Some(&channels), workspace_id, &AppEvent::AuthSuccess).await;
+
+        assert!(
+            global_rx.try_recv().is_ok(),
+            "an event for an unsubscribed workspace must reach the global channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn emit_via_uses_the_workspace_channel_when_subscribed() {
+        let (global, mut global_rx) = broadcast::channel::<String>(16);
+        let channels: WorkspaceChannels = Arc::new(Mutex::new(HashMap::new()));
+        let workspace_id = Uuid::new_v4();
+        let (ws_tx, mut ws_rx) = broadcast::channel::<String>(16);
+        channels.lock().await.insert(workspace_id, ws_tx);
+
+        PtyManager::emit_via(&global, Some(&channels), workspace_id, &AppEvent::AuthSuccess).await;
+
+        assert!(ws_rx.try_recv().is_ok(), "the subscriber receives it");
+        assert!(
+            global_rx.try_recv().is_err(),
+            "and it is not duplicated on the global channel"
+        );
     }
 
     #[tokio::test]

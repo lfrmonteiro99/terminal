@@ -41,6 +41,31 @@ async fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Like `run_git`, but keeps leading whitespace on the first line.
+///
+/// Machine-readable output is column-positional: in `git status --porcelain`
+/// a leading space (`" M file"`) means "modified, not staged". Trimming the
+/// whole output shifts every later column, so porcelain output must never go
+/// through `run_git`.
+async fn run_git_raw(cwd: &Path, args: &[&str]) -> Result<String> {
+    debug!("git {}", args.join(" "));
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|_| GitError::GitNotFound)?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches(['\n', '\r'])
+            .to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(GitError::CommandFailed(stderr))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Query operations
 // ---------------------------------------------------------------------------
@@ -190,6 +215,13 @@ pub async fn diff_full(cwd: &Path, base: &str, head: &str) -> Result<String> {
     run_git(cwd, &["diff", &range]).await
 }
 
+/// [`diff_full`] restricted to a single file (the `--` guard keeps a path
+/// that looks like an option from being read as one).
+pub async fn diff_full_file(cwd: &Path, base: &str, head: &str, file: &Path) -> Result<String> {
+    let range = format!("{}..{}", base, head);
+    run_git(cwd, &["diff", &range, "--", &file.to_string_lossy()]).await
+}
+
 // ---------------------------------------------------------------------------
 // Mutation operations
 // ---------------------------------------------------------------------------
@@ -300,7 +332,7 @@ pub async fn merge_abort(cwd: &Path) -> Result<()> {
 /// Returns dirty status of working directory (staged + unstaged files).
 /// Uses `git status --porcelain=v1`.
 pub async fn working_dir_status(cwd: &Path) -> Result<DirtyStatus> {
-    let output = run_git(cwd, &["status", "--porcelain=v1"]).await?;
+    let output = run_git_raw(cwd, &["status", "--porcelain=v1"]).await?;
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
@@ -315,7 +347,16 @@ pub async fn working_dir_status(cwd: &Path) -> Result<DirtyStatus> {
         }
         let x = line.as_bytes()[0]; // index (staged) status
         let y = line.as_bytes()[1]; // worktree (unstaged) status
-        let path = PathBuf::from(line[3..].to_string());
+        // Entry is "XY <path>"; renames and copies are "XY <old> -> <new>".
+        // Report the destination so the path is always something that exists.
+        let rest = match line.get(3..) {
+            Some(r) => r,
+            None => continue,
+        };
+        let path = PathBuf::from(match rest.split_once(" -> ") {
+            Some((_, new_path)) => new_path,
+            None => rest,
+        });
 
         // Untracked files: "??" — treat as unstaged Added
         if x == b'?' && y == b'?' {
@@ -663,14 +704,21 @@ pub async fn create_commit(cwd: &Path, message: &str) -> Result<String> {
 /// Returns Ok(()) regardless of git result — this is best-effort defensive
 /// commit, never blocks the cleanup path.
 pub async fn checkpoint_commit(worktree: &Path, message: &str) -> Result<()> {
+    // Nothing to record? Leave the branch untouched: an empty commit would
+    // point the branch away from the base for no reason and turn a later
+    // merge into a real merge instead of a fast-forward.
+    let dirty = run_git(worktree, &["status", "--porcelain=v1"]).await?;
+    if dirty.trim().is_empty() {
+        return Ok(());
+    }
     // Configura identidade local apenas para esta operação — caso o user
     // ainda não tenha git config user.name/email, evitamos um falhanço aqui.
-    let _ = run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
+    run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
         "-c", "user.email=daemon@jarvis.local",
-        "add", "-A"]).await;
-    let _ = run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
+        "add", "-A"]).await?;
+    run_git(worktree, &["-c", "user.name=Jarvis-Daemon",
         "-c", "user.email=daemon@jarvis.local",
-        "commit", "--allow-empty", "-m", message]).await;
+        "commit", "-m", message]).await?;
     Ok(())
 }
 
@@ -864,6 +912,22 @@ pub async fn resolve_conflict(
     // arbitrary files outside the repo via `../../...`.
     let safe_path = crate::safety::validate_path(cwd, file_path)
         .map_err(GitError::CommandFailed)?;
+
+    // A file with no unmerged entries has no conflict to resolve. Without this
+    // guard `git checkout --ours <path>` succeeds on a clean file, replaces it
+    // with the index version — silently discarding uncommitted edits — and the
+    // command still answers "resolved". docs/git-flow.md promises a refusal.
+    let unmerged = run_git(
+        cwd,
+        &["ls-files", "-u", "--", &file_path.to_string_lossy()],
+    )
+    .await?;
+    if unmerged.trim().is_empty() {
+        return Err(GitError::CommandFailed(format!(
+            "{} is not in a conflicted state",
+            file_path.display()
+        )));
+    }
 
     match resolution {
         terminal_core::protocol::v1::ConflictResolution::TakeOurs => {
@@ -1389,5 +1453,110 @@ theirs line
         let repo = init_test_repo();
         let result = branch_delete(repo.path(), "--all", false).await;
         assert!(result.is_err(), "Should reject flag injection");
+    }
+
+    // --- Regression: porcelain output must keep its column positions ---
+
+    #[tokio::test]
+    async fn working_dir_status_keeps_unstaged_path_intact() {
+        // A modified-but-unstaged file is reported as " M <path>". Trimming
+        // the output dropped the leading space, shifting every later column:
+        // the file came back as *staged* with its first character missing
+        // ("a.txt" -> ".txt").
+        let repo = init_test_repo();
+        std::fs::write(repo.path().join("README.md"), "# Test\nmore\n").expect("modify README");
+
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+
+        assert!(status.staged.is_empty(), "nothing was staged");
+        assert_eq!(status.unstaged.len(), 1, "exactly one modified file");
+        assert_eq!(status.unstaged[0].path, PathBuf::from("README.md"));
+        assert_eq!(status.unstaged[0].status, FileStatus::Modified);
+    }
+
+    #[tokio::test]
+    async fn working_dir_status_separates_staged_from_unstaged() {
+        let repo = init_test_repo();
+        std::fs::write(repo.path().join("README.md"), "# Test\nchanged\n").expect("modify README");
+        std::fs::write(repo.path().join("other.txt"), "new\n").expect("write other");
+        StdCommand::new("git")
+            .args(["add", "other.txt"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+
+        let staged: Vec<String> = status.staged.iter().map(|f| f.path.display().to_string()).collect();
+        let unstaged: Vec<String> = status.unstaged.iter().map(|f| f.path.display().to_string()).collect();
+        assert_eq!(staged, vec!["other.txt".to_string()], "staged holds the added file");
+        assert_eq!(unstaged, vec!["README.md".to_string()], "unstaged holds the edit");
+    }
+
+    // --- Regression: checkpoint_commit ---
+
+    #[tokio::test]
+    async fn checkpoint_commit_leaves_a_clean_worktree_alone() {
+        let repo = init_test_repo();
+        let before = head_oid(repo.path()).await.expect("head_oid");
+
+        checkpoint_commit(repo.path(), "checkpoint").await.expect("checkpoint_commit");
+
+        let after = head_oid(repo.path()).await.expect("head_oid");
+        assert_eq!(before, after, "a clean tree must not gain an empty commit");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_commit_records_uncommitted_work() {
+        let repo = init_test_repo();
+        let before = head_oid(repo.path()).await.expect("head_oid");
+        std::fs::write(repo.path().join("produced.txt"), "ai output\n").expect("write produced");
+
+        checkpoint_commit(repo.path(), "auto-checkpoint").await.expect("checkpoint_commit");
+
+        let after = head_oid(repo.path()).await.expect("head_oid");
+        assert_ne!(before, after, "the work must end up committed");
+        // Reachable from the branch tip => a later merge of the branch cannot
+        // delete it along with the worktree.
+        let tree = StdCommand::new("git")
+            .args(["ls-tree", "--name-only", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git ls-tree");
+        let names = String::from_utf8_lossy(&tree.stdout);
+        assert!(names.contains("produced.txt"), "HEAD tracks the new file: {}", names);
+
+        let status = working_dir_status(repo.path()).await.expect("working_dir_status");
+        assert!(
+            status.staged.is_empty() && status.unstaged.is_empty(),
+            "the tree is clean after the checkpoint"
+        );
+    }
+
+    // --- Regression: resolve_conflict must refuse a file without conflicts ---
+
+    #[tokio::test]
+    async fn resolve_conflict_refuses_a_file_that_is_not_conflicted() {
+        // Without the guard `git checkout --ours <path>` succeeds on a clean
+        // file, replaces it with the index version — discarding uncommitted
+        // edits — and the command still answers "resolved".
+        let repo = init_test_repo();
+        let file = repo.path().join("README.md");
+        std::fs::write(&file, "# Test\nuncommitted edit\n").expect("edit README");
+
+        let result = resolve_conflict(
+            repo.path(),
+            std::path::Path::new("README.md"),
+            &terminal_core::protocol::v1::ConflictResolution::TakeOurs,
+        )
+        .await;
+
+        assert!(result.is_err(), "a file with no conflict must be rejected");
+        let content = std::fs::read_to_string(&file).expect("read README");
+        assert!(
+            content.contains("uncommitted edit"),
+            "the uncommitted edit must survive, file now: {}",
+            content
+        );
     }
 }
