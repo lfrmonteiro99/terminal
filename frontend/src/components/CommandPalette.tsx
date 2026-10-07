@@ -156,6 +156,13 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         shortcut: getShortcut('sidebar:git'),
         action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' }); onClose(); },
       },
+      {
+        id: 'sidebar:agents',
+        label: 'Agents',
+        description: 'Switch sidebar to agents view',
+        shortcut: getShortcut('sidebar:agents'),
+        action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'agents' }); onClose(); },
+      },
       // Git branch
       {
         id: 'git:switch-branch',

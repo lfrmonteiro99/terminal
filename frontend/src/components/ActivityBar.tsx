@@ -1,7 +1,7 @@
-import { FolderTree, FileDiff, GitBranch, TerminalSquare, Bot, Globe } from 'lucide-react';
+import { FolderTree, FileDiff, GitBranch, TerminalSquare, Bot, Globe, Users } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 
-type SidebarView = 'explorer' | 'changes' | 'git';
+type SidebarView = 'explorer' | 'changes' | 'git' | 'agents';
 
 interface ActivityBarProps {
   onLayoutPreset?: (preset: string) => void;
@@ -11,6 +11,7 @@ const sidebarIcons: { view: SidebarView; label: string; Icon: React.ComponentTyp
   { view: 'explorer', label: 'Explorer', Icon: FolderTree },
   { view: 'changes', label: 'Changes', Icon: FileDiff },
   { view: 'git', label: 'Git', Icon: GitBranch },
+  { view: 'agents', label: 'Agents', Icon: Users },
 ];
 
 const layoutIcons: { preset: string; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [

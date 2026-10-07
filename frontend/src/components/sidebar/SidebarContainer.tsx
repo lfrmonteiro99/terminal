@@ -4,6 +4,7 @@ import { SessionStrip } from './SessionStrip';
 import { ExplorerView } from './ExplorerView';
 import { ChangesView } from './ChangesView';
 import { GitView } from './GitView';
+import { AgentsView } from './AgentsView';
 import { ResizeHandle } from '../ResizeHandle';
 
 const MIN_WIDTH = 180;
@@ -45,6 +46,7 @@ export function SidebarContainer() {
       case 'explorer': return ExplorerView;
       case 'changes': return ChangesView;
       case 'git': return GitView;
+      case 'agents': return AgentsView;
     }
   })();
 

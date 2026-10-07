@@ -8,7 +8,7 @@ export interface SavedSession {
   lastUsed: string;      // ISO date
   layout: PaneLayout;
   theme: string;
-  sidebarView: 'explorer' | 'changes' | 'git';
+  sidebarView: 'explorer' | 'changes' | 'git' | 'agents';
   sidebarCollapsed: boolean;
 }
 

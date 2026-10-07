@@ -71,7 +71,7 @@ export interface WorkspaceStore {
   stashDrawerOpen: boolean;
 
   // Sidebar layout
-  activeSidebarView: 'explorer' | 'changes' | 'git';
+  activeSidebarView: 'explorer' | 'changes' | 'git' | 'agents';
   sidebarCollapsed: boolean;
 
   // Content state

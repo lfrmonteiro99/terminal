@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import type { AgentSummary, AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
 
@@ -29,8 +29,10 @@ export interface AppState {
   dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
   stashDrawerOpen: boolean;
   // Sidebar layout
-  activeSidebarView: 'explorer' | 'changes' | 'git';
+  activeSidebarView: 'explorer' | 'changes' | 'git' | 'agents';
   sidebarCollapsed: boolean;
+  /** Agent registry last reported by the daemon. Consumed by AgentsView. */
+  agents: Map<string, AgentSummary>;
   // Phase 3: Sidebar state
   changesContext: { mode: 'working' | 'run'; runId?: string };
   changedFiles: { context: { mode: 'working' | 'run'; runId?: string }; files: FileChange[] } | null;
@@ -97,6 +99,7 @@ const initialState: AppState = {
   stashDrawerOpen: false,
   activeSidebarView: 'changes',
   sidebarCollapsed: false,
+  agents: new Map(),
   changesContext: { mode: 'working' },
   changedFiles: null,
   repoStatus: null,
@@ -601,11 +604,26 @@ function reducer(state: AppState, action: Action): AppState {
         case 'WorkspaceCreated':
         case 'WorkspaceClosed':
         case 'WorkspaceActivated':
-        case 'AgentList':
-        case 'AgentCreated':
-        case 'AgentUpdated':
-        case 'AgentDeleted':
           return state;
+
+        case 'AgentList': {
+          const agents = new Map<string, AgentSummary>();
+          for (const a of event.agents) agents.set(a.id, a);
+          return { ...state, agents };
+        }
+
+        case 'AgentCreated':
+        case 'AgentUpdated': {
+          const agents = new Map(state.agents);
+          agents.set(event.agent.id, event.agent);
+          return { ...state, agents };
+        }
+
+        case 'AgentDeleted': {
+          const agents = new Map(state.agents);
+          agents.delete(event.agent_id);
+          return { ...state, agents };
+        }
 
         default:
           assertExhaustive(event);
