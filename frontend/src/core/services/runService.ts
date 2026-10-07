@@ -9,6 +9,8 @@ export interface RunServiceStartRunParams {
   mode: RunMode;
   autonomy: AutonomyLevel;
   skipDirtyCheck?: boolean;
+  /** Named agent to drive the run. Omit for the implicit default agent. */
+  agentId?: string;
 }
 
 export class RunService {
@@ -26,6 +28,7 @@ export class RunService {
       mode: params.mode,
       autonomy: params.autonomy,
       skip_dirty_check: params.skipDirtyCheck,
+      agent_id: params.agentId,
     });
   }
 
@@ -49,13 +52,15 @@ export class RunService {
     this.bus.dispatch({ type: 'ListRuns', session_id: sessionId });
   }
 
-  stashAndRun(params: { sessionId: string; prompt: string; mode: RunMode; stashMessage: string }): void {
+  stashAndRun(params: { sessionId: string; prompt: string; mode: RunMode; stashMessage: string; autonomy?: AutonomyLevel; agentId?: string }): void {
     this.bus.dispatch({
       type: 'StashAndRun',
       session_id: params.sessionId,
       prompt: params.prompt,
       mode: params.mode,
       stash_message: params.stashMessage,
+      autonomy: params.autonomy,
+      agent_id: params.agentId,
     });
   }
 }

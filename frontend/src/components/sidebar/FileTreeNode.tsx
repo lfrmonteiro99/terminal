@@ -118,7 +118,7 @@ export function FileTreeNode({
     ...rowBaseStyle,
     paddingLeft,
     ...(isSelected
-      ? { backgroundColor: 'rgba(78, 205, 196, 0.12)', borderLeft: '2px solid var(--accent-primary)' }
+      ? { backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)', borderLeft: '2px solid var(--accent-primary)' }
       : hover
         ? { backgroundColor: 'rgba(255, 255, 255, 0.05)' }
         : {}),

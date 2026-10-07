@@ -28,6 +28,8 @@ pub struct DaemonConfig {
     pub data_dir: PathBuf,
     /// Path to claude CLI binary
     pub claude_binary: String,
+    /// Path to hermes CLI binary (used when an agent's runner is `Hermes`)
+    pub hermes_binary: String,
     /// Optional Claude MCP config file forwarded with --mcp-config
     pub mcp_config_path: Option<PathBuf>,
     /// Optional global Claude tool allowlist forwarded with --allowed-tools
@@ -61,6 +63,8 @@ impl Default for DaemonConfig {
                 .unwrap_or_else(|_| home.join(".terminal-daemon")),
             claude_binary: std::env::var("TERMINAL_CLAUDE_BINARY")
                 .unwrap_or_else(|_| "claude".into()),
+            hermes_binary: std::env::var("TERMINAL_HERMES_BINARY")
+                .unwrap_or_else(|_| "hermes".into()),
             mcp_config_path: std::env::var("TERMINAL_MCP_CONFIG").ok().map(PathBuf::from),
             allowed_tools: parse_csv_env("TERMINAL_ALLOWED_TOOLS"),
             disallowed_tools: parse_csv_env("TERMINAL_DISALLOWED_TOOLS"),

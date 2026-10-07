@@ -100,7 +100,7 @@ function PaneHeader({ kind, label, focused, paneIndex, canClose, onSplitH, onSpl
         }}
       >
         <span style={{
-          color: focused ? 'var(--accent-primary, #4ecdc4)' : 'var(--text-muted, #888)',
+          color: focused ? 'var(--accent-primary)' : 'var(--text-muted, #888)',
           fontWeight: 700,
           fontSize: '10px',
           fontFamily: 'var(--font-mono)',

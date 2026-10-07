@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
-import type { AgentSummary, AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
 
@@ -26,13 +26,17 @@ export interface AppState {
   stashes: StashEntry[];
   stashFiles: Map<number, FileChange[]>;
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
-  dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
+  dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string } | null;
   stashDrawerOpen: boolean;
   // Sidebar layout
   activeSidebarView: 'explorer' | 'changes' | 'git' | 'agents';
   sidebarCollapsed: boolean;
   /** Agent registry last reported by the daemon. Consumed by AgentsView. */
   agents: Map<string, AgentSummary>;
+  /** Role catalogue (seeded + operator-created). Agents reference it by id. */
+  roles: Map<string, Role>;
+  /** Personality catalogue (seeded + operator-created). */
+  personalities: Map<string, Personality>;
   // Phase 3: Sidebar state
   changesContext: { mode: 'working' | 'run'; runId?: string };
   changedFiles: { context: { mode: 'working' | 'run'; runId?: string }; files: FileChange[] } | null;
@@ -100,6 +104,8 @@ const initialState: AppState = {
   activeSidebarView: 'changes',
   sidebarCollapsed: false,
   agents: new Map(),
+  roles: new Map(),
+  personalities: new Map(),
   changesContext: { mode: 'working' },
   changedFiles: null,
   repoStatus: null,
@@ -376,6 +382,8 @@ function reducer(state: AppState, action: Action): AppState {
               session_id: event.session_id,
               prompt: event.prompt,
               mode: event.mode,
+              autonomy: event.autonomy,
+              agent_id: event.agent_id,
             },
           };
 
@@ -623,6 +631,14 @@ function reducer(state: AppState, action: Action): AppState {
           const agents = new Map(state.agents);
           agents.delete(event.agent_id);
           return { ...state, agents };
+        }
+
+        case 'CatalogUpdated': {
+          const roles = new Map<string, Role>();
+          for (const r of event.roles) roles.set(r.id, r);
+          const personalities = new Map<string, Personality>();
+          for (const p of event.personalities) personalities.set(p.id, p);
+          return { ...state, roles, personalities };
         }
 
         default:

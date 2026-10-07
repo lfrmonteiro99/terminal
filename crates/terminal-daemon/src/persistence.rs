@@ -2,8 +2,8 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
-    Agent, FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta,
-    Workspace, WorktreeMeta,
+    Agent, FailPhase, Personality, RestorableTerminalSession, Role, Run, RunState, Session,
+    TerminalSessionMeta, Workspace, WorktreeMeta,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -234,6 +234,89 @@ impl Persistence {
 
     pub fn delete_agent(&self, id: Uuid) -> Result<()> {
         let path = self.base_dir.join("agents").join(format!("{}.json", id));
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Role / personality catalogue
+    // -----------------------------------------------------------------------
+    //
+    // Both catalogues are stored as one file per entry, keyed by the entry's id
+    // (a slug for built-ins, a UUID string for operator-created entries). The
+    // ids reach the filesystem, so they are sanitised to a conservative
+    // character set — a role named "../../etc/passwd" must not become a path.
+
+    fn catalog_path(&self, kind: &str, id: &str) -> Result<PathBuf> {
+        let safe: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if safe.is_empty() {
+            return Err(PersistenceError::NotFound(
+                "catalogue id has no safe characters".into(),
+            ));
+        }
+        Ok(self.base_dir.join(kind).join(format!("{}.json", safe)))
+    }
+
+    fn list_catalog<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Result<Vec<T>> {
+        let dir = self.base_dir.join(kind);
+        let mut out = Vec::new();
+        if !dir.exists() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<T>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(v) => out.push(v),
+                Err(e) => warn!("Failed to parse {} file {:?}: {}", kind, path, e),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save_role(&self, role: &Role) -> Result<()> {
+        fs::create_dir_all(self.base_dir.join("roles"))?;
+        let path = self.catalog_path("roles", &role.id)?;
+        Self::atomic_write(&path, serde_json::to_string_pretty(role)?.as_bytes())
+    }
+
+    pub fn list_roles(&self) -> Result<Vec<Role>> {
+        self.list_catalog("roles")
+    }
+
+    pub fn delete_role(&self, id: &str) -> Result<()> {
+        let path = self.catalog_path("roles", id)?;
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_personality(&self, personality: &Personality) -> Result<()> {
+        fs::create_dir_all(self.base_dir.join("personalities"))?;
+        let path = self.catalog_path("personalities", &personality.id)?;
+        Self::atomic_write(&path, serde_json::to_string_pretty(personality)?.as_bytes())
+    }
+
+    pub fn list_personalities(&self) -> Result<Vec<Personality>> {
+        self.list_catalog("personalities")
+    }
+
+    pub fn delete_personality(&self, id: &str) -> Result<()> {
+        let path = self.catalog_path("personalities", id)?;
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

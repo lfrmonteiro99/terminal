@@ -19,7 +19,7 @@ use crate::parser::{ParseEvent, StreamParser};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use terminal_core::config::DaemonConfig;
-use terminal_core::models::{Agent, AutonomyLevel, RunMode};
+use terminal_core::models::{Agent, AutonomyLevel, RunMode, Runner};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
@@ -171,6 +171,75 @@ fn append_agent_args(args: &mut Vec<String>, agent: Option<&Agent>) {
         args.push("--append-system-prompt".to_string());
         args.push(agent.instructions.clone());
     }
+}
+
+/// Fold a driving agent into a `hermes -z` invocation.
+///
+/// `hermes -z` prints ONLY the final response text to stdout (no banner, no
+/// spinner, no stream-json), so the supervisor sees a coarser run than with
+/// Claude: no tool-use events and no token metrics. What it does not have is an
+/// `--append-system-prompt`, so the agent's composed instructions are prepended
+/// to the prompt as an explicit preamble — the only lever hermes exposes.
+fn hermes_args_for(prompt: &str, agent: Option<&Agent>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = agent
+        .and_then(|a| a.model.as_ref())
+        .filter(|m| !m.trim().is_empty())
+    {
+        args.push("-m".to_string());
+        args.push(model.clone());
+    }
+    args.push("-z".to_string());
+    args.push(match agent {
+        Some(a) if !a.instructions.trim().is_empty() => {
+            format!("{}\n\n---\n\n{}", a.instructions.trim(), prompt)
+        }
+        _ => prompt.to_string(),
+    });
+    args
+}
+
+/// Read a hermes one-shot's plain-text stdout into the shared `RunnerEvent`
+/// channel. `-z` prints the final text only, so every line is assistant output;
+/// `ResultSeen` is emitted on EOF, which is what tells the supervisor the run
+/// finished rather than dying mid-stream.
+fn spawn_hermes_readers(
+    run_id: Uuid,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+    event_tx: mpsc::Sender<RunnerEvent>,
+) {
+    let event_tx_stdout = event_tx.clone();
+    tokio::spawn(async move {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    let _ = event_tx_stdout.send(RunnerEvent::StdoutLine(line)).await;
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    error!("hermes stdout read error: {e}");
+                    break;
+                }
+            }
+        }
+        // hermes exited cleanly (child.wait handles the code); signal a proper
+        // completion so the supervisor does not report "stream ended without
+        // result event".
+        let _ = event_tx_stdout.send(RunnerEvent::ResultSeen).await;
+        debug!("hermes stdout reader finished for run {run_id}");
+    });
+
+    let event_tx_stderr = event_tx;
+    tokio::spawn(async move {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
+        }
+    });
 }
 
 fn append_config_args(args: &mut Vec<String>, config: &DaemonConfig) {
@@ -354,13 +423,24 @@ impl ClaudeRunner {
         Self { config }
     }
 
-    /// Check that the Claude binary exists and is runnable. Returns `Ok(())`
-    /// if `claude --version` exits 0; otherwise a human-friendly error + fix.
-    pub async fn preflight(&self) -> Result<PreflightInfo, PreflightFailure> {
-        let binary = &self.config.claude_binary;
+    /// Check that the binary for `runner` exists and is runnable, returning a
+    /// human-friendly reason + fix when it does not. Without this, selecting a
+    /// runner whose CLI is missing would surface as an opaque spawn error.
+    pub async fn preflight_for(&self, runner: Runner) -> Result<PreflightInfo, PreflightFailure> {
+        match runner {
+            Runner::Claude => self.preflight_binary(&self.config.claude_binary, "--version", "install Claude Code: https://docs.claude.com/en/docs/claude-code/overview — or set `claude_binary` / TERMINAL_CLAUDE_BINARY to the full path.").await,
+            Runner::Hermes => self.preflight_binary(&self.config.hermes_binary, "--version", "install Hermes Agent — or set `hermes_binary` / TERMINAL_HERMES_BINARY to the full path.").await,
+        }
+    }
 
+    async fn preflight_binary(
+        &self,
+        binary: &str,
+        version_flag: &str,
+        install_hint: &str,
+    ) -> Result<PreflightInfo, PreflightFailure> {
         let result = Command::new(binary)
-            .arg("--version")
+            .arg(version_flag)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -376,8 +456,9 @@ impl ClaudeRunner {
                 let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
                 Err(PreflightFailure {
                     reason: format!(
-                        "`{} --version` exited with {}: {}",
+                        "`{} {}` exited with {}: {}",
                         binary,
+                        version_flag,
                         out.status.code().unwrap_or(-1),
                         if stderr.is_empty() {
                             "no output".into()
@@ -385,22 +466,24 @@ impl ClaudeRunner {
                             stderr
                         }
                     ),
-                    suggestion:
-                        "verify Claude Code is installed and authenticated: `claude doctor`".into(),
+                    suggestion: format!("`{binary}` is installed but not runnable: {install_hint}"),
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(PreflightFailure {
                 reason: format!("`{}` binary not found on PATH", binary),
-                suggestion:
-                    "install Claude Code: https://docs.claude.com/en/docs/claude-code/overview — \
-                     or set `claude_binary` / TERMINAL_CLAUDE_BINARY to the full path."
-                        .into(),
+                suggestion: install_hint.into(),
             }),
             Err(e) => Err(PreflightFailure {
-                reason: format!("failed to run `{} --version`: {}", binary, e),
-                suggestion: "check that the configured claude binary is executable".into(),
+                reason: format!("failed to run `{}`: {}", binary, e),
+                suggestion: "check that the configured binary is executable".into(),
             }),
         }
+    }
+
+    /// Check that the Claude binary exists and is runnable. Returns `Ok(())`
+    /// if `claude --version` exits 0; otherwise a human-friendly error + fix.
+    pub async fn preflight(&self) -> Result<PreflightInfo, PreflightFailure> {
+        self.preflight_for(Runner::Claude).await
     }
 
     /// Spawn `claude -p` with stream-json output. Returns the event stream,
@@ -425,15 +508,20 @@ impl ClaudeRunner {
 
         // Headless JSONL stream. The argument builder is unit-tested so new
         // Claude flags stay visible without spawning the real binary.
-        let mut cmd = Command::new(&self.config.claude_binary);
-        cmd.args(claude_args_for(
-            prompt,
-            mode,
-            autonomy,
-            &self.config,
-            false,
-            agent,
-        ));
+        let runner = agent.map(|a| a.runner).unwrap_or_default();
+        let (binary, args) = match runner {
+            Runner::Claude => (
+                self.config.claude_binary.clone(),
+                claude_args_for(prompt, mode, autonomy, &self.config, false, agent),
+            ),
+            Runner::Hermes => (
+                self.config.hermes_binary.clone(),
+                hermes_args_for(prompt, agent),
+            ),
+        };
+
+        let mut cmd = Command::new(&binary);
+        cmd.args(&args);
 
         let mut child = cmd
             .current_dir(working_dir)
@@ -442,15 +530,18 @@ impl ClaudeRunner {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("failed to spawn `{}`: {}", self.config.claude_binary, e))?;
+            .map_err(|e| format!("failed to spawn `{}`: {}", binary, e))?;
 
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;
 
         let (event_tx, event_rx) = mpsc::channel::<RunnerEvent>(256);
-        spawn_stream_readers(run_id, stdout, stderr, event_tx);
+        match runner {
+            Runner::Claude => spawn_stream_readers(run_id, stdout, stderr, event_tx),
+            Runner::Hermes => spawn_hermes_readers(run_id, stdout, stderr, event_tx),
+        }
 
-        info!("claude stream-json process spawned for run {}", run_id);
+        info!("{runner:?} runner spawned for run {run_id}");
         Ok((event_rx, child))
     }
 
@@ -623,7 +714,10 @@ mod tests {
         let agent = Agent {
             id: Uuid::new_v4(),
             name: "verifier".into(),
-            role: terminal_core::models::AgentRole::Verifier,
+            role_id: Some("verifier".into()),
+            personality_id: None,
+            runner: Runner::Claude,
+            legacy_role: None,
             description: String::new(),
             instructions: "Check the work and report evidence.".into(),
             model: Some("claude-opus".into()),
@@ -646,13 +740,48 @@ mod tests {
     }
 
     #[test]
+    fn hermes_args_carry_model_and_prepend_instructions() {
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "reviewer".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Hermes,
+            legacy_role: None,
+            description: String::new(),
+            instructions: "Be adversarial.".into(),
+            model: Some("anthropic/claude-sonnet-4.6".into()),
+            default_autonomy: AutonomyLevel::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        let args = hermes_args_for("review the diff", Some(&agent));
+        assert!(args.windows(2).any(|w| w == ["-m", "anthropic/claude-sonnet-4.6"]));
+        // hermes has no --append-system-prompt: instructions are prepended.
+        let prompt = args.last().expect("prompt arg");
+        assert!(prompt.starts_with("Be adversarial."), "got {prompt:?}");
+        assert!(prompt.ends_with("review the diff"), "got {prompt:?}");
+        assert!(!args.iter().any(|a| a == "--append-system-prompt"));
+    }
+
+    #[test]
+    fn hermes_args_without_agent_is_the_bare_prompt() {
+        let args = hermes_args_for("hello", None);
+        assert_eq!(args, vec!["-z".to_string(), "hello".to_string()]);
+    }
+
+    #[test]
     fn agent_args_absent_when_agent_has_no_model_or_instructions() {
         let cfg = DaemonConfig::default();
         let now = chrono::Utc::now();
         let agent = Agent {
             id: Uuid::new_v4(),
             name: "bare".into(),
-            role: terminal_core::models::AgentRole::Generic,
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Claude,
+            legacy_role: None,
             description: String::new(),
             instructions: "   ".into(),
             model: None,

@@ -56,6 +56,10 @@ pub struct DaemonContext {
     pub workspace_channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
     /// Agents registry — named, reusable workers.
     pub agents: Arc<Mutex<HashMap<Uuid, terminal_core::models::Agent>>>,
+    /// Role catalogue — id -> Role. Seeded with built-ins, operator-extensible.
+    pub roles: Arc<Mutex<HashMap<String, terminal_core::models::Role>>>,
+    /// Personality catalogue — id -> Personality.
+    pub personalities: Arc<Mutex<HashMap<String, terminal_core::models::Personality>>>,
 }
 
 impl DaemonContext {
@@ -77,6 +81,8 @@ impl DaemonContext {
             active_workspaces: Arc::new(Mutex::new(HashMap::new())),
             workspace_channels: Arc::new(Mutex::new(HashMap::new())),
             agents: Arc::new(Mutex::new(HashMap::new())),
+            roles: Arc::new(Mutex::new(HashMap::new())),
+            personalities: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

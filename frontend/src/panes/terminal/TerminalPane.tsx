@@ -82,7 +82,7 @@ function getTermTheme() {
   return {
     background: v('--bg-base') || '#0d1117',
     foreground: v('--text-primary') || '#e0e0e0',
-    cursor: v('--accent-primary') || '#4ecdc4',
+    cursor: v('--accent-primary') || '#35d399',
     cursorAccent: v('--bg-base') || '#0d1117',
     selectionBackground: v('--bg-overlay') || '#232738',
     selectionForeground: v('--text-primary') || '#e2e4e9',

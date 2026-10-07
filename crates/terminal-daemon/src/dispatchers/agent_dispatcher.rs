@@ -8,7 +8,7 @@
 use crate::daemon_context::DaemonContext;
 use chrono::Utc;
 use std::sync::Arc;
-use terminal_core::models::{Agent, AgentRole, AgentSummary};
+use terminal_core::models::{Agent, AgentSummary, Runner};
 use terminal_core::protocol::v1::{AppCommand, AppEvent};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -28,7 +28,9 @@ impl AgentDispatcher {
             AppCommand::ListAgents => self.list(reply_tx).await,
             AppCommand::CreateAgent {
                 name,
-                role,
+                role_id,
+                personality_id,
+                runner,
                 description,
                 instructions,
                 model,
@@ -36,7 +38,9 @@ impl AgentDispatcher {
             } => {
                 self.create(
                     name,
-                    role,
+                    role_id,
+                    personality_id,
+                    runner,
                     description,
                     instructions,
                     model,
@@ -48,7 +52,9 @@ impl AgentDispatcher {
             AppCommand::UpdateAgent {
                 agent_id,
                 name,
-                role,
+                role_id,
+                personality_id,
+                runner,
                 description,
                 instructions,
                 model,
@@ -57,7 +63,9 @@ impl AgentDispatcher {
                 self.update(
                     agent_id,
                     name,
-                    role,
+                    role_id,
+                    personality_id,
+                    runner,
                     description,
                     instructions,
                     model,
@@ -88,7 +96,45 @@ impl AgentDispatcher {
         for agent in persisted {
             agents.insert(agent.id, agent);
         }
-        info!("Recovered {} persisted agent(s)", agents.len());
+        drop(agents);
+        self.migrate_legacy_roles().await;
+        info!("Recovered {} persisted agent(s)", self.ctx.agents.lock().await.len());
+    }
+
+    /// Old agent files carried an `AgentRole` enum instead of a catalogue id.
+    /// Map them onto the seeded slugs once, and persist the migration so it is
+    /// not repeated. Unknown/absent roles are left as `None` (no overlay).
+    async fn migrate_legacy_roles(&self) {
+        let legacy: Vec<(Uuid, String)> = {
+            let agents = self.ctx.agents.lock().await;
+            agents
+                .values()
+                .filter(|a| a.role_id.is_none())
+                .filter_map(|a| a.legacy_role.clone().map(|r| (a.id, r)))
+                .collect()
+        };
+        for (id, old) in legacy {
+            let slug = old.to_lowercase();
+            let slug = match slug.as_str() {
+                "generic" | "planner" | "implementer" | "verifier" => slug,
+                other => {
+                    warn!("agent {id}: cannot migrate legacy role {other:?}, dropping it");
+                    continue;
+                }
+            };
+            let mut agents = self.ctx.agents.lock().await;
+            if let Some(agent) = agents.get_mut(&id) {
+                agent.role_id = Some(slug.clone());
+                agent.updated_at = Utc::now();
+                let snapshot = agent.clone();
+                drop(agents);
+                if let Err(e) = self.ctx.persistence.save_agent(&snapshot) {
+                    warn!("agent {id}: failed to persist role migration: {e}");
+                } else {
+                    info!("agent {id}: migrated legacy role to {slug:?}");
+                }
+            }
+        }
     }
 
     async fn list(&self, reply_tx: mpsc::Sender<AppEvent>) {
@@ -102,7 +148,9 @@ impl AgentDispatcher {
     async fn create(
         &self,
         name: String,
-        role: AgentRole,
+        role_id: Option<String>,
+        personality_id: Option<String>,
+        runner: Runner,
         description: String,
         instructions: String,
         model: Option<String>,
@@ -118,11 +166,18 @@ impl AgentDispatcher {
             return;
         }
 
+        let (role_id, personality_id) = self
+            .normalize_refs(role_id, personality_id, reply_tx.clone())
+            .await;
+
         let now = Utc::now();
         let agent = Agent {
             id: Uuid::new_v4(),
             name,
-            role,
+            role_id,
+            personality_id,
+            runner,
+            legacy_role: None,
             description,
             instructions,
             model: normalize_model(model),
@@ -143,12 +198,51 @@ impl AgentDispatcher {
         let _ = reply_tx.send(AppEvent::AgentCreated { agent: summary }).await;
     }
 
+    /// Drop catalogue references that point at nothing. A dangling id would be
+    /// invisible in the UI (the dropdown would show blank) and silently do
+    /// nothing at run time, so it is normalised to `None` with a warning rather
+    /// than stored.
+    async fn normalize_refs(
+        &self,
+        role_id: Option<String>,
+        personality_id: Option<String>,
+        _reply_tx: mpsc::Sender<AppEvent>,
+    ) -> (Option<String>, Option<String>) {
+        let role_id = match role_id {
+            Some(id) if !id.trim().is_empty() => {
+                let known = self.ctx.roles.lock().await.contains_key(&id);
+                if known {
+                    Some(id)
+                } else {
+                    warn!("agent references unknown role {id:?}, dropping it");
+                    None
+                }
+            }
+            _ => None,
+        };
+        let personality_id = match personality_id {
+            Some(id) if !id.trim().is_empty() => {
+                let known = self.ctx.personalities.lock().await.contains_key(&id);
+                if known {
+                    Some(id)
+                } else {
+                    warn!("agent references unknown personality {id:?}, dropping it");
+                    None
+                }
+            }
+            _ => None,
+        };
+        (role_id, personality_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn update(
         &self,
         agent_id: Uuid,
         name: Option<String>,
-        role: Option<AgentRole>,
+        role_id: Option<String>,
+        personality_id: Option<String>,
+        runner: Option<Runner>,
         description: Option<String>,
         instructions: Option<String>,
         model: Option<String>,
@@ -166,6 +260,36 @@ impl AgentDispatcher {
             return;
         };
 
+        // `role_id` / `personality_id` are tri-state on the wire: absent leaves
+        // the reference untouched, an empty string clears it, a value sets it.
+        let (role_id, personality_id) = {
+            let role_setting = match role_id {
+                Some(r) if r.trim().is_empty() => Some(None),
+                Some(r) => Some(Some(r)),
+                None => None,
+            };
+            let personality_setting = match personality_id {
+                Some(p) if p.trim().is_empty() => Some(None),
+                Some(p) => Some(Some(p)),
+                None => None,
+            };
+            // Validate against the effective value so an untouched field is
+            // still checked against the catalogue.
+            let effective_role = role_setting
+                .clone()
+                .unwrap_or_else(|| agent.role_id.clone());
+            let effective_personality = personality_setting
+                .clone()
+                .unwrap_or_else(|| agent.personality_id.clone());
+            let (r, p) = self
+                .normalize_refs(effective_role, effective_personality, reply_tx.clone())
+                .await;
+            (
+                role_setting.map(|_| r),
+                personality_setting.map(|_| p),
+            )
+        };
+
         if let Some(name) = name {
             let name = name.trim().to_string();
             if name.is_empty() {
@@ -175,8 +299,14 @@ impl AgentDispatcher {
             }
             agent.name = name;
         }
-        if let Some(role) = role {
-            agent.role = role;
+        if let Some(role) = role_id {
+            agent.role_id = role;
+        }
+        if let Some(personality) = personality_id {
+            agent.personality_id = personality;
+        }
+        if let Some(runner) = runner {
+            agent.runner = runner;
         }
         if let Some(description) = description {
             agent.description = description;
@@ -272,6 +402,17 @@ mod tests {
         AgentDispatcher::new(ctx)
     }
 
+    /// Agents reference catalogue ids, and unknown ids are dropped, so tests
+    /// that set a role must seed the catalogue first — exactly as the daemon
+    /// does (`recover_catalog` runs before `recover_agents`).
+    async fn make_seeded_dispatcher(tmp: &TempDir) -> AgentDispatcher {
+        let d = make_dispatcher(tmp);
+        crate::dispatchers::catalog_dispatcher::CatalogDispatcher::new(d.ctx.clone())
+            .recover()
+            .await;
+        d
+    }
+
     async fn recv(rx: &mut mpsc::Receiver<AppEvent>) -> AppEvent {
         rx.recv().await.expect("event")
     }
@@ -279,13 +420,15 @@ mod tests {
     #[tokio::test]
     async fn create_then_list_roundtrips() {
         let tmp = TempDir::new().unwrap();
-        let d = make_dispatcher(&tmp);
+        let d = make_seeded_dispatcher(&tmp).await;
         let (tx, mut rx) = mpsc::channel(8);
 
         d.handle(
             AppCommand::CreateAgent {
                 name: "planner".into(),
-                role: AgentRole::Planner,
+                role_id: Some("planner".into()),
+                personality_id: Some("terse".into()),
+                runner: Runner::Claude,
                 description: "drafts a plan".into(),
                 instructions: "You produce a plan only.".into(),
                 model: Some("claude-sonnet".into()),
@@ -298,7 +441,9 @@ mod tests {
         match recv(&mut rx).await {
             AppEvent::AgentCreated { agent } => {
                 assert_eq!(agent.name, "planner");
-                assert_eq!(agent.role, AgentRole::Planner);
+                assert_eq!(agent.role_id.as_deref(), Some("planner"));
+                assert_eq!(agent.personality_id.as_deref(), Some("terse"));
+                assert_eq!(agent.runner, Runner::Claude);
                 assert_eq!(agent.model.as_deref(), Some("claude-sonnet"));
                 assert_eq!(agent.default_autonomy, AutonomyLevel::ReviewPlan);
             }
@@ -316,6 +461,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_role_reference_is_dropped() {
+        let tmp = TempDir::new().unwrap();
+        let d = make_seeded_dispatcher(&tmp).await;
+        let (tx, mut rx) = mpsc::channel(8);
+
+        d.handle(
+            AppCommand::CreateAgent {
+                name: "ghost".into(),
+                role_id: Some("no-such-role".into()),
+                personality_id: None,
+                runner: Runner::Hermes,
+                description: String::new(),
+                instructions: String::new(),
+                model: None,
+                default_autonomy: AutonomyLevel::default(),
+            },
+            tx,
+        )
+        .await;
+
+        match recv(&mut rx).await {
+            AppEvent::AgentCreated { agent } => {
+                assert_eq!(agent.role_id, None, "dangling role must be dropped");
+                assert_eq!(agent.runner, Runner::Hermes, "runner is not a reference");
+            }
+            other => panic!("expected AgentCreated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn empty_name_is_rejected() {
         let tmp = TempDir::new().unwrap();
         let d = make_dispatcher(&tmp);
@@ -324,7 +499,9 @@ mod tests {
         d.handle(
             AppCommand::CreateAgent {
                 name: "   ".into(),
-                role: AgentRole::Generic,
+                role_id: None,
+                personality_id: None,
+                runner: Runner::default(),
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
@@ -343,13 +520,15 @@ mod tests {
     #[tokio::test]
     async fn update_changes_fields_and_persists() {
         let tmp = TempDir::new().unwrap();
-        let d = make_dispatcher(&tmp);
+        let d = make_seeded_dispatcher(&tmp).await;
         let (tx, mut rx) = mpsc::channel(8);
 
         d.handle(
             AppCommand::CreateAgent {
                 name: "impl".into(),
-                role: AgentRole::Implementer,
+                role_id: Some("implementer".into()),
+                personality_id: None,
+                runner: Runner::Claude,
                 description: String::new(),
                 instructions: "old mission".into(),
                 model: None,
@@ -367,7 +546,9 @@ mod tests {
             AppCommand::UpdateAgent {
                 agent_id: id,
                 name: None,
-                role: Some(AgentRole::Verifier),
+                role_id: Some("verifier".into()),
+                personality_id: Some("thorough".into()),
+                runner: Some(Runner::Hermes),
                 description: None,
                 instructions: Some("new mission".into()),
                 model: Some("claude-opus".into()),
@@ -379,7 +560,9 @@ mod tests {
 
         match recv(&mut rx).await {
             AppEvent::AgentUpdated { agent } => {
-                assert_eq!(agent.role, AgentRole::Verifier);
+                assert_eq!(agent.role_id.as_deref(), Some("verifier"));
+                assert_eq!(agent.personality_id.as_deref(), Some("thorough"));
+                assert_eq!(agent.runner, Runner::Hermes);
                 assert_eq!(agent.model.as_deref(), Some("claude-opus"));
                 assert_eq!(agent.name, "impl", "name must be unchanged");
             }
@@ -389,7 +572,62 @@ mod tests {
         // Re-read from disk: the update must have been persisted.
         let loaded = d.ctx.persistence.load_agent(id).unwrap().unwrap();
         assert_eq!(loaded.instructions, "new mission");
-        assert_eq!(loaded.role, AgentRole::Verifier);
+        assert_eq!(loaded.role_id.as_deref(), Some("verifier"));
+        assert_eq!(loaded.runner, Runner::Hermes);
+    }
+
+    #[tokio::test]
+    async fn update_can_clear_a_reference_with_an_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        let d = make_seeded_dispatcher(&tmp).await;
+        let (tx, mut rx) = mpsc::channel(8);
+
+        d.handle(
+            AppCommand::CreateAgent {
+                name: "impl".into(),
+                role_id: Some("implementer".into()),
+                personality_id: Some("terse".into()),
+                runner: Runner::Claude,
+                description: String::new(),
+                instructions: String::new(),
+                model: None,
+                default_autonomy: AutonomyLevel::default(),
+            },
+            tx.clone(),
+        )
+        .await;
+        let id = match recv(&mut rx).await {
+            AppEvent::AgentCreated { agent } => agent.id,
+            other => panic!("expected AgentCreated, got {other:?}"),
+        };
+
+        d.handle(
+            AppCommand::UpdateAgent {
+                agent_id: id,
+                name: None,
+                role_id: Some(String::new()),
+                personality_id: None,
+                runner: None,
+                description: None,
+                instructions: None,
+                model: None,
+                default_autonomy: None,
+            },
+            tx,
+        )
+        .await;
+
+        match recv(&mut rx).await {
+            AppEvent::AgentUpdated { agent } => {
+                assert_eq!(agent.role_id, None, "empty string must clear the role");
+                assert_eq!(
+                    agent.personality_id.as_deref(),
+                    Some("terse"),
+                    "absent field must leave the personality untouched"
+                );
+            }
+            other => panic!("expected AgentUpdated, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -402,7 +640,9 @@ mod tests {
             AppCommand::UpdateAgent {
                 agent_id: Uuid::new_v4(),
                 name: Some("x".into()),
-                role: None,
+                role_id: None,
+                personality_id: None,
+                runner: None,
                 description: None,
                 instructions: None,
                 model: None,
@@ -426,7 +666,9 @@ mod tests {
         d.handle(
             AppCommand::CreateAgent {
                 name: "persisted".into(),
-                role: AgentRole::Generic,
+                role_id: None,
+                personality_id: None,
+                runner: Runner::Claude,
                 description: String::new(),
                 instructions: String::new(),
                 model: None,

@@ -10,3 +10,6 @@ __pycache__/
 # Tooling scratch
 /.playwright-mcp/
 /docs/superpowers/
+
+# Per-run git worktrees created by the daemon (self-hosting UAT dirties the repo otherwise)
+/.terminal-worktrees/

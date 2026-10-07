@@ -4,7 +4,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
-import { ActivityBar } from './components/ActivityBar.tsx';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
@@ -588,18 +587,17 @@ function AppContent() {
         {/* Main layout (when session is active) */}
         {state.activeSession && (
           <>
-            {/* AppChrome header */}
-            <AppChrome />
+            {/* AppChrome header — command bar (identity, workspace, views, layout, status) */}
+            <AppChrome onLayoutPreset={(preset) => {
+              const p = LAYOUT_PRESETS[preset];
+              if (p) {
+                setLayout(p.layout);
+                setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
+              }
+            }} />
 
-            {/* Main content: activity bar + sidebar + pane area */}
+            {/* Main content: sidebar + pane area */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <ActivityBar onLayoutPreset={(preset) => {
-                const p = LAYOUT_PRESETS[preset];
-                if (p) {
-                  setLayout(p.layout);
-                  setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
-                }
-              }} />
               <SidebarContainer />
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
                 <PaneRenderer
@@ -642,6 +640,8 @@ function AppContent() {
                 prompt: dw.prompt,
                 mode: dw.mode,
                 stash_message: 'auto-stash before AI run',
+                autonomy: dw.autonomy,
+                agent_id: dw.agent_id,
               });
               dispatch({ type: 'DISMISS_DIRTY_WARNING' });
             }}
@@ -653,6 +653,8 @@ function AppContent() {
                 prompt: dw.prompt,
                 mode: dw.mode,
                 skip_dirty_check: true,
+                autonomy: dw.autonomy,
+                agent_id: dw.agent_id,
               });
               dispatch({ type: 'DISMISS_DIRTY_WARNING' });
             }}

@@ -1,16 +1,79 @@
-// AppChrome — top chrome bar: title, session tabs, connection status
+// AppChrome — single horizontal command bar.
+// Replaces the VS Code layout of (title bar + vertical activity rail + editor tabs)
+// with one band: identity · workspace selector · view switcher · layout · status.
 
-import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import {
+  FolderTree, FileDiff, GitBranch, Users, TerminalSquare, Bot, Globe,
+  ChevronDown, Plus, X, Check,
+} from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
 
-export function AppChrome() {
+type SidebarView = 'explorer' | 'changes' | 'git' | 'agents';
+
+const VIEWS: { view: SidebarView; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
+  { view: 'explorer', label: 'Files', Icon: FolderTree },
+  { view: 'changes', label: 'Changes', Icon: FileDiff },
+  { view: 'git', label: 'Git', Icon: GitBranch },
+  { view: 'agents', label: 'Agents', Icon: Users },
+];
+
+const LAYOUTS: { preset: string; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
+  { preset: 'terminal', label: 'Terminal', Icon: TerminalSquare },
+  { preset: 'ai', label: 'AI session', Icon: Bot },
+  { preset: 'browser', label: 'Browser', Icon: Globe },
+];
+
+interface AppChromeProps {
+  onLayoutPreset?: (preset: string) => void;
+}
+
+/** The app mark — a bracketed prompt cursor, mono-native, no gradient clip. */
+function Mark() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 22,
+        height: 22,
+        borderRadius: 6,
+        border: '1px solid var(--accent-primary)',
+        color: 'var(--accent-primary)',
+        backgroundColor: 'var(--accent-primary-08)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 13,
+        fontWeight: 700,
+        lineHeight: 1,
+        userSelect: 'none',
+      }}
+    >
+      ▸
+    </span>
+  );
+}
+
+export function AppChrome({ onLayoutPreset }: AppChromeProps) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
+
+  const [menu, setMenu] = useState<null | 'workspace' | 'layout'>(null);
   const [addingSession, setAddingSession] = useState(false);
   const [newPath, setNewPath] = useState('');
+  const barRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const onDoc = (e: MouseEvent) => {
+      if (barRef.current && !barRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [menu]);
 
   const connectionStatus = state.connection.status;
   const statusColor =
@@ -21,17 +84,22 @@ export function AppChrome() {
         : 'var(--accent-error)';
 
   const sessions = Array.from(state.sessions.values());
+  const active = state.activeSession ? state.sessions.get(state.activeSession) : null;
+  const projectName = (root: string) => root.split(/[/\\]/).filter(Boolean).pop() ?? root;
+
+  const activeView = state.sidebarCollapsed ? null : state.activeSidebarView;
 
   const handleNewSession = () => {
-    if (!newPath.trim()) return;
-    send({ type: 'StartSession', project_root: newPath.trim() });
+    const path = newPath.trim();
+    if (!path) return;
+    send({ type: 'StartSession', project_root: path });
     setNewPath('');
     setAddingSession(false);
+    setMenu(null);
   };
 
   const handleCloseSession = (sessionId: string) => {
     send({ type: 'EndSession', session_id: sessionId });
-    // If closing the active session, switch to another
     if (sessionId === state.activeSession) {
       const remaining = sessions.filter(s => s.id !== sessionId);
       if (remaining.length > 0) {
@@ -40,10 +108,41 @@ export function AppChrome() {
     }
   };
 
-  const projectName = (root: string) => root.split('/').filter(Boolean).pop() ?? root;
+  const chipStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 26,
+    padding: '0 8px',
+    border: '1px solid var(--border-default)',
+    borderRadius: 6,
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    fontFamily: 'var(--font-display)',
+    fontSize: 12,
+    whiteSpace: 'nowrap',
+    transition: 'color 140ms var(--ease-out-expo), border-color 140ms var(--ease-out-expo)',
+  };
+
+  const popoverStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: 'calc(100% + 6px)',
+    left: 0,
+    minWidth: 260,
+    background: 'var(--bg-overlay)',
+    border: '1px solid var(--border-default)',
+    borderRadius: 8,
+    boxShadow: 'var(--shadow-overlay)',
+    padding: 6,
+    zIndex: 50,
+    fontFamily: 'var(--font-display)',
+    fontSize: 12,
+  };
 
   return (
     <div
+      ref={barRef}
       style={{
         height: 'var(--chrome-height)',
         backgroundColor: 'var(--bg-surface)',
@@ -52,153 +151,215 @@ export function AppChrome() {
         alignItems: 'center',
         paddingLeft: 12,
         paddingRight: 12,
-        gap: 0,
+        gap: 10,
         flexShrink: 0,
-        fontFamily: 'var(--font-display)',
-        fontSize: 'var(--font-size-label)',
-        letterSpacing: '0.01em',
+        position: 'relative',
+        zIndex: 40,
       }}
     >
-      {/* Title */}
-      <span
-        style={{
-          fontFamily: 'var(--font-display)',
-          fontWeight: 700,
-          fontSize: 13,
-          letterSpacing: '-0.01em',
-          marginRight: 16,
-          whiteSpace: 'nowrap',
-          background: 'linear-gradient(135deg, var(--text-primary) 0%, var(--accent-primary) 120%)',
-          WebkitBackgroundClip: 'text',
-          backgroundClip: 'text',
-          color: 'transparent',
-        }}
-      >
-        Terminal Engine
-      </span>
-
-      {/* Session tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflow: 'hidden', gap: 0 }}>
-        {sessions.map(session => {
-          const isActive = session.id === state.activeSession;
-          return (
-            <div
-              key={session.id}
-              title={session.project_root}
-              onClick={() => dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: session.id })}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '0 12px',
-                height: '100%',
-                cursor: 'pointer',
-                borderBottom: isActive ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                backgroundColor: isActive ? 'var(--bg-overlay)' : 'transparent',
-                boxShadow: isActive ? 'inset 0 -2px 0 var(--accent-primary), 0 0 12px -6px var(--accent-primary)' : 'none',
-                fontFamily: 'var(--font-display)',
-                fontWeight: isActive ? 600 : 500,
-                fontSize: 12,
-                letterSpacing: '0.01em',
-                whiteSpace: 'nowrap',
-                transition: 'color 160ms var(--ease-out-expo), background-color 160ms var(--ease-out-expo), border-color 200ms var(--ease-out-expo), box-shadow 200ms var(--ease-out-expo)',
-              }}
-              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-raised)'; }}
-              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-            >
-              <span>{projectName(session.project_root)}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleCloseSession(session.id); }}
-                style={{
-                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                  color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
-                }}
-                title="Close session"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          );
-        })}
-
-        {/* Add session button or inline input */}
-        {addingSession ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px' }}>
-            <input
-              autoFocus
-              value={newPath}
-              onChange={(e) => setNewPath(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleNewSession();
-                if (e.key === 'Escape') { setAddingSession(false); setNewPath(''); }
-              }}
-              placeholder="Project path..."
-              style={{
-                backgroundColor: 'var(--bg-raised)', border: '1px solid var(--border-default)',
-                color: 'var(--text-primary)', padding: '2px 6px', borderRadius: 3,
-                fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-chrome)', width: 180,
-              }}
-            />
-          </div>
-        ) : (
-          <button
-            onClick={() => setAddingSession(true)}
-            title="New session"
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-muted)', display: 'flex', alignItems: 'center',
-              padding: '0 8px', height: '100%',
-            }}
-          >
-            <Plus size={14} />
-          </button>
-        )}
-      </div>
-
-      {/* Right: Ctrl+K hint + connection status */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, whiteSpace: 'nowrap' }}>
+      {/* Identity */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 4 }}>
+        <Mark />
         <span
           style={{
-            color: 'var(--text-muted)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '2px 8px',
-            border: '1px solid var(--border-default)',
-            borderRadius: 4,
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            letterSpacing: '0.04em',
+            fontFamily: 'var(--font-display)',
+            fontWeight: 600,
+            fontSize: 13,
+            letterSpacing: '-0.005em',
+            color: 'var(--text-primary)',
+            whiteSpace: 'nowrap',
           }}
         >
-          ⌘K
+          Engine
         </span>
-        <span
+      </div>
+
+      {/* Workspace selector */}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setMenu(m => (m === 'workspace' ? null : 'workspace'))}
+          title={active?.project_root ?? 'No workspace'}
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            color: statusColor,
-            fontFamily: 'var(--font-display)',
-            fontSize: 11,
-            fontWeight: 500,
-            letterSpacing: '0.02em',
+            ...chipStyle,
+            color: 'var(--text-primary)',
+            borderColor: menu === 'workspace' ? 'var(--accent-primary)' : 'var(--border-default)',
           }}
         >
           <span
             style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
+              width: 6, height: 6, borderRadius: '50%',
               backgroundColor: statusColor,
-              boxShadow: connectionStatus === 'connected' ? '0 0 8px currentColor' : 'none',
-              animation: connectionStatus === 'connecting' ? 'soft-pulse 1.2s ease-in-out infinite' : 'none',
+              boxShadow: connectionStatus === 'connected' ? '0 0 6px currentColor' : 'none',
+              flexShrink: 0,
             }}
           />
-          {connectionStatus}
-        </span>
+          {active ? projectName(active.project_root) : 'No workspace'}
+          <ChevronDown size={13} strokeWidth={2} style={{ opacity: 0.6 }} />
+        </button>
+
+        {menu === 'workspace' && (
+          <div style={popoverStyle}>
+            <div style={{ padding: '4px 8px', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              Workspaces
+            </div>
+            {sessions.length === 0 && (
+              <div style={{ padding: '6px 8px', color: 'var(--text-muted)' }}>none open</div>
+            )}
+            {sessions.map(s => {
+              const isActive = s.id === state.activeSession;
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => { dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: s.id }); setMenu(null); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 8px', borderRadius: 5, cursor: 'pointer',
+                    color: 'var(--text-primary)',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ width: 12, display: 'inline-flex' }}>
+                    {isActive && <Check size={12} strokeWidth={2.5} style={{ color: 'var(--accent-primary)' }} />}
+                  </span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {projectName(s.project_root)}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{s.run_count} runs</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleCloseSession(s.id); }}
+                    title="Close workspace"
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+
+            <div style={{ height: 1, background: 'var(--border-default)', margin: '5px 4px' }} />
+
+            {addingSession ? (
+              <input
+                autoFocus
+                value={newPath}
+                onChange={e => setNewPath(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleNewSession();
+                  if (e.key === 'Escape') { setAddingSession(false); setNewPath(''); }
+                }}
+                placeholder="/path/to/project"
+                style={{
+                  width: '100%', backgroundColor: 'var(--bg-raised)',
+                  border: '1px solid var(--border-default)', color: 'var(--text-primary)',
+                  padding: '5px 7px', borderRadius: 5, fontFamily: 'var(--font-mono)', fontSize: 12,
+                }}
+              />
+            ) : (
+              <div
+                onClick={() => setAddingSession(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 5, cursor: 'pointer', color: 'var(--accent-primary)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <span style={{ width: 12, display: 'inline-flex' }}><Plus size={12} strokeWidth={2.5} /></span>
+                Open workspace…
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      <div style={{ width: 1, height: 18, background: 'var(--border-default)', flexShrink: 0 }} />
+
+      {/* View switcher — segmented, replaces the vertical activity rail */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          background: 'var(--bg-base)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 7,
+          padding: 2,
+        }}
+      >
+        {VIEWS.map(({ view, label, Icon }) => {
+          const isActive = activeView === view;
+          return (
+            <button
+              key={view}
+              title={label}
+              onClick={() => {
+                if (isActive) dispatch({ type: 'TOGGLE_SIDEBAR' });
+                else dispatch({ type: 'SET_SIDEBAR_VIEW', view });
+              }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                height: 24, padding: '0 9px', border: 'none', borderRadius: 5, cursor: 'pointer',
+                background: isActive ? 'var(--accent-primary-15)' : 'transparent',
+                color: isActive ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: isActive ? 600 : 500,
+                transition: 'color 140ms var(--ease-out-expo), background-color 140ms var(--ease-out-expo)',
+              }}
+              onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >
+              <Icon size={14} strokeWidth={1.9} />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* Layout presets */}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setMenu(m => (m === 'layout' ? null : 'layout'))}
+          style={{ ...chipStyle, borderColor: menu === 'layout' ? 'var(--accent-primary)' : 'var(--border-default)' }}
+          title="Layout"
+        >
+          Layout
+          <ChevronDown size={13} strokeWidth={2} style={{ opacity: 0.6 }} />
+        </button>
+        {menu === 'layout' && (
+          <div style={{ ...popoverStyle, left: 'auto', right: 0, minWidth: 180 }}>
+            {LAYOUTS.map(({ preset, label, Icon }) => (
+              <div
+                key={preset}
+                onClick={() => { onLayoutPreset?.(preset); setMenu(null); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 5, cursor: 'pointer', color: 'var(--text-primary)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <Icon size={14} strokeWidth={1.9} />
+                {label}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Command hint */}
+      <span
+        style={{
+          color: 'var(--text-muted)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 8px',
+          border: '1px solid var(--border-default)',
+          borderRadius: 4,
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          letterSpacing: '0.04em',
+        }}
+      >
+        ⌘K
+      </span>
     </div>
   );
 }

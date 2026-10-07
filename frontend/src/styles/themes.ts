@@ -11,19 +11,19 @@ export const themes: Theme[] = [
     id: 'terminal-engine',
     name: 'Terminal Engine (signature)',
     colors: {
-      '--bg-base': '#0c0e17',
-      '--bg-surface': '#141624',
-      '--bg-raised': '#1a1d2e',
-      '--bg-overlay': '#232738',
-      '--border-default': '#2a2d3d',
-      '--border-focus': '#5fe3d9',
-      '--text-primary': '#eaecf2',
-      '--text-secondary': '#9ca0b5',
-      '--text-muted': '#616682',
-      '--accent-primary': '#5fe3d9',
-      '--accent-warn': '#ecb04a',
-      '--accent-error': '#ec6a6a',
-      '--accent-info': '#8a97f8',
+      '--bg-base': '#0c0e0d',
+      '--bg-surface': '#131615',
+      '--bg-raised': '#1a1e1c',
+      '--bg-overlay': '#232927',
+      '--border-default': '#2c3330',
+      '--border-focus': '#35d399',
+      '--text-primary': '#e7ebe9',
+      '--text-secondary': '#98a39e',
+      '--text-muted': '#5d6a64',
+      '--accent-primary': '#35d399',
+      '--accent-warn': '#f0a83c',
+      '--accent-error': '#f26a5a',
+      '--accent-info': '#6e9bf5',
     },
   },
   {
@@ -224,11 +224,11 @@ const THEME_KEY = 'terminal:theme';
 /** Convert "#rrggbb" → "r, g, b" string, usable inside rgba(var(--x), a). */
 function hexToRgbTriplet(hex: string): string {
   const normalized = hex.trim().replace(/^#/, '');
-  if (normalized.length !== 6) return '78, 205, 196'; // fallback: default teal
+  if (normalized.length !== 6) return '53, 211, 153'; // fallback: default green
   const r = parseInt(normalized.slice(0, 2), 16);
   const g = parseInt(normalized.slice(2, 4), 16);
   const b = parseInt(normalized.slice(4, 6), 16);
-  if ([r, g, b].some(Number.isNaN)) return '78, 205, 196';
+  if ([r, g, b].some(Number.isNaN)) return '53, 211, 153';
   return `${r}, ${g}, ${b}`;
 }
 

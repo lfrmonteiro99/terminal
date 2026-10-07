@@ -69,8 +69,8 @@ function isRunActive(state: { type: string }): boolean {
 
 const contextBannerStyle: React.CSSProperties = {
   padding: '6px 12px',
-  backgroundColor: 'rgba(78, 205, 196, 0.08)',
-  borderBottom: '1px solid rgba(78, 205, 196, 0.2)',
+  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.08)',
+  borderBottom: '1px solid rgba(var(--accent-primary-rgb), 0.2)',
   fontSize: 11,
   fontFamily: 'monospace',
   color: 'var(--accent-primary)',
@@ -132,7 +132,7 @@ const stageBtnBase: React.CSSProperties = {
 
 const stageAddBtnStyle: React.CSSProperties = {
   ...stageBtnBase,
-  backgroundColor: 'rgba(78,205,196,0.12)',
+  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
   color: 'var(--accent-primary)',
 };
 
@@ -162,7 +162,7 @@ function FileRow({
   const style: React.CSSProperties = {
     ...fileRowBaseStyle,
     ...(selected
-      ? { backgroundColor: 'rgba(78, 205, 196, 0.12)', borderLeft: '2px solid #4ecdc4' }
+      ? { backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)', borderLeft: '2px solid #4ecdc4' }
       : hover
         ? { backgroundColor: 'rgba(255, 255, 255, 0.05)' }
         : {}),

@@ -142,6 +142,7 @@ pub async fn start_server(
 
     // Startup recovery: re-hydrate persisted workspaces (C5b, issue #98).
     dispatcher.recover_workspaces().await;
+    dispatcher.recover_catalog().await;
     dispatcher.recover_agents().await;
     tokio::spawn(async move {
         while let Some((client_id, cmd, reply_tx)) = command_rx.recv().await {

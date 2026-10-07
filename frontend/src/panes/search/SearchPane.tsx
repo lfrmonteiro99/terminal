@@ -40,7 +40,7 @@ function highlightMatch(text: string, query: string, isRegex: boolean): React.Re
         <mark
           key={m.index}
           style={{
-            background: 'var(--accent-primary, #4ecdc4)',
+            background: 'var(--accent-primary)',
             color: 'var(--bg-base, #0e0e1a)',
             borderRadius: 2,
             padding: '0 1px',
@@ -86,7 +86,7 @@ function FileGroup({
           gap: 6,
           padding: '3px 8px',
           background: 'var(--bg-overlay, rgba(255,255,255,0.04))',
-          borderLeft: '3px solid var(--accent-primary, #4ecdc4)',
+          borderLeft: '3px solid var(--accent-primary)',
           cursor: 'pointer',
           userSelect: 'none',
         }}
@@ -106,7 +106,7 @@ function FileGroup({
             flex: 1,
             fontFamily: 'monospace',
             fontSize: 11,
-            color: 'var(--accent-primary, #4ecdc4)',
+            color: 'var(--accent-primary)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -156,7 +156,7 @@ function FileGroup({
                   padding: '2px 8px 2px 20px',
                   fontFamily: 'monospace',
                   fontSize: 11,
-                  background: 'rgba(78, 205, 196, 0.06)',
+                  background: 'rgba(var(--accent-primary-rgb), 0.06)',
                   cursor: 'pointer',
                   whiteSpace: 'pre',
                 }}
@@ -166,7 +166,7 @@ function FileGroup({
                 <span
                   style={{
                     minWidth: 40,
-                    color: 'var(--accent-primary, #4ecdc4)',
+                    color: 'var(--accent-primary)',
                     userSelect: 'none',
                     flexShrink: 0,
                   }}
@@ -263,9 +263,9 @@ export function SearchPane(_props: PaneProps) {
     padding: '2px 7px',
     borderRadius: 3,
     border: '1px solid',
-    borderColor: active ? 'var(--accent-primary, #4ecdc4)' : 'var(--border-default, #444)',
-    background: active ? 'rgba(78,205,196,0.12)' : 'transparent',
-    color: active ? 'var(--accent-primary, #4ecdc4)' : 'var(--text-muted, #888)',
+    borderColor: active ? 'var(--accent-primary)' : 'var(--border-default, #444)',
+    background: active ? 'rgba(var(--accent-primary-rgb), 0.12)' : 'transparent',
+    color: active ? 'var(--accent-primary)' : 'var(--text-muted, #888)',
     fontSize: 10,
     cursor: 'pointer',
     userSelect: 'none',
@@ -324,7 +324,7 @@ export function SearchPane(_props: PaneProps) {
               padding: '4px 10px',
               borderRadius: 4,
               border: 'none',
-              background: 'var(--accent-primary, #4ecdc4)',
+              background: 'var(--accent-primary)',
               color: 'var(--bg-base, #0e0e1a)',
               fontFamily: 'monospace',
               fontSize: 11,

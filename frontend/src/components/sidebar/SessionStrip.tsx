@@ -91,7 +91,7 @@ export function SessionStrip() {
                 marginBottom: 1,
                 borderRadius: 3,
                 cursor: 'pointer',
-                backgroundColor: isSelected ? 'rgba(78, 205, 196, 0.15)' : 'transparent',
+                backgroundColor: isSelected ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'transparent',
                 borderLeft: isSelected ? '2px solid var(--accent-primary)' : '2px solid transparent',
                 display: 'flex',
                 alignItems: 'center',

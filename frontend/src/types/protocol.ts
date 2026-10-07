@@ -215,15 +215,40 @@ export interface SshConfig {
 
 // --- Agents ---
 
-export type AgentRole = 'Generic' | 'Planner' | 'Implementer' | 'Verifier';
+/** Which CLI drives an agent's runs. */
+export type Runner = 'Claude' | 'Hermes';
+
+/** A reusable role: the base mission an agent inherits. Catalogue-backed, so
+ *  the list is whatever the daemon seeded plus whatever the operator added. */
+export interface Role {
+  id: string;
+  name: string;
+  instructions: string;
+  builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A reusable personality: the tone, layered on top of a role. */
+export interface Personality {
+  id: string;
+  name: string;
+  prompt: string;
+  builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface AgentSummary {
   id: string;
   name: string;
-  role: AgentRole;
+  role_id: string | null;
+  personality_id: string | null;
+  runner: Runner;
   description: string;
   model: string | null;
   default_autonomy: AutonomyLevel;
+  instructions: string;
   updated_at: string;
 }
 
@@ -243,7 +268,9 @@ export type AppCommand =
   | {
       type: 'CreateAgent';
       name: string;
-      role?: AgentRole;
+      role_id?: string;
+      personality_id?: string;
+      runner?: Runner;
       description?: string;
       instructions?: string;
       model?: string | null;
@@ -253,13 +280,21 @@ export type AppCommand =
       type: 'UpdateAgent';
       agent_id: string;
       name?: string;
-      role?: AgentRole;
+      /** Empty string clears the reference; omit to leave it untouched. */
+      role_id?: string;
+      personality_id?: string;
+      runner?: Runner;
       description?: string;
       instructions?: string;
       model?: string | null;
       default_autonomy?: AutonomyLevel;
     }
   | { type: 'DeleteAgent'; agent_id: string }
+  | { type: 'ListCatalog' }
+  | { type: 'SaveRole'; role: Role }
+  | { type: 'DeleteRole'; id: string }
+  | { type: 'SavePersonality'; personality: Personality }
+  | { type: 'DeletePersonality'; id: string }
   | { type: 'GetDiff'; run_id: string }
   | { type: 'RevertRun'; run_id: string }
   | { type: 'MergeRun'; run_id: string }
@@ -272,7 +307,7 @@ export type AppCommand =
   | { type: 'PopStash'; index: number }
   | { type: 'ApplyStash'; index: number }
   | { type: 'DropStash'; index: number }
-  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string }
+  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string; autonomy?: AutonomyLevel; agent_id?: string }
   // Phase 3: Sidebar commands
   | { type: 'ListDirectory'; path: string }
   | { type: 'GetChangedFiles'; mode: 'working' | 'run'; run_id?: string }
@@ -344,6 +379,7 @@ export type AppEvent =
   | { type: 'AgentCreated'; agent: AgentSummary }
   | { type: 'AgentUpdated'; agent: AgentSummary }
   | { type: 'AgentDeleted'; agent_id: string }
+  | { type: 'CatalogUpdated'; roles: Role[]; personalities: Personality[] }
   | { type: 'RunOutputPage'; run_id: string; offset: number; lines: string[]; has_more: boolean }
   | { type: 'StatusUpdate'; active_runs: number; session_count: number }
   | { type: 'Pong' }
@@ -354,7 +390,7 @@ export type AppEvent =
   | { type: 'StashApplied'; index: number; had_conflicts: boolean }
   | { type: 'StashDropped'; index: number }
   | { type: 'DirtyState'; status: DirtyStatus }
-  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode }
+  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string }
   // Phase 3: Sidebar events
   | { type: 'DirectoryListing'; path: string; entries: FileTreeEntry[] }
   | { type: 'ChangedFilesList'; mode: 'working' | 'run'; run_id?: string; files: FileChange[] }

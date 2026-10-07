@@ -1,28 +1,28 @@
 :root {
-  /* Backgrounds (4 tiers, darkest to lightest) */
-  --bg-base: #0f1119;
-  --bg-surface: #161822;
-  --bg-raised: #1c1f2e;
-  --bg-overlay: #232738;
+  /* Backgrounds (4 tiers, darkest to lightest) — neutral graphite, not IDE blue */
+  --bg-base: #0c0e0d;
+  --bg-surface: #131615;
+  --bg-raised: #1a1e1c;
+  --bg-overlay: #232927;
 
   /* Borders */
-  --border-default: #2a2d3d;
-  --border-focus: #4ecdc4;
+  --border-default: #2c3330;
+  --border-focus: #35d399;
 
   /* Text */
-  --text-primary: #e2e4e9;
-  --text-secondary: #8b8fa3;
-  --text-muted: #555a6e;
+  --text-primary: #e7ebe9;
+  --text-secondary: #98a39e;
+  --text-muted: #5d6a64;
 
-  /* Accents */
-  --accent-primary: #4ecdc4;
-  --accent-primary-rgb: 78, 205, 196;
-  --accent-warn: #e5a33d;
-  --accent-warn-rgb: 229, 163, 61;
-  --accent-error: #e55a5a;
-  --accent-error-rgb: 229, 90, 90;
-  --accent-info: #7c8cf5;
-  --accent-info-rgb: 124, 140, 245;
+  /* Accents — phosphor green (terminal heritage), amber warn, coral error */
+  --accent-primary: #35d399;
+  --accent-primary-rgb: 53, 211, 153;
+  --accent-warn: #f0a83c;
+  --accent-warn-rgb: 240, 168, 60;
+  --accent-error: #f26a5a;
+  --accent-error-rgb: 242, 106, 90;
+  --accent-info: #6e9bf5;
+  --accent-info-rgb: 110, 155, 245;
 
   /* Accent fills (per-theme — derived from --accent-primary-rgb) */
   --accent-primary-08: rgba(var(--accent-primary-rgb), 0.08);
@@ -41,7 +41,7 @@
   --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.4);
 
   /* Glass surfaces */
-  --bg-glass: rgba(22, 24, 34, 0.82);
+  --bg-glass: rgba(19, 22, 21, 0.82);
   --glass-border: rgba(255, 255, 255, 0.06);
 
   /* Gradients */
@@ -59,7 +59,7 @@
   --font-size-label: 12px;
 
   /* Spacing */
-  --chrome-height: 36px;
+  --chrome-height: 46px;
   --statusbar-height: 24px;
   --activitybar-width: 40px;
   --pane-header-height: 32px;

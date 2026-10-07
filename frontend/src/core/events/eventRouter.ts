@@ -34,6 +34,7 @@ const APP_LEVEL_EVENTS = new Set<AppEvent['type']>([
   'AgentCreated',
   'AgentUpdated',
   'AgentDeleted',
+  'CatalogUpdated',
 ]);
 
 export class EventRouter {
@@ -109,6 +110,13 @@ export class EventRouter {
       case 'AgentDeleted':
         this.appDispatch({ type: 'REMOVE_AGENT', agentId: event.agent_id });
         break;
+      case 'CatalogUpdated':
+        this.appDispatch({
+          type: 'SET_CATALOG',
+          roles: event.roles,
+          personalities: event.personalities,
+        });
+        break;
       default:
         // Should be unreachable — events in APP_LEVEL_EVENTS must be handled above.
         console.warn('[eventRouter] unhandled app-level event', event);
@@ -138,6 +146,7 @@ export class EventRouter {
       case 'AgentCreated':
       case 'AgentUpdated':
       case 'AgentDeleted':
+      case 'CatalogUpdated':
         this.routeToApp(event);
         break;
 

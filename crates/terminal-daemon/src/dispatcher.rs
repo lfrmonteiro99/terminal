@@ -82,6 +82,14 @@ impl Dispatcher {
         dispatcher.recover().await;
     }
 
+    /// Seed + load the role/personality catalogue. Called once at startup,
+    /// before `recover_agents` (agents reference catalogue ids).
+    pub async fn recover_catalog(&self) {
+        let dispatcher =
+            crate::dispatchers::catalog_dispatcher::CatalogDispatcher::new(self.context.clone());
+        dispatcher.recover().await;
+    }
+
     /// Borrow the shared daemon context (used by `server.rs` to reach
     /// per-client state like `active_workspaces`).
     pub fn context(&self) -> Arc<DaemonContext> {
@@ -845,6 +853,8 @@ impl Dispatcher {
                 prompt,
                 mode,
                 stash_message,
+                autonomy,
+                agent_id,
             } => {
                 // Look up project_root from session
                 let project_root = {
@@ -875,15 +885,16 @@ impl Dispatcher {
                 }
 
                 // Stash succeeded -- proceed with start run, skipping dirty check.
-                // Stash-and-run flows default to Autonomous (legacy behaviour).
+                // The client's autonomy and agent choice ride along, so a
+                // stashed run behaves exactly like a clean-tree run.
                 self.do_start_run(
                     client_id,
                     session_id,
                     prompt,
                     mode,
-                    AutonomyLevel::default(),
+                    autonomy,
                     true,
-                    None,
+                    agent_id,
                     reply_tx,
                 )
                 .await;
@@ -1355,6 +1366,18 @@ impl Dispatcher {
                 dispatcher.handle(cmd, reply_tx).await;
             }
 
+            // --- Role / personality catalogue ---
+            AppCommand::ListCatalog
+            | AppCommand::SaveRole { .. }
+            | AppCommand::DeleteRole { .. }
+            | AppCommand::SavePersonality { .. }
+            | AppCommand::DeletePersonality { .. } => {
+                let dispatcher = crate::dispatchers::catalog_dispatcher::CatalogDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
+            }
+
             // --- Workspace commands (M1-01, M1-04) ---
             AppCommand::ListWorkspaces
             | AppCommand::CreateWorkspace { .. }
@@ -1623,7 +1646,7 @@ impl Dispatcher {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
-        autonomy: AutonomyLevel,
+        autonomy: Option<AutonomyLevel>,
         skip_dirty_check: bool,
         agent_id: Option<Uuid>,
         reply_tx: mpsc::Sender<AppEvent>,
@@ -1649,6 +1672,26 @@ impl Dispatcher {
             }
             None => None,
         };
+
+        // Fold role + personality + the agent's own instructions into the single
+        // system prompt the runner sees. Done here rather than in the runner so
+        // the runner stays a pure arg-builder with no catalogue dependency.
+        let agent = match agent {
+            Some(mut a) => {
+                a.instructions = self.resolve_agent_prompt(&a).await;
+                Some(a)
+            }
+            None => None,
+        };
+
+        // Effective autonomy — the one place `agent.default_autonomy` is read on
+        // the run path. An explicit client choice wins; otherwise the driving
+        // agent's policy applies; otherwise `Autonomous` (the historical
+        // default for agentless runs). `requested_autonomy` is kept untouched
+        // so the DirtyWarning retry echoes back exactly what the client asked
+        // for instead of a value it never chose.
+        let requested_autonomy = autonomy;
+        let autonomy = resolve_autonomy(autonomy, agent.as_ref());
 
         // Resolve the workspace this run belongs to (SEC-02 event routing).
         let workspace_id: Option<Uuid> = self
@@ -1746,6 +1789,8 @@ impl Dispatcher {
                             session_id,
                             prompt: prompt.clone(),
                             mode: mode.clone(),
+                            autonomy: requested_autonomy,
+                            agent_id,
                         })
                         .await;
                     return;
@@ -1917,10 +1962,22 @@ impl Dispatcher {
 
         // Pre-flight check (delegated to helper)
         if self
-            .run_preflight(run_id, &run, workspace_id, &reply_tx)
+            .run_preflight(
+                run_id,
+                &run,
+                agent.as_ref().map(|a| a.runner).unwrap_or_default(),
+                workspace_id,
+                &reply_tx,
+            )
             .await
             .is_err()
         {
+            // `session.active_run` was set before this check, and only the
+            // supervisor clears it — and the supervisor never runs on this
+            // path. Left set, the session is permanently "already has an active
+            // run" and every later StartRun is rejected with
+            // RUN_ALREADY_ACTIVE, i.e. one bad preflight bricks the session.
+            self.release_session_run(session_id, run_id).await;
             return;
         }
 
@@ -2444,17 +2501,46 @@ impl Dispatcher {
         }
     }
 
-    /// Run the Claude binary preflight check and emit structured events on failure.
+    /// Clear a session's `active_run` iff it is still the run we set. Early
+    /// return paths that never reach the supervisor must call this, otherwise
+    /// the flag leaks and the session can never start another run.
+    async fn release_session_run(&self, session_id: Uuid, run_id: Uuid) {
+        let mut sessions = self.context.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if session.active_run == Some(run_id) {
+                session.active_run = None;
+            }
+        }
+    }
+
+    /// Compose the effective system prompt for an agent: the role's base
+    /// mission, then the agent's own additions, then the personality. Missing
+    /// catalogue entries degrade to "no overlay" rather than failing the run.
+    async fn resolve_agent_prompt(&self, agent: &Agent) -> String {
+        let role = match &agent.role_id {
+            Some(id) => self.context.roles.lock().await.get(id).cloned(),
+            None => None,
+        };
+        let personality = match &agent.personality_id {
+            Some(id) => self.context.personalities.lock().await.get(id).cloned(),
+            None => None,
+        };
+        agent.compose_prompt(role.as_ref(), personality.as_ref())
+    }
+
+    /// Run the binary preflight check for `runner` and emit structured events
+    /// on failure.
     ///
     /// Returns `Ok(())` when preflight passes, `Err(())` when it fails (events already broadcast).
     async fn run_preflight(
         &self,
         run_id: Uuid,
         run: &Run,
+        runner: terminal_core::models::Runner,
         workspace_id: Option<Uuid>,
         reply_tx: &mpsc::Sender<AppEvent>,
     ) -> Result<(), ()> {
-        if let Err(pf) = self.context.runner.preflight().await {
+        if let Err(pf) = self.context.runner.preflight_for(runner).await {
             self.context
                 .send_run_event(
                     workspace_id,
@@ -2495,6 +2581,23 @@ impl Dispatcher {
     }
 }
 
+/// Resolve the autonomy a run actually executes at.
+///
+/// Precedence: the client's explicit choice → the driving agent's
+/// `default_autonomy` → `Autonomous` (the historical default). This is the only
+/// reader of `Agent::default_autonomy` on the run path; before it existed the
+/// field was written, displayed and persisted but never consulted, so an agent
+/// could declare `ReviewPlan` and still edit files when driven from a
+/// non-UI client.
+fn resolve_autonomy(
+    requested: Option<AutonomyLevel>,
+    agent: Option<&terminal_core::models::Agent>,
+) -> AutonomyLevel {
+    requested
+        .or(agent.map(|a| a.default_autonomy))
+        .unwrap_or_default()
+}
+
 /// Detect a display language name from a file path's extension.
 fn detect_language(path: &std::path::Path) -> String {
     path.extension()
@@ -2520,8 +2623,50 @@ fn detect_language(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::concurrency_key_for_run;
+    use super::resolve_autonomy;
     use crate::safety::validate_path;
     use std::path::PathBuf;
+    use terminal_core::models::{Agent, AutonomyLevel, Runner};
+
+    fn agent_with_default(default_autonomy: AutonomyLevel) -> Agent {
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            name: "a".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Claude,
+            legacy_role: None,
+            description: String::new(),
+            instructions: String::new(),
+            model: None,
+            default_autonomy,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn explicit_autonomy_beats_agent_default() {
+        let agent = agent_with_default(AutonomyLevel::ReviewPlan);
+        assert_eq!(
+            resolve_autonomy(Some(AutonomyLevel::Autonomous), Some(&agent)),
+            AutonomyLevel::Autonomous
+        );
+    }
+
+    #[test]
+    fn agent_default_applies_when_client_omits_autonomy() {
+        let agent = agent_with_default(AutonomyLevel::ReviewPlan);
+        assert_eq!(
+            resolve_autonomy(None, Some(&agent)),
+            AutonomyLevel::ReviewPlan
+        );
+    }
+
+    #[test]
+    fn agentless_run_without_autonomy_is_autonomous() {
+        assert_eq!(resolve_autonomy(None, None), AutonomyLevel::Autonomous);
+    }
 
     #[test]
     fn readfile_path_traversal_blocked() {
