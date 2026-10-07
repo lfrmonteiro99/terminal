@@ -2,8 +2,8 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
-    FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta, Workspace,
-    WorktreeMeta,
+    Agent, FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta,
+    Workspace, WorktreeMeta,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ pub struct Persistence {
 impl Persistence {
     /// Creates a new Persistence instance, ensuring the required subdirectories exist.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces", "agents"] {
             let dir = base_dir.join(sub);
             fs::create_dir_all(&dir)?;
             #[cfg(unix)]
@@ -177,6 +177,63 @@ impl Persistence {
 
     pub fn delete_workspace(&self, id: Uuid) -> Result<()> {
         let path = self.base_dir.join("workspaces").join(format!("{}.json", id));
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Agents
+    // -----------------------------------------------------------------------
+
+    pub fn save_agent(&self, agent: &Agent) -> Result<()> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", agent.id));
+        let data = serde_json::to_string_pretty(agent)?;
+        Self::atomic_write(&path, data.as_bytes())
+    }
+
+    pub fn load_agent(&self, id: Uuid) -> Result<Option<Agent>> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", id));
+        match fs::read_to_string(&path) {
+            Ok(data) => Ok(Some(serde_json::from_str(&data)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_agents(&self) -> Result<Vec<Agent>> {
+        let dir = self.base_dir.join("agents");
+        let mut agents = Vec::new();
+
+        if !dir.exists() {
+            return Ok(agents);
+        }
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<Agent>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(agent) => agents.push(agent),
+                Err(e) => {
+                    warn!("Failed to parse agent file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        agents.sort_by_key(|a| a.created_at);
+        Ok(agents)
+    }
+
+    pub fn delete_agent(&self, id: Uuid) -> Result<()> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", id));
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -564,6 +621,7 @@ mod tests {
             mode: RunMode::Free,
             autonomy: terminal_core::models::AutonomyLevel::default(),
             kind: terminal_core::models::RunKind::OneShot,
+            agent_id: None,
             state,
             prompt: "do something".into(),
             provided_files: vec![],

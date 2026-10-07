@@ -213,6 +213,20 @@ export interface SshConfig {
   identity_file?: string;
 }
 
+// --- Agents ---
+
+export type AgentRole = 'Generic' | 'Planner' | 'Implementer' | 'Verifier';
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  role: AgentRole;
+  description: string;
+  model: string | null;
+  default_autonomy: AutonomyLevel;
+  updated_at: string;
+}
+
 // --- Commands (Client -> Daemon) ---
 
 export type AppCommand =
@@ -220,11 +234,32 @@ export type AppCommand =
   | { type: 'StartSession'; project_root: string }
   | { type: 'EndSession'; session_id: string }
   | { type: 'ListSessions' }
-  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel }
+  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel; agent_id?: string }
   | { type: 'CancelRun'; run_id: string; reason: string }
   | { type: 'GetRunStatus'; run_id: string }
   | { type: 'ListRuns'; session_id: string }
   | { type: 'GetRunOutput'; run_id: string; offset: number; limit: number }
+  | { type: 'ListAgents' }
+  | {
+      type: 'CreateAgent';
+      name: string;
+      role?: AgentRole;
+      description?: string;
+      instructions?: string;
+      model?: string | null;
+      default_autonomy?: AutonomyLevel;
+    }
+  | {
+      type: 'UpdateAgent';
+      agent_id: string;
+      name?: string;
+      role?: AgentRole;
+      description?: string;
+      instructions?: string;
+      model?: string | null;
+      default_autonomy?: AutonomyLevel;
+    }
+  | { type: 'DeleteAgent'; agent_id: string }
   | { type: 'GetDiff'; run_id: string }
   | { type: 'RevertRun'; run_id: string }
   | { type: 'MergeRun'; run_id: string }
@@ -305,6 +340,10 @@ export type AppEvent =
   | { type: 'SessionEnded'; session_id: string }
   | { type: 'SessionList'; sessions: SessionSummary[] }
   | { type: 'RunList'; session_id: string; runs: RunSummary[] }
+  | { type: 'AgentList'; agents: AgentSummary[] }
+  | { type: 'AgentCreated'; agent: AgentSummary }
+  | { type: 'AgentUpdated'; agent: AgentSummary }
+  | { type: 'AgentDeleted'; agent_id: string }
   | { type: 'RunOutputPage'; run_id: string; offset: number; lines: string[]; has_more: boolean }
   | { type: 'StatusUpdate'; active_runs: number; session_count: number }
   | { type: 'Pong' }

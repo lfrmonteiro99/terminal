@@ -19,7 +19,7 @@ use crate::parser::{ParseEvent, StreamParser};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use terminal_core::config::DaemonConfig;
-use terminal_core::models::{AutonomyLevel, RunMode};
+use terminal_core::models::{Agent, AutonomyLevel, RunMode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
@@ -125,6 +125,7 @@ fn claude_args_for(
     autonomy: AutonomyLevel,
     config: &DaemonConfig,
     chat: bool,
+    agent: Option<&Agent>,
 ) -> Vec<String> {
     let perm = permission_mode_for(mode, autonomy);
     let mut args = vec![
@@ -150,8 +151,26 @@ fn claude_args_for(
     }
 
     append_config_args(&mut args, config);
+    append_agent_args(&mut args, agent);
 
     args
+}
+
+/// Fold a driving agent into the CLI invocation: its model pin becomes
+/// `--model` and its mission becomes `--append-system-prompt`. Both are
+/// optional; an agentless run adds nothing.
+fn append_agent_args(args: &mut Vec<String>, agent: Option<&Agent>) {
+    let Some(agent) = agent else { return };
+
+    if let Some(model) = agent.model.as_ref().filter(|m| !m.trim().is_empty()) {
+        args.push("--model".to_string());
+        args.push(model.clone());
+    }
+
+    if !agent.instructions.trim().is_empty() {
+        args.push("--append-system-prompt".to_string());
+        args.push(agent.instructions.clone());
+    }
 }
 
 fn append_config_args(args: &mut Vec<String>, config: &DaemonConfig) {
@@ -395,6 +414,7 @@ impl ClaudeRunner {
         prompt: &str,
         mode: &RunMode,
         autonomy: AutonomyLevel,
+        agent: Option<&Agent>,
         working_dir: &Path,
     ) -> Result<(mpsc::Receiver<RunnerEvent>, Child), String> {
         // Reject empty / whitespace-only prompts before we touch the CLI.
@@ -406,7 +426,14 @@ impl ClaudeRunner {
         // Headless JSONL stream. The argument builder is unit-tested so new
         // Claude flags stay visible without spawning the real binary.
         let mut cmd = Command::new(&self.config.claude_binary);
-        cmd.args(claude_args_for(prompt, mode, autonomy, &self.config, false));
+        cmd.args(claude_args_for(
+            prompt,
+            mode,
+            autonomy,
+            &self.config,
+            false,
+            agent,
+        ));
 
         let mut child = cmd
             .current_dir(working_dir)
@@ -441,7 +468,7 @@ impl ClaudeRunner {
         }
 
         let mut cmd = Command::new(&self.config.claude_binary);
-        cmd.args(claude_args_for(prompt, mode, autonomy, &self.config, true));
+        cmd.args(claude_args_for(prompt, mode, autonomy, &self.config, true, None));
 
         let mut child = cmd
             .current_dir(working_dir)
@@ -573,7 +600,7 @@ mod tests {
     #[test]
     fn claude_args_for_chat_includes_input_format() {
         let cfg = DaemonConfig::default();
-        let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, true);
+        let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, true, None);
         assert!(args
             .windows(2)
             .any(|w| w == ["--input-format", "stream-json"]));
@@ -585,8 +612,64 @@ mod tests {
     #[test]
     fn claude_args_for_oneshot_omits_input_format() {
         let cfg = DaemonConfig::default();
-        let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, false);
+        let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, false, None);
         assert!(!args.iter().any(|arg| arg == "--input-format"));
+    }
+
+    #[test]
+    fn agent_args_add_model_and_system_prompt() {
+        let cfg = DaemonConfig::default();
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "verifier".into(),
+            role: terminal_core::models::AgentRole::Verifier,
+            description: String::new(),
+            instructions: "Check the work and report evidence.".into(),
+            model: Some("claude-opus".into()),
+            default_autonomy: AutonomyLevel::Autonomous,
+            created_at: now,
+            updated_at: now,
+        };
+        let args = claude_args_for(
+            "hi",
+            &RunMode::Free,
+            AutonomyLevel::Autonomous,
+            &cfg,
+            false,
+            Some(&agent),
+        );
+        assert!(args.windows(2).any(|w| w == ["--model", "claude-opus"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--append-system-prompt", "Check the work and report evidence."]));
+    }
+
+    #[test]
+    fn agent_args_absent_when_agent_has_no_model_or_instructions() {
+        let cfg = DaemonConfig::default();
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "bare".into(),
+            role: terminal_core::models::AgentRole::Generic,
+            description: String::new(),
+            instructions: "   ".into(),
+            model: None,
+            default_autonomy: AutonomyLevel::Autonomous,
+            created_at: now,
+            updated_at: now,
+        };
+        let args = claude_args_for(
+            "hi",
+            &RunMode::Free,
+            AutonomyLevel::Autonomous,
+            &cfg,
+            false,
+            Some(&agent),
+        );
+        assert!(!args.iter().any(|a| a == "--model"));
+        assert!(!args.iter().any(|a| a == "--append-system-prompt"));
     }
     #[test]
     fn chat_user_message_line_writes_stream_json_user_turn() {
@@ -614,6 +697,7 @@ mod tests {
             AutonomyLevel::Autonomous,
             &cfg,
             false,
+            None,
         );
 
         assert!(args
@@ -650,6 +734,7 @@ mod tests {
                 "",
                 &RunMode::Free,
                 AutonomyLevel::Autonomous,
+                None,
                 Path::new("/tmp"),
             )
             .unwrap_err();
@@ -669,6 +754,7 @@ mod tests {
                 "   \n\t  ",
                 &RunMode::Free,
                 AutonomyLevel::Autonomous,
+                None,
                 Path::new("/tmp"),
             )
             .unwrap_err();

@@ -601,6 +601,10 @@ function reducer(state: AppState, action: Action): AppState {
         case 'WorkspaceCreated':
         case 'WorkspaceClosed':
         case 'WorkspaceActivated':
+        case 'AgentList':
+        case 'AgentCreated':
+        case 'AgentUpdated':
+        case 'AgentDeleted':
           return state;
 
         default:

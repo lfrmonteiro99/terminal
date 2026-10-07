@@ -30,6 +30,10 @@ const APP_LEVEL_EVENTS = new Set<AppEvent['type']>([
   'WorkspaceCreated',
   'WorkspaceClosed',
   'WorkspaceActivated',
+  'AgentList',
+  'AgentCreated',
+  'AgentUpdated',
+  'AgentDeleted',
 ]);
 
 export class EventRouter {
@@ -95,6 +99,16 @@ export class EventRouter {
       case 'WorkspaceActivated':
         this.appDispatch({ type: 'SET_ACTIVE_WORKSPACE', workspaceId: event.workspace_id });
         break;
+      case 'AgentList':
+        this.appDispatch({ type: 'SET_AGENTS', agents: event.agents });
+        break;
+      case 'AgentCreated':
+      case 'AgentUpdated':
+        this.appDispatch({ type: 'ADD_AGENT', agent: event.agent });
+        break;
+      case 'AgentDeleted':
+        this.appDispatch({ type: 'REMOVE_AGENT', agentId: event.agent_id });
+        break;
       default:
         // Should be unreachable — events in APP_LEVEL_EVENTS must be handled above.
         console.warn('[eventRouter] unhandled app-level event', event);
@@ -120,6 +134,10 @@ export class EventRouter {
       case 'WorkspaceCreated':
       case 'WorkspaceClosed':
       case 'WorkspaceActivated':
+      case 'AgentList':
+      case 'AgentCreated':
+      case 'AgentUpdated':
+      case 'AgentDeleted':
         this.routeToApp(event);
         break;
 

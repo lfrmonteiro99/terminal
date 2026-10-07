@@ -54,6 +54,8 @@ pub struct DaemonContext {
     pub active_workspaces: Arc<Mutex<HashMap<Uuid, Uuid>>>,
     /// Workspace-scoped broadcast channels (M1-05)
     pub workspace_channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
+    /// Agents registry — named, reusable workers.
+    pub agents: Arc<Mutex<HashMap<Uuid, terminal_core::models::Agent>>>,
 }
 
 impl DaemonContext {
@@ -74,6 +76,7 @@ impl DaemonContext {
             workspaces: Arc::new(Mutex::new(HashMap::new())),
             active_workspaces: Arc::new(Mutex::new(HashMap::new())),
             workspace_channels: Arc::new(Mutex::new(HashMap::new())),
+            agents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

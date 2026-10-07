@@ -74,6 +74,14 @@ impl Dispatcher {
         info!("Recovered {} persisted workspace(s)", workspaces.len());
     }
 
+    /// Load persisted agents into the in-memory registry. Called once at
+    /// startup, mirroring `recover_workspaces`.
+    pub async fn recover_agents(&self) {
+        let dispatcher =
+            crate::dispatchers::agent_dispatcher::AgentDispatcher::new(self.context.clone());
+        dispatcher.recover().await;
+    }
+
     /// Borrow the shared daemon context (used by `server.rs` to reach
     /// per-client state like `active_workspaces`).
     pub fn context(&self) -> Arc<DaemonContext> {
@@ -489,6 +497,7 @@ impl Dispatcher {
                 skip_dirty_check,
                 autonomy,
                 kind: _,
+                agent_id,
             } => {
                 self.do_start_run(
                     client_id,
@@ -497,6 +506,7 @@ impl Dispatcher {
                     mode,
                     autonomy,
                     skip_dirty_check,
+                    agent_id,
                     reply_tx,
                 )
                 .await;
@@ -873,6 +883,7 @@ impl Dispatcher {
                     mode,
                     AutonomyLevel::default(),
                     true,
+                    None,
                     reply_tx,
                 )
                 .await;
@@ -1333,6 +1344,17 @@ impl Dispatcher {
                 }
             }
 
+            // --- Agent commands ---
+            AppCommand::ListAgents
+            | AppCommand::CreateAgent { .. }
+            | AppCommand::UpdateAgent { .. }
+            | AppCommand::DeleteAgent { .. } => {
+                let dispatcher = crate::dispatchers::agent_dispatcher::AgentDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
+            }
+
             // --- Workspace commands (M1-01, M1-04) ---
             AppCommand::ListWorkspaces
             | AppCommand::CreateWorkspace { .. }
@@ -1603,8 +1625,31 @@ impl Dispatcher {
         mode: RunMode,
         autonomy: AutonomyLevel,
         skip_dirty_check: bool,
+        agent_id: Option<Uuid>,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
+        // Resolve the driving agent (if any) before touching the filesystem.
+        // A named agent contributes a model pin and an appended system prompt;
+        // `None` reproduces the historical behaviour exactly.
+        let agent = match agent_id {
+            Some(id) => {
+                let found = self.context.agents.lock().await.get(&id).cloned();
+                match found {
+                    Some(a) => Some(a),
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "AGENT_NOT_FOUND".into(),
+                                message: format!("No agent {id}"),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+
         // Resolve the workspace this run belongs to (SEC-02 event routing).
         let workspace_id: Option<Uuid> = self
             .context
@@ -1813,6 +1858,7 @@ impl Dispatcher {
             mode: mode.clone(),
             autonomy,
             kind: RunKind::OneShot,
+            agent_id,
             state: RunState::Preparing,
             prompt: prompt.clone(),
             provided_files: vec![],
@@ -1881,11 +1927,14 @@ impl Dispatcher {
         // Spawn claude process in actual_working_dir (worktree if git).
         // Ownership of the concurrency entry transfers to the supervisor task
         // on success; `forget()` prevents the guard from clearing it on drop.
-        match self
-            .context
-            .runner
-            .spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir)
-        {
+        match self.context.runner.spawn(
+            run_id,
+            &prompt,
+            &mode,
+            autonomy,
+            agent.as_ref(),
+            &actual_working_dir,
+        ) {
             Ok((mut event_rx, mut child)) => {
                 if let Some(g) = concurrency_guard.take() {
                     g.forget();
@@ -2218,6 +2267,7 @@ impl Dispatcher {
                                             mode,
                                             autonomy: autonomy_clone,
                                             kind: RunKind::OneShot,
+                                            agent_id,
                                             state: RunState::Completed { exit_code },
                                             prompt,
                                             provided_files: vec![],

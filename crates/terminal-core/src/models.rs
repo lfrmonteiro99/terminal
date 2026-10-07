@@ -242,6 +242,12 @@ pub struct Run {
     /// Run driving strategy. Defaults to OneShot for old persisted runs.
     #[serde(default)]
     pub kind: RunKind,
+    /// Agent that drove this run. `None` = the implicit default agent (the
+    /// daemon's configured `claude` binary with no extra instructions), which
+    /// is how every run behaved before agents existed — keeps old persisted
+    /// runs and agentless clients working.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
     pub state: RunState,
     pub prompt: String,
     pub provided_files: Vec<PathBuf>,
@@ -301,6 +307,76 @@ pub struct SessionSummary {
     pub active_run: Option<Uuid>,
     pub run_count: usize,
     pub started_at: DateTime<Utc>,
+}
+
+// --- Agents ---
+
+/// The part an agent plays. Purely descriptive today (it does not change how
+/// the run is executed); it exists so the UI, routing and later delegation can
+/// reason about intent, and so the pipeline can grow a planner→implementer→
+/// verifier shape without a schema migration.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AgentRole {
+    #[default]
+    Generic,
+    Planner,
+    Implementer,
+    Verifier,
+}
+
+/// A named, reusable worker: a Claude invocation with a fixed mission, an
+/// optional model pin, and a default autonomy level.
+///
+/// Heterogeneous runners (a different CLI that emits a different stream
+/// format) are deliberately NOT modelled here yet — the daemon's event
+/// parser is Claude-specific, so an agent is currently a *role over the same
+/// runner*, not a different binary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Agent {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub role: AgentRole,
+    #[serde(default)]
+    pub description: String,
+    /// Appended verbatim as `--append-system-prompt` on every run this agent
+    /// drives. This is the agent's mission (the AGENTS.md equivalent).
+    #[serde(default)]
+    pub instructions: String,
+    /// Optional model pin forwarded as `--model`. `None` = the CLI default.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Autonomy applied to runs when the client does not specify one.
+    #[serde(default)]
+    pub default_autonomy: AutonomyLevel,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Wire-safe summary of an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub role: AgentRole,
+    pub description: String,
+    pub model: Option<String>,
+    pub default_autonomy: AutonomyLevel,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&Agent> for AgentSummary {
+    fn from(a: &Agent) -> Self {
+        AgentSummary {
+            id: a.id,
+            name: a.name.clone(),
+            role: a.role,
+            description: a.description.clone(),
+            model: a.model.clone(),
+            default_autonomy: a.default_autonomy,
+            updated_at: a.updated_at,
+        }
+    }
 }
 
 // --- Git Types ---

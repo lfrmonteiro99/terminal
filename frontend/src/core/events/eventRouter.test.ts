@@ -84,6 +84,32 @@ const SAMPLES: Record<AppEvent['type'], AppEvent> = {
   SessionEnded: { type: 'SessionEnded', session_id: 's1' },
   SessionList: { type: 'SessionList', sessions: [] },
   RunList: { type: 'RunList', session_id: 's1', runs: [] },
+  AgentList: { type: 'AgentList', agents: [] },
+  AgentCreated: {
+    type: 'AgentCreated',
+    agent: {
+      id: 'a1',
+      name: 'planner',
+      role: 'Planner',
+      description: '',
+      model: null,
+      default_autonomy: 'Autonomous',
+      updated_at: 'x',
+    },
+  },
+  AgentUpdated: {
+    type: 'AgentUpdated',
+    agent: {
+      id: 'a1',
+      name: 'planner',
+      role: 'Planner',
+      description: '',
+      model: null,
+      default_autonomy: 'Autonomous',
+      updated_at: 'x',
+    },
+  },
+  AgentDeleted: { type: 'AgentDeleted', agent_id: 'a1' },
   RunOutputPage: {
     type: 'RunOutputPage',
     run_id: 'r1',

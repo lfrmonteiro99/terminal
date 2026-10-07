@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use crate::models::{
-    AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
+    AgentSummary, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
     FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot,
     RestorableTerminalSession, RunKind, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
     SshConfig, StashEntry, TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
@@ -38,6 +38,10 @@ pub enum AppCommand {
         /// OneShot (default) or Chat.
         #[serde(default)]
         kind: RunKind,
+        /// Agent to drive this run. `None` = the implicit default agent
+        /// (daemon's configured claude binary, no extra instructions).
+        #[serde(default)]
+        agent_id: Option<Uuid>,
     },
     CancelRun {
         run_id: Uuid,
@@ -53,6 +57,40 @@ pub enum AppCommand {
         run_id: Uuid,
         offset: u64,
         limit: u64,
+    },
+
+    // Agents
+    ListAgents,
+    CreateAgent {
+        name: String,
+        #[serde(default)]
+        role: crate::models::AgentRole,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        instructions: String,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        default_autonomy: AutonomyLevel,
+    },
+    UpdateAgent {
+        agent_id: Uuid,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        role: Option<crate::models::AgentRole>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        default_autonomy: Option<AutonomyLevel>,
+    },
+    DeleteAgent {
+        agent_id: Uuid,
     },
 
     // Git operations (Phase 2)
@@ -388,6 +426,20 @@ pub enum AppEvent {
     RunList {
         session_id: Uuid,
         runs: Vec<RunSummary>,
+    },
+
+    // Agent events
+    AgentList {
+        agents: Vec<AgentSummary>,
+    },
+    AgentCreated {
+        agent: AgentSummary,
+    },
+    AgentUpdated {
+        agent: AgentSummary,
+    },
+    AgentDeleted {
+        agent_id: Uuid,
     },
 
     // Run output (paginated response)
