@@ -144,6 +144,11 @@ pub async fn start_server(
     dispatcher.recover_workspaces().await;
     dispatcher.recover_catalog().await;
     dispatcher.recover_agents().await;
+    // Sessions were the one thing never restored, which left `ListSessions`
+    // permanently empty and made every previous session unreachable after a
+    // restart. Ordered after workspaces so a recovered session can be attached
+    // to one.
+    dispatcher.recover_sessions().await;
     tokio::spawn(async move {
         while let Some((client_id, cmd, reply_tx)) = command_rx.recv().await {
             dispatcher.handle(client_id, cmd, reply_tx).await;

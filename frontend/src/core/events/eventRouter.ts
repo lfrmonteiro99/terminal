@@ -158,6 +158,28 @@ export class EventRouter {
       case 'RunOutput':
         dispatch({ type: 'APPEND_OUTPUT', line: event.line });
         break;
+      case 'RunOutputDelta':
+        // Live token stream: buffered for display, replaced by the committed
+        // line for the same text.
+        dispatch({ type: 'APPEND_OUTPUT_DELTA', runId: event.run_id, text: event.text });
+        break;
+      case 'RunNotice':
+        dispatch({
+          type: 'ADD_RUN_NOTICE',
+          runId: event.run_id,
+          level: event.level,
+          message: event.message,
+          at: Date.now(),
+        });
+        break;
+      case 'RunProgress':
+        dispatch({
+          type: 'SET_RUN_PHASE',
+          runId: event.run_id,
+          phase: event.phase,
+          detail: event.detail,
+        });
+        break;
       case 'RunOutputPage':
         // Paginated history load: append each line in order.
         for (const line of event.lines) {

@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use crate::models::{
     AgentSummary, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
-    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, Personality,
+    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, NoticeLevel, Personality,
     RepoStatusSnapshot, RestorableTerminalSession, Role, RunKind, RunMode, RunState, RunSummary,
     Runner, SearchMatch, SessionSummary, SshConfig, StashEntry, TerminalSessionSummary,
     WorkspaceMode, WorkspaceSummary,
@@ -381,6 +381,30 @@ pub enum AppEvent {
     /// Chat-only: a turn finished while the process remains alive.
     ChatTurnEnded {
         run_id: Uuid,
+    },
+    /// A token-level text delta while the model is still writing. Consumed into
+    /// an ephemeral "live" buffer that the next `RunOutput` replaces, so the
+    /// panel streams without the same sentence appearing twice.
+    RunOutputDelta {
+        run_id: Uuid,
+        text: String,
+    },
+    /// Run chrome that is not output: rate limits, compaction, unmodelled
+    /// stream events. Keeps machine JSON out of the readable log.
+    RunNotice {
+        run_id: Uuid,
+        level: NoticeLevel,
+        message: String,
+    },
+    /// What the supervisor is doing right now, before any output exists.
+    /// `Preparing` covers worktree creation and preflight, which are silent and
+    /// can take a while — this is what stops the panel looking frozen.
+    RunProgress {
+        run_id: Uuid,
+        /// Stable machine tag for the phase (`worktree`, `preflight`, `spawn`,
+        /// `streaming`, `finalising`).
+        phase: String,
+        detail: Option<String>,
     },
     /// Plan-mode chat: Claude proposed a plan that needs approval.
     PlanProposed {
@@ -1614,6 +1638,20 @@ mod tests {
                 reason: "r".into(),
                 suggestion: "s".into(),
             },
+            AppEvent::RunOutputDelta {
+                run_id: uuid(),
+                text: "partial".into(),
+            },
+            AppEvent::RunNotice {
+                run_id: uuid(),
+                level: NoticeLevel::Warning,
+                message: "rate limited".into(),
+            },
+            AppEvent::RunProgress {
+                run_id: uuid(),
+                phase: "worktree".into(),
+                detail: Some("creating".into()),
+            },
             AppEvent::ChatTurnEnded { run_id: uuid() },
             AppEvent::PlanProposed { run_id: uuid(), plan: "plan".into() },
             AppEvent::RunDiff {
@@ -1820,6 +1858,9 @@ mod tests {
                 AppEvent::RunToolResult { .. } => "RunToolResult",
                 AppEvent::RunMetrics { .. } => "RunMetrics",
                 AppEvent::RunPreflightFailed { .. } => "RunPreflightFailed",
+                AppEvent::RunOutputDelta { .. } => "RunOutputDelta",
+                AppEvent::RunNotice { .. } => "RunNotice",
+                AppEvent::RunProgress { .. } => "RunProgress",
                 AppEvent::ChatTurnEnded { .. } => "ChatTurnEnded",
                 AppEvent::PlanProposed { .. } => "PlanProposed",
                 AppEvent::RunDiff { .. } => "RunDiff",

@@ -15,11 +15,11 @@
 //!   to run a prompt. A missing or broken binary surfaces as a structured
 //!   `Preflight` event instead of a cryptic spawn error.
 
-use crate::parser::{ParseEvent, StreamParser};
+use crate::parser::{HermesStreamParser, ParseEvent, StreamParser};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use terminal_core::config::DaemonConfig;
-use terminal_core::models::{Agent, AutonomyLevel, RunMode, Runner};
+use terminal_core::models::{Agent, AutonomyLevel, NoticeLevel, RunMode, Runner};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
@@ -36,6 +36,15 @@ pub enum RunnerEvent {
     StderrLine(String),
     /// Assistant message text block.
     AssistantText(String),
+    /// Token-level text delta from a partial-message stream. The UI renders it
+    /// live and drops the buffer when the committed text arrives.
+    AssistantDelta(String),
+    /// Run chrome: rate limits, compaction, unmodelled stream events. Shown as
+    /// a notice, never mixed into the readable output log.
+    Notice {
+        level: NoticeLevel,
+        message: String,
+    },
     /// Claude called a tool.
     ToolUse {
         id: String,
@@ -146,6 +155,14 @@ fn claude_args_for(
         perm.cli_value().to_string(),
     ]);
 
+    // Token-level streaming. Without this the model's text arrives only as a
+    // completed `assistant` block, so a long run shows nothing until it is
+    // done. `stream_event` deltas are consumed by the parser and rendered live;
+    // the committed block then replaces them, so nothing is shown twice.
+    if !chat {
+        args.push("--include-partial-messages".to_string());
+    }
+
     if matches!(perm, PermissionMode::BypassAll) {
         args.push("--dangerously-skip-permissions".to_string());
     }
@@ -173,14 +190,43 @@ fn append_agent_args(args: &mut Vec<String>, agent: Option<&Agent>) {
     }
 }
 
-/// Fold a driving agent into a `hermes -z` invocation.
+/// The autonomy choice, as an instruction Hermes can act on.
 ///
-/// `hermes -z` prints ONLY the final response text to stdout (no banner, no
-/// spinner, no stream-json), so the supervisor sees a coarser run than with
-/// Claude: no tool-use events and no token metrics. What it does not have is an
-/// `--append-system-prompt`, so the agent's composed instructions are prepended
-/// to the prompt as an explicit preamble — the only lever hermes exposes.
-fn hermes_args_for(prompt: &str, agent: Option<&Agent>) -> Vec<String> {
+/// Claude enforces autonomy with `--permission-mode` — a real gate. Hermes has
+/// no equivalent flag and no sandbox for it, so without this the UI's
+/// Autonomous / Plan-first toggle was silently inert: a user could pick
+/// "Autonomous", drive a Planner agent, and get a plan with nothing written,
+/// with no indication that their choice had been dropped on the floor. A
+/// directive in the prompt is the only lever Hermes exposes, so the honest fix
+/// is to use it and say what it is.
+fn autonomy_directive(autonomy: AutonomyLevel) -> &'static str {
+    match autonomy {
+        AutonomyLevel::Autonomous => {
+            "AUTONOMY: EXECUTE. Carry out the requested work in this working copy now — make the \
+             edits and run the commands. Do not stop to present a plan first; a plan is not the \
+             deliverable. Any planning guidance above describes how to work, not licence to stop \
+             early."
+        }
+        AutonomyLevel::ReviewPlan => {
+            "AUTONOMY: PLAN ONLY. Do not create, edit or delete any file and do not run any \
+             state-changing command. Produce a plan describing exactly what you would do, then stop."
+        }
+    }
+}
+
+/// Fold a driving agent into a `hermes chat --format stream-json` invocation.
+///
+/// This used to be `hermes -z <prompt>`, which prints ONLY the final response
+/// text to stdout. That made every Hermes run opaque: a long run showed nothing
+/// at all until it finished, and the panel looked hung. `chat --format
+/// stream-json` emits one JSON object per line — `system/init`, `text` deltas,
+/// `tool_use` / `tool_result`, then a terminal `result` envelope — so Hermes
+/// runs now stream like Claude runs do, with tool cards and token metrics.
+///
+/// Hermes has no `--append-system-prompt`, so the agent's composed instructions
+/// and the autonomy directive are prepended to the query as an explicit
+/// preamble: the only lever it exposes.
+fn hermes_args_for(prompt: &str, agent: Option<&Agent>, autonomy: AutonomyLevel) -> Vec<String> {
     let mut args = Vec::new();
     // Profile first: `-p` is Hermes' pre-argparse profile flag, and it re-homes
     // the child onto that profile's config (model set, providers, skills,
@@ -192,6 +238,7 @@ fn hermes_args_for(prompt: &str, agent: Option<&Agent>) -> Vec<String> {
         args.push("-p".to_string());
         args.push(profile.clone());
     }
+    args.push("chat".to_string());
     if let Some(model) = agent
         .and_then(|a| a.model.as_ref())
         .filter(|m| !m.trim().is_empty())
@@ -208,20 +255,28 @@ fn hermes_args_for(prompt: &str, agent: Option<&Agent>) -> Vec<String> {
         args.push("--provider".to_string());
         args.push(provider.clone());
     }
-    args.push("-z".to_string());
-    args.push(match agent {
-        Some(a) if !a.instructions.trim().is_empty() => {
-            format!("{}\n\n---\n\n{}", a.instructions.trim(), prompt)
-        }
-        _ => prompt.to_string(),
-    });
+    args.push("--format".to_string());
+    args.push("stream-json".to_string());
+    args.push("--oneshot".to_string());
+    args.push("-q".to_string());
+
+    let mut preamble = String::new();
+    if let Some(a) = agent.filter(|a| !a.instructions.trim().is_empty()) {
+        preamble.push_str(a.instructions.trim());
+        preamble.push_str("\n\n---\n\n");
+    }
+    preamble.push_str(autonomy_directive(autonomy));
+    preamble.push_str("\n\n---\n\n");
+    preamble.push_str(prompt);
+
+    args.push(preamble);
     args
 }
 
-/// Read a hermes one-shot's plain-text stdout into the shared `RunnerEvent`
-/// channel. `-z` prints the final text only, so every line is assistant output;
-/// `ResultSeen` is emitted on EOF, which is what tells the supervisor the run
-/// finished rather than dying mid-stream.
+/// Read a hermes `--format stream-json` run into the shared `RunnerEvent`
+/// channel. Hermes emits the same high-level shapes Claude does (`system/init`,
+/// `text` deltas, `tool_use`/`tool_result`, terminal `result`), so its parser
+/// produces identical `ParseEvent`s and the supervisor needs no special case.
 fn spawn_hermes_readers(
     run_id: Uuid,
     stdout: ChildStdout,
@@ -232,10 +287,15 @@ fn spawn_hermes_readers(
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
+        let mut parser = HermesStreamParser::new();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    let _ = event_tx_stdout.send(RunnerEvent::StdoutLine(line)).await;
+                    for event in parser.feed_line(&line) {
+                        for mapped in map_parse_events(event) {
+                            let _ = event_tx_stdout.send(mapped).await;
+                        }
+                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -244,9 +304,9 @@ fn spawn_hermes_readers(
                 }
             }
         }
-        // hermes exited cleanly (child.wait handles the code); signal a proper
-        // completion so the supervisor does not report "stream ended without
-        // result event".
+        // The terminal `result` event sets `ResultSeen`; this is the belt-and-
+        // braces case where the stream ends without one (crash, kill), so the
+        // supervisor reports a failed run instead of "stream ended".
         let _ = event_tx_stdout.send(RunnerEvent::ResultSeen).await;
         debug!("hermes stdout reader finished for run {run_id}");
     });
@@ -256,6 +316,8 @@ fn spawn_hermes_readers(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            // Hermes writes diagnostics and the `session_id:` footer to stderr.
+            // Those are chrome, not output — the JSON stream carries the answer.
             let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
         }
     });
@@ -311,6 +373,70 @@ fn spawn_chat_stdin_writer(mut stdin: ChildStdin) -> mpsc::Sender<String> {
     stdin_tx
 }
 
+/// Map one parser event onto the runner channel. Both dialects share this so the
+/// Claude and Hermes readers cannot drift in how they treat an event — a `text`
+/// delta in either language becomes the same `RunnerEvent`.
+fn map_parse_events(event: ParseEvent) -> Vec<RunnerEvent> {
+    match event {
+        // Committed assistant text is split per line so it lands in the log the
+        // way the model wrote it. Deltas are fragments, never split.
+        ParseEvent::AssistantText(text) => {
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                text.split_inclusive('\n')
+                    .map(|line| RunnerEvent::AssistantText(line.to_string()))
+                    .collect()
+            }
+        }
+        ParseEvent::AssistantDelta(text) => vec![RunnerEvent::AssistantDelta(text)],
+        ParseEvent::ToolUse { id, name, input_preview } => {
+            vec![RunnerEvent::ToolUse { id, name, input_preview }]
+        }
+        ParseEvent::ExitPlanMode { tool_use_id, plan } => {
+            vec![RunnerEvent::ExitPlanMode { tool_use_id, plan }]
+        }
+        ParseEvent::ToolResult { tool_use_id, is_error, preview } => {
+            vec![RunnerEvent::ToolResult { tool_use_id, is_error, preview }]
+        }
+        ParseEvent::SessionInit { model, session_id } => {
+            vec![RunnerEvent::SessionInit { model, session_id }]
+        }
+        ParseEvent::Notice { level, message } => vec![RunnerEvent::Notice { level, message }],
+        ParseEvent::RawLine(line) => vec![RunnerEvent::StdoutLine(line)],
+        ParseEvent::Result {
+            success,
+            subtype,
+            num_turns,
+            cost_usd,
+            input_tokens,
+            output_tokens,
+            error_text,
+        } => {
+            let mut out = Vec::new();
+            // Only a successful result sets ResultSeen: the supervisor reads a
+            // missing ResultSeen at stream end as "died mid-stream", so a failed
+            // result must not masquerade as one.
+            if success {
+                out.push(RunnerEvent::ResultSeen);
+            }
+            out.push(RunnerEvent::Metrics {
+                num_turns,
+                cost_usd,
+                input_tokens,
+                output_tokens,
+            });
+            if !success {
+                out.push(RunnerEvent::Notice {
+                    level: NoticeLevel::Error,
+                    message: error_text.unwrap_or_else(|| format!("run failed: {subtype}")),
+                });
+            }
+            out
+        }
+    }
+}
+
 fn spawn_stream_readers(
     run_id: Uuid,
     stdout: ChildStdout,
@@ -333,80 +459,8 @@ fn spawn_stream_readers(
                 }
             };
             for event in parser.feed_line(&line) {
-                match event {
-                    ParseEvent::AssistantText(text) => {
-                        for line in text.split_inclusive(char::from(10)) {
-                            let _ = event_tx_stdout
-                                .send(RunnerEvent::AssistantText(line.to_string()))
-                                .await;
-                        }
-                    }
-                    ParseEvent::ToolUse {
-                        id,
-                        name,
-                        input_preview,
-                    } => {
-                        let _ = event_tx_stdout
-                            .send(RunnerEvent::ToolUse {
-                                id,
-                                name,
-                                input_preview,
-                            })
-                            .await;
-                    }
-                    ParseEvent::ExitPlanMode { tool_use_id, plan } => {
-                        let _ = event_tx_stdout
-                            .send(RunnerEvent::ExitPlanMode { tool_use_id, plan })
-                            .await;
-                    }
-                    ParseEvent::ToolResult {
-                        tool_use_id,
-                        is_error,
-                        preview,
-                    } => {
-                        let _ = event_tx_stdout
-                            .send(RunnerEvent::ToolResult {
-                                tool_use_id,
-                                is_error,
-                                preview,
-                            })
-                            .await;
-                    }
-                    ParseEvent::SessionInit { model, session_id } => {
-                        let _ = event_tx_stdout
-                            .send(RunnerEvent::SessionInit { model, session_id })
-                            .await;
-                    }
-                    ParseEvent::Result {
-                        success,
-                        subtype,
-                        num_turns,
-                        cost_usd,
-                        input_tokens,
-                        output_tokens,
-                        error_text,
-                    } => {
-                        if success {
-                            let _ = event_tx_stdout.send(RunnerEvent::ResultSeen).await;
-                        }
-                        let _ = event_tx_stdout
-                            .send(RunnerEvent::Metrics {
-                                num_turns,
-                                cost_usd,
-                                input_tokens,
-                                output_tokens,
-                            })
-                            .await;
-                        if !success {
-                            let reason =
-                                error_text.unwrap_or_else(|| format!("claude result: {subtype}"));
-                            let _ = event_tx_stdout.send(RunnerEvent::StderrLine(reason)).await;
-                        }
-                    }
-                    ParseEvent::RawLine(line) => {
-                        debug!("claude raw line: {line}");
-                        let _ = event_tx_stdout.send(RunnerEvent::StdoutLine(line)).await;
-                    }
+                for mapped in map_parse_events(event) {
+                    let _ = event_tx_stdout.send(mapped).await;
                 }
             }
         }
@@ -535,7 +589,7 @@ impl ClaudeRunner {
             ),
             Runner::Hermes => (
                 self.config.hermes_binary.clone(),
-                hermes_args_for(prompt, agent),
+                hermes_args_for(prompt, agent, autonomy),
             ),
         };
 
@@ -544,7 +598,11 @@ impl ClaudeRunner {
 
         let mut child = cmd
             .current_dir(working_dir)
-            .stdin(Stdio::piped())
+            // The prompt travels in argv, so nothing ever writes to stdin. A
+            // piped-but-silent stdin made the CLI warn "no stdin data received
+            // in 3s" and printed that into the run's output; null gives an
+            // immediate, honest EOF.
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -720,6 +778,66 @@ mod tests {
     }
 
     #[test]
+    fn claude_args_for_oneshot_requests_partial_messages() {
+        // Token-level streaming is what stops a long run looking frozen.
+        let cfg = DaemonConfig::default();
+        let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, false, None);
+        assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
+        // Chat mode keeps a JSON input stream; partial messages are one-shot only.
+        let chat = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, true, None);
+        assert!(!chat.iter().any(|arg| arg == "--include-partial-messages"));
+    }
+
+    #[test]
+    fn failed_result_never_sets_result_seen() {
+        // `ResultSeen` is the supervisor's "stream ended cleanly" signal. A
+        // failed `result` envelope must not set it, or a rate-limited run would
+        // be reported as a completed one.
+        let failed = map_parse_events(ParseEvent::Result {
+            success: false,
+            subtype: "error".into(),
+            num_turns: 1,
+            cost_usd: 0.0,
+            input_tokens: 10,
+            output_tokens: 0,
+            error_text: Some("usage limit reached".into()),
+        });
+        assert!(
+            !failed.iter().any(|e| matches!(e, RunnerEvent::ResultSeen)),
+            "failed result must not look like a clean finish: {failed:?}"
+        );
+        // The reason is carried as an error-level notice, which the supervisor
+        // promotes to the RunFailed message.
+        assert!(failed.iter().any(|e| matches!(
+            e,
+            RunnerEvent::Notice { level: NoticeLevel::Error, message } if message == "usage limit reached"
+        )));
+        // Metrics still flow, so the panel can show tokens even for a failure.
+        assert!(failed.iter().any(|e| matches!(e, RunnerEvent::Metrics { input_tokens: 10, .. })));
+
+        let ok = map_parse_events(ParseEvent::Result {
+            success: true,
+            subtype: "success".into(),
+            num_turns: 1,
+            cost_usd: 0.0,
+            input_tokens: 1,
+            output_tokens: 1,
+            error_text: None,
+        });
+        assert!(ok.iter().any(|e| matches!(e, RunnerEvent::ResultSeen)));
+    }
+
+    #[test]
+    fn assistant_text_is_split_per_line_but_deltas_are_not() {
+        let text = map_parse_events(ParseEvent::AssistantText("one\ntwo\n".into()));
+        assert_eq!(text.len(), 2, "committed text splits per line: {text:?}");
+
+        // A delta is a fragment mid-word; splitting it would corrupt the stream.
+        let delta = map_parse_events(ParseEvent::AssistantDelta("O Dou".into()));
+        assert!(matches!(delta.as_slice(), [RunnerEvent::AssistantDelta(t)] if t == "O Dou"));
+    }
+
+    #[test]
     fn claude_args_for_oneshot_omits_input_format() {
         let cfg = DaemonConfig::default();
         let args = claude_args_for("hi", &RunMode::Free, AutonomyLevel::Autonomous, &cfg, false, None);
@@ -817,7 +935,7 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        let args = hermes_args_for("review the diff", Some(&agent));
+        let args = hermes_args_for("review the diff", Some(&agent), AutonomyLevel::Autonomous);
         assert!(args.windows(2).any(|w| w == ["-p", "fast"]));
         assert!(args.windows(2).any(|w| w == ["-m", "anthropic/claude-sonnet-4.6"]));
         assert!(args.windows(2).any(|w| w == ["--provider", "openrouter"]));
@@ -831,9 +949,65 @@ mod tests {
     }
 
     #[test]
-    fn hermes_args_without_agent_is_the_bare_prompt() {
-        let args = hermes_args_for("hello", None);
-        assert_eq!(args, vec!["-z".to_string(), "hello".to_string()]);
+    fn hermes_args_use_the_stream_json_protocol() {
+        // `-z` printed only the final text, so a long Hermes run showed nothing
+        // until it finished. This asserts the streaming invocation replaces it.
+        let args = hermes_args_for("hello", None, AutonomyLevel::Autonomous);
+        assert_eq!(args[0], "chat");
+        assert!(args.windows(2).any(|w| w == ["--format", "stream-json"]));
+        assert!(args.contains(&"--oneshot".to_string()));
+        assert!(args.windows(2).any(|w| w == ["-q", args.last().unwrap()]));
+        // `-z` must be gone: it is the flag that produced no streaming.
+        assert!(!args.iter().any(|a| a == "-z"));
+        // The prompt carries the autonomy directive (Hermes has no
+        // permission-mode flag, so this is the only lever).
+        let prompt = args.last().unwrap();
+        assert!(prompt.contains("AUTONOMY: EXECUTE"), "{prompt}");
+        assert!(prompt.ends_with("hello"), "{prompt}");
+    }
+
+    #[test]
+    fn hermes_plan_first_asks_for_a_plan_and_no_writes() {
+        // The autonomy toggle used to be silently inert on Hermes: it only ever
+        // became a Claude `--permission-mode`, so the user's choice vanished.
+        let plan = hermes_args_for("do the thing", None, AutonomyLevel::ReviewPlan);
+        let prompt = plan.last().unwrap();
+        assert!(prompt.contains("AUTONOMY: PLAN ONLY"), "{prompt}");
+        assert!(prompt.contains("Do not create, edit or delete any file"), "{prompt}");
+    }
+
+    #[test]
+    fn hermes_preamble_orders_instructions_then_autonomy_then_prompt() {
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "planner".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Hermes,
+            legacy_role: None,
+            description: String::new(),
+            instructions: "Produce a plan and stop.".into(),
+            model: Some("deepseek-v4.1-flash".into()),
+            provider: Some("ollama-cloud".into()),
+            profile: Some("fast".into()),
+            default_autonomy: AutonomyLevel::ReviewPlan,
+            created_at: now,
+            updated_at: now,
+        };
+        let args = hermes_args_for("ship it", Some(&agent), AutonomyLevel::Autonomous);
+        let prompt = args.last().unwrap();
+
+        let i_role = prompt.find("Produce a plan and stop.").expect("role instructions");
+        let i_auto = prompt.find("AUTONOMY: EXECUTE").expect("autonomy directive");
+        let i_task = prompt.find("ship it").expect("task");
+        // Last word wins for a model reading top-to-bottom, so the directive
+        // sits after the role text and before the task.
+        assert!(i_role < i_auto && i_auto < i_task, "{prompt}");
+        // Profile/model/provider still become real flags.
+        assert!(args.windows(2).any(|w| w == ["-p", "fast"]));
+        assert!(args.windows(2).any(|w| w == ["-m", "deepseek-v4.1-flash"]));
+        assert!(args.windows(2).any(|w| w == ["--provider", "ollama-cloud"]));
     }
 
     #[test]

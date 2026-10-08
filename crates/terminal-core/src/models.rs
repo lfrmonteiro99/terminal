@@ -179,6 +179,17 @@ pub enum FailPhase {
     Cleanup,
 }
 
+/// Severity of a run notice — chrome the UI shows next to the run, never part
+/// of the human-readable output log itself. Rate limits, compaction boundaries
+/// and stream shapes we deliberately don't model land here instead of being
+/// dumped as raw JSON.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warning,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RunMode {
     Free,

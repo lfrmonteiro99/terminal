@@ -8,10 +8,12 @@ import type {
   FileChange,
   FileTreeEntry,
   MergeConflictFile,
+  NoticeLevel,
   PreflightError,
   RestorableTerminalSession,
   RunMetrics,
   RunMode,
+  RunNotice,
   RunState,
   RunSummary,
   SearchMatch,
@@ -63,6 +65,17 @@ export interface WorkspaceStore {
   runMetrics: RunMetrics | null;
   preflightError: PreflightError | null;
 
+  // Live run presentation. `runLiveText` holds token deltas that have not been
+  // committed to `outputLines` yet — the next committed line clears it, which is
+  // what lets the panel stream without showing the same sentence twice.
+  runLiveText: string;
+  /** Phase tag from `RunProgress`: 'worktree' | 'preflight' | 'streaming' | … */
+  runPhase: string | null;
+  runPhaseDetail: string | null;
+  /** Wall-clock start, so the panel can count up while nothing is arriving. */
+  runStartedAt: number | null;
+  runNotices: RunNotice[];
+
   // Stash / dirty
   stashes: StashEntry[];
   stashFiles: Map<number, FileChange[]>;
@@ -109,6 +122,8 @@ export interface RepoStatus {
 }
 
 const MAX_OUTPUT_LINES = 2000;
+/** Notices are chrome; keep the last handful rather than an unbounded list. */
+const MAX_RUN_NOTICES = 24;
 
 export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
   return {
@@ -125,6 +140,11 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     runToolCalls: new Map(),
     runMetrics: null,
     preflightError: null,
+    runLiveText: '',
+    runPhase: null,
+    runPhaseDetail: null,
+    runStartedAt: null,
+    runNotices: [],
     stashes: [],
     stashFiles: new Map(),
     stashDiffs: new Map(),
@@ -166,6 +186,9 @@ export type WorkspaceAction =
   | { type: 'START_PENDING_RUN'; startedAt: number }
   | { type: 'CLEAR_PENDING_RUN' }
   | { type: 'APPEND_OUTPUT'; line: string }
+  | { type: 'APPEND_OUTPUT_DELTA'; runId: string; text: string }
+  | { type: 'ADD_RUN_NOTICE'; runId: string; level: NoticeLevel; message: string; at: number }
+  | { type: 'SET_RUN_PHASE'; runId: string; phase: string; detail: string | null }
   | { type: 'CLEAR_OUTPUT' }
   | { type: 'UPSERT_RUN'; run: RunSummary }
   | { type: 'SET_RUNS'; runs: RunSummary[] }
@@ -222,13 +245,17 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
       return { ...state, activeSession: action.sessionId };
 
     case 'SET_ACTIVE_RUN':
-      return { ...state, activeRun: action.runId };
+      // A run that is no longer active must not leave a live buffer or phase
+      // behind: the next run would start with the previous one's tail on screen.
+      return action.runId === null
+        ? { ...state, activeRun: null, runLiveText: '', runPhase: null, runPhaseDetail: null }
+        : { ...state, activeRun: action.runId, runStartedAt: state.runStartedAt ?? Date.now() };
 
     case 'SET_RUN_STATE':
       return { ...state, runState: action.runState, pendingRunStartedAt: null };
 
     case 'START_PENDING_RUN':
-      return { ...state, pendingRunStartedAt: action.startedAt, outputLines: [], runToolCalls: new Map(), runMetrics: null, preflightError: null };
+      return { ...state, pendingRunStartedAt: action.startedAt, runStartedAt: action.startedAt, outputLines: [], runLiveText: '', runNotices: [], runPhase: null, runPhaseDetail: null, runToolCalls: new Map(), runMetrics: null, preflightError: null };
 
     case 'CLEAR_PENDING_RUN':
       return { ...state, pendingRunStartedAt: null };
@@ -238,8 +265,34 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
       return {
         ...state,
         pendingRunStartedAt: null,
+        // A committed line supersedes the live buffer: the deltas that were
+        // streaming the same text are now represented in the log, so keeping
+        // them would print the answer twice.
+        runLiveText: '',
         outputLines: lines.length > MAX_OUTPUT_LINES ? lines.slice(-MAX_OUTPUT_LINES) : lines,
       };
+    }
+
+    case 'APPEND_OUTPUT_DELTA': {
+      // Ignore a delta for a run that is no longer the active one — a late
+      // frame from a previous run must not leak into this one's buffer.
+      if (action.runId !== state.activeRun) return state;
+      return { ...state, pendingRunStartedAt: null, runLiveText: state.runLiveText + action.text };
+    }
+
+    case 'ADD_RUN_NOTICE': {
+      if (action.runId !== state.activeRun) return state;
+      const runNotices = [
+        ...state.runNotices,
+        { runId: action.runId, level: action.level, message: action.message, at: action.at },
+      ];
+      // Notices are chrome, so a runaway stream cannot grow them without bound.
+      return { ...state, runNotices: runNotices.slice(-MAX_RUN_NOTICES) };
+    }
+
+    case 'SET_RUN_PHASE': {
+      if (action.runId !== state.activeRun) return state;
+      return { ...state, runPhase: action.phase, runPhaseDetail: action.detail };
     }
 
     case 'CLEAR_OUTPUT':

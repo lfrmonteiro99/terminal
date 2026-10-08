@@ -58,6 +58,11 @@
   --state-success: #3fb987;
   --state-warning: #e0a83c;
   --state-danger: #e5484d;
+  /* Channel triplets, so state colours can be used as translucent fills
+     (`rgba(var(--state-warning-rgb), 0.1)`) without hardcoding the value. */
+  --state-success-rgb: 63, 185, 135;
+  --state-warning-rgb: 224, 168, 60;
+  --state-danger-rgb: 229, 72, 77;
   --disabled-opacity: 0.5;
 
   /* Accent — defaults; overwritten inline by appearance.ts */
@@ -179,6 +184,13 @@
   --activitybar-width: 40px;
   --pane-header-height: 32px;
 
+  /* Welcome card geometry. On a phone the 40px padding and 580px width waste
+     the little room there is; mobile.css overrides these rather than the
+     component doing `isMobile ? …` arithmetic. */
+  --welcome-overlay-pad: 0px;
+  --welcome-card-pad: 36px 40px;
+  --welcome-card-gap: 28px;
+
   /* Shell layout — labelled nav rail + resizable content panel */
   --rail-width: 210px;
   --rail-width-collapsed: 52px;
@@ -215,6 +227,16 @@
   --text-primary: #14171a;
   --text-secondary: #5b636b;
   --text-muted: #7d858c;
+
+  /* State colours are text/critical marks, so they need their own light
+     values: the dark amber is ~2:1 on this canvas, i.e. unreadable. Measured
+     against #f7f8f8, all three clear 4.5:1 (5.00 / 5.57 / 5.26). */
+  --state-success: #157a55;
+  --state-warning: #8a5a00;
+  --state-danger: #c0332f;
+  --state-success-rgb: 21, 122, 85;
+  --state-warning-rgb: 138, 90, 0;
+  --state-danger-rgb: 192, 51, 47;
 
   --tint-hover: rgba(0, 0, 0, 0.035);
   --tint-active: rgba(0, 0, 0, 0.06);

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { getSavedSessions, deleteSession } from '../state/sessionStore';
 import type { SavedSession } from '../state/sessionStore';
+import type { SessionSummary } from '../types/protocol';
 import { collectPanes } from '../domain/pane/types';
 
 interface WelcomeScreenProps {
@@ -9,7 +10,15 @@ interface WelcomeScreenProps {
   onNewSession: (projectRoot: string) => void;
   tauriMode?: boolean;
   onBrowse?: () => Promise<string | null>;
+  /** Sessions the daemon still holds. Unlike `SavedSession`s (a localStorage
+   *  convenience), these survive a restart and a different browser — they are
+   *  the only way back to a previous project from a phone. */
+  daemonSessions?: SessionSummary[];
 }
+
+/** How many recovered daemon sessions to show. The local store caps at 10 for
+ *  the same reason: a welcome screen is a shortcut, not an archive. */
+const MAX_REMOTE_SESSIONS = 6;
 
 function relativeTime(isoDate: string): string {
   const now = Date.now();
@@ -77,11 +86,34 @@ function TerminalGlyph({ size = 48 }: { size?: number }) {
   );
 }
 
-export function WelcomeScreen({ onOpenSession, onNewSession, tauriMode, onBrowse }: WelcomeScreenProps) {
+export function WelcomeScreen({ onOpenSession, onNewSession, tauriMode, onBrowse, daemonSessions = [] }: WelcomeScreenProps) {
   const [sessions, setSessions] = useState<SavedSession[]>(() => getSavedSessions());
   const [newPath, setNewPath] = useState('');
   const [hoveredRoot, setHoveredRoot] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
+
+  // Daemon sessions that the local store doesn't already cover. The local store
+  // is per-browser; a phone has none, so without this the phone's "Recent" is
+  // permanently empty while the daemon holds every session.
+  //
+  // The daemon keeps one session per StartSession call, so a project worked on
+  // ten times has ten entries. Listing them all buries the useful ones — the
+  // list is deduped to the newest session per project root and capped, matching
+  // what the local store does.
+  const knownRoots = new Set(sessions.map((s) => s.projectRoot));
+  const remoteSessions = (() => {
+    const newestPerRoot = new Map<string, SessionSummary>();
+    for (const s of daemonSessions) {
+      if (knownRoots.has(s.project_root)) continue;
+      const seen = newestPerRoot.get(s.project_root);
+      if (!seen || new Date(s.started_at) > new Date(seen.started_at)) {
+        newestPerRoot.set(s.project_root, s);
+      }
+    }
+    return [...newestPerRoot.values()]
+      .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+      .slice(0, MAX_REMOTE_SESSIONS);
+  })();
 
   useEffect(() => {
     const handler = () => setSessions(getSavedSessions());
@@ -110,7 +142,7 @@ export function WelcomeScreen({ onOpenSession, onNewSession, tauriMode, onBrowse
     <div style={styles.overlay}>
       {/* Subtle teal spotlight behind the card */}
       <div style={styles.spotlight} aria-hidden="true" />
-      <div style={styles.card} className="anim-scale-in">
+      <div style={styles.card} className="anim-scale-in welcome-card">
         {/* Header */}
         <div style={styles.header}>
           <div style={styles.logo}>
@@ -123,9 +155,9 @@ export function WelcomeScreen({ onOpenSession, onNewSession, tauriMode, onBrowse
         </div>
 
         {/* Recent sessions */}
-        <div style={styles.section}>
+        <div style={styles.section} className="mobile-scroll">
           <div style={styles.sectionLabel}>Recent</div>
-          {sessions.length === 0 ? (
+          {sessions.length === 0 && remoteSessions.length === 0 ? (
             <div style={styles.emptyState}>
               <span>no recent sessions — start your first below</span>
               <ChevronDown
@@ -190,6 +222,55 @@ export function WelcomeScreen({ onOpenSession, onNewSession, tauriMode, onBrowse
           )}
         </div>
 
+        {/* Sessions held by the daemon that this browser has no local record
+            of — a different device, or one whose localStorage was cleared.
+            Without this the list is empty on a phone even though the work is
+            all still there. */}
+        {remoteSessions.length > 0 && (
+          <div style={styles.section} className="mobile-scroll">
+            <div style={styles.sectionLabel}>On the daemon</div>
+            <div style={styles.sessionList}>
+              {remoteSessions.map((session, idx) => {
+                const name = session.project_root.split('/').filter(Boolean).pop() ?? session.project_root;
+                const isHovered = hoveredRoot === session.project_root;
+                return (
+                  <div
+                    key={session.id}
+                    className="stagger-in"
+                    style={{
+                      ...styles.sessionRow,
+                      ...(isHovered ? styles.sessionRowHover : {}),
+                      ['--i' as string]: idx,
+                    } as React.CSSProperties}
+                    onMouseEnter={() => setHoveredRoot(session.project_root)}
+                    onMouseLeave={() => setHoveredRoot(null)}
+                  >
+                    <div style={styles.sessionInfo}>
+                      <span style={styles.sessionName}>{name}</span>
+                      <span style={styles.sessionPath}>{session.project_root}</span>
+                    </div>
+                    <div style={styles.sessionMeta}>
+                      <span style={styles.sessionPanes}>
+                        {session.run_count} {session.run_count === 1 ? 'run' : 'runs'}
+                      </span>
+                      <span style={styles.sessionTime}>{relativeTime(session.started_at)}</span>
+                    </div>
+                    <div style={styles.sessionActions}>
+                      <button
+                        style={styles.openBtn}
+                        onClick={() => onOpenSession(session.project_root)}
+                        title="Open this project root"
+                      >
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* New session */}
         <div style={styles.newSection}>
           <div style={styles.sectionLabel}>New Session</div>
@@ -246,6 +327,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100vh',
     width: '100%',
     background: 'var(--bg-base)',
+    padding: 'var(--welcome-overlay-pad)',
     overflow: 'hidden',
   },
   spotlight: {
@@ -260,18 +342,27 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--bg-surface)',
     border: '1px solid var(--border-default)',
     borderRadius: 12,
-    padding: '36px 40px',
+    padding: 'var(--welcome-card-pad)',
     width: '100%',
     maxWidth: 580,
+    // The daemon keeps every session it was ever asked to start, so this list
+    // can be arbitrarily long. Without a ceiling the card grew past the
+    // viewport and the New Session form was pushed off-screen — with no scroll,
+    // since the overlay clips. The card is bounded and the lists inside shrink
+    // and scroll instead; the header and the form keep their size.
+    maxHeight: '88vh',
+    minHeight: 0,
+    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
-    gap: 28,
+    gap: 'var(--welcome-card-gap)',
     boxShadow: 'var(--shadow-overlay), var(--glow-accent)',
   },
   header: {
     display: 'flex',
     flexDirection: 'column',
     gap: 4,
+    flexShrink: 0,
   },
   logo: {
     display: 'flex',
@@ -301,6 +392,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
+    // Shrinks only when the card hits its ceiling, and then scrolls. The label
+    // rides with the list, which is fine: it is a caption, not a control.
+    flex: '0 1 auto',
+    minHeight: 0,
+    overflowY: 'auto',
   },
   sectionLabel: {
     fontSize: 10,
@@ -422,6 +518,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
     paddingTop: 12,
     borderTop: '1px solid var(--border-default)',
+    flexShrink: 0,
   },
   newRow: {
     display: 'flex',

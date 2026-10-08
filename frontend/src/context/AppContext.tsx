@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
-import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, NoticeLevel, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunNotice, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
 import type { SidebarView } from '../types/sidebar';
@@ -53,6 +53,20 @@ export interface AppState {
   runMetrics: RunMetrics | null;
   /** Preflight error surfaced when the Claude binary is missing/unauthenticated. */
   preflightError: PreflightError | null;
+  /**
+   * Token deltas not yet committed to `outputLines`. The next committed line
+   * clears it, so the panel streams live without printing the answer twice.
+   */
+  runLiveText: string;
+  /** Phase tag from `RunProgress` ('worktree' | 'preflight' | 'streaming' | …). */
+  runPhase: string | null;
+  runPhaseDetail: string | null;
+  /** Wall-clock start, so the panel counts up while nothing is arriving. */
+  runStartedAt: number | null;
+  /** Prompt of the in-flight run, kept so a failed run can be listed with it. */
+  runPromptPreview: string | null;
+  /** Chrome for the active run: rate limits, compaction, unparsed events. */
+  runNotices: RunNotice[];
 
   // Direct-to-state slices added by C3 (replacing window.dispatchEvent workarounds)
   /** Branch list last reported by the daemon. Consumed by CommandPalette. */
@@ -122,6 +136,12 @@ const initialState: AppState = {
   runToolCalls: new Map(),
   runMetrics: null,
   preflightError: null,
+  runLiveText: '',
+  runPhase: null,
+  runPhaseDetail: null,
+  runStartedAt: null,
+  runPromptPreview: null,
+  runNotices: [],
   branches: [],
   fileViewer: null,
   searchResult: null,
@@ -140,7 +160,7 @@ type Action =
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'DISMISS_PREFLIGHT' }
-  | { type: 'MARK_RUN_PENDING' }
+  | { type: 'MARK_RUN_PENDING'; prompt?: string }
   | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
@@ -150,6 +170,8 @@ type Action =
   | { type: 'DISMISS_GIT_TOAST' };
 
 const MAX_OUTPUT_LINES = 2000;
+/** Notices are chrome; keep the last handful rather than an unbounded list. */
+const MAX_RUN_NOTICES = 24;
 
 /** Compile-time exhaustiveness guard for AppEvent variants.
  *  Adding a new variant without a matching `case` in HANDLE_EVENT breaks TS
@@ -184,7 +206,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, preflightError: null };
 
     case 'MARK_RUN_PENDING':
-      return { ...state, pendingRunStartedAt: Date.now(), outputLines: [], runToolCalls: new Map(), runMetrics: null, preflightError: null };
+      return { ...state, pendingRunStartedAt: Date.now(), runStartedAt: Date.now(), runPromptPreview: action.prompt ?? state.runPromptPreview, outputLines: [], runLiveText: '', runNotices: [], runPhase: null, runPhaseDetail: null, runToolCalls: new Map(), runMetrics: null, preflightError: null };
 
     case 'SET_SIDEBAR_VIEW':
       return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
@@ -263,10 +285,15 @@ function reducer(state: AppState, action: Action): AppState {
             activeRun: event.run_id,
             runState: nextState,
             pendingRunStartedAt: null,
+            runStartedAt: switchingRun ? Date.now() : state.runStartedAt,
             runToolCalls: startingFresh ? new Map() : state.runToolCalls,
             runMetrics: startingFresh ? null : state.runMetrics,
             preflightError: startingFresh ? null : state.preflightError,
             outputLines: startingFresh ? [] : state.outputLines,
+            runLiveText: startingFresh ? '' : state.runLiveText,
+            runNotices: startingFresh ? [] : state.runNotices,
+            runPhase: startingFresh ? null : state.runPhase,
+            runPhaseDetail: startingFresh ? null : state.runPhaseDetail,
           };
         }
 
@@ -276,7 +303,51 @@ function reducer(state: AppState, action: Action): AppState {
           const trimmed = lines.length > MAX_OUTPUT_LINES
             ? lines.slice(lines.length - MAX_OUTPUT_LINES)
             : lines;
-          return { ...state, pendingRunStartedAt: null, outputLines: trimmed };
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            // The committed line now represents what the deltas were streaming,
+            // so the live buffer is dropped rather than shown alongside it.
+            runLiveText: '',
+            outputLines: trimmed,
+          };
+        }
+
+        case 'RunOutputDelta': {
+          if (event.run_id !== state.activeRun) return state;
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runLiveText: state.runLiveText + event.text,
+          };
+        }
+
+        case 'RunNotice': {
+          if (event.run_id !== state.activeRun) return state;
+          const runNotices = [
+            ...state.runNotices,
+            {
+              runId: event.run_id,
+              level: event.level as NoticeLevel,
+              message: event.message,
+              at: Date.now(),
+            },
+          ];
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runNotices: runNotices.slice(-MAX_RUN_NOTICES),
+          };
+        }
+
+        case 'RunProgress': {
+          if (event.run_id !== state.activeRun) return state;
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runPhase: event.phase,
+            runPhaseDetail: event.detail,
+          };
         }
 
         case 'RunCompleted': {
@@ -296,21 +367,72 @@ function reducer(state: AppState, action: Action): AppState {
           };
         }
 
-        case 'RunFailed':
+        case 'RunFailed': {
+          // A failed run has to appear in the list. Previously only
+          // RunCompleted upserted a summary, so a failure left the sidebar at
+          // zero runs and read as "nothing ever happened".
+          const failedState: RunState = {
+            type: 'Failed',
+            error: event.error,
+            phase: event.phase,
+          };
+          const runs = new Map(state.runs);
+          const existing = runs.get(event.run_id);
+          runs.set(event.run_id, {
+            id: event.run_id,
+            state: failedState,
+            prompt_preview: existing?.prompt_preview ?? state.runPromptPreview ?? '',
+            modified_file_count: existing?.modified_file_count ?? 0,
+            diff_stat: existing?.diff_stat ?? null,
+            started_at:
+              existing?.started_at ??
+              new Date(state.runStartedAt ?? Date.now()).toISOString(),
+            ended_at: new Date().toISOString(),
+            autonomy: existing?.autonomy,
+          });
           return {
             ...state,
             activeRun: null,
             pendingRunStartedAt: null,
-            runState: { type: 'Failed', error: event.error, phase: event.phase },
+            runState: failedState,
+            runs,
+            runLiveText: '',
+            runPhase: null,
+            runPhaseDetail: null,
           };
+        }
 
-        case 'RunCancelled':
+        case 'RunCancelled': {
+          const cancelledState: RunState = { type: 'Cancelled', reason: 'User cancelled' };
+          const runs = new Map(state.runs);
+          const existing = runs.get(event.run_id);
+          // Only list a cancellation we actually observed running; a cancel for
+          // a run this client never saw would otherwise invent a phantom entry.
+          if (existing || event.run_id === state.activeRun) {
+            runs.set(event.run_id, {
+              id: event.run_id,
+              state: cancelledState,
+              prompt_preview: existing?.prompt_preview ?? state.runPromptPreview ?? '',
+              modified_file_count: existing?.modified_file_count ?? 0,
+              diff_stat: existing?.diff_stat ?? null,
+              started_at:
+                existing?.started_at ??
+                new Date(state.runStartedAt ?? Date.now()).toISOString(),
+              ended_at: new Date().toISOString(),
+              autonomy: existing?.autonomy,
+            });
+          }
           return {
             ...state,
             activeRun: null,
             pendingRunStartedAt: null,
-            runState: { type: 'Cancelled', reason: 'User cancelled' },
+            runState: cancelledState,
+            runs,
+            runLiveText: '',
+            runPhase: null,
+            runPhaseDetail: null,
           };
+        }
 
         case 'RunList': {
           const runs = new Map(state.runs);

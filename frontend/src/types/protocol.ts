@@ -78,6 +78,18 @@ export function normalizeRunState(raw: unknown): RunState {
   return { type: 'Preparing' } as RunState;
 }
 export type FailPhase = 'Preflight' | 'Preparation' | 'Execution' | 'Parsing' | 'Cleanup';
+
+/** Severity of a run notice — chrome shown beside a run, never inside its log. */
+export type NoticeLevel = 'Info' | 'Warning' | 'Error';
+
+/** A notice as the panel consumes it, tagged with the run it belongs to so a
+ *  late event from a previous run cannot land in the current one. */
+export interface RunNotice {
+  runId: string;
+  level: NoticeLevel;
+  message: string;
+  at: number;
+}
 export type RunMode = 'Free' | 'Guided' | 'Strict';
 
 /**
@@ -381,6 +393,15 @@ export type AppEvent =
   | { type: 'RunToolResult'; run_id: string; tool_id: string; is_error: boolean; preview: string }
   | { type: 'RunMetrics'; run_id: string; num_turns: number; cost_usd: number; input_tokens: number; output_tokens: number }
   | { type: 'RunPreflightFailed'; run_id: string; reason: string; suggestion: string }
+  /** Token-level text delta. Rendered in the panel's live buffer and dropped
+   *  when the committed RunOutput for the same text arrives. */
+  | { type: 'RunOutputDelta'; run_id: string; text: string }
+  /** Run chrome (rate limits, compaction, unmodelled stream events). Never part
+   *  of the output log — the panel shows it beside the run, not inside it. */
+  | { type: 'RunNotice'; run_id: string; level: NoticeLevel; message: string }
+  /** What the supervisor is doing before any output exists (`worktree`,
+   *  `preflight`, `streaming`). This is what stops the panel looking frozen. */
+  | { type: 'RunProgress'; run_id: string; phase: string; detail: string | null }
   | { type: 'SessionStarted'; session: SessionSummary }
   | { type: 'SessionEnded'; session_id: string }
   | { type: 'SessionList'; sessions: SessionSummary[] }

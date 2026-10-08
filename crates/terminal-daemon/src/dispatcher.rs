@@ -74,6 +74,45 @@ impl Dispatcher {
         info!("Recovered {} persisted workspace(s)", workspaces.len());
     }
 
+    /// Load persisted sessions into the in-memory registry. Called once at
+    /// startup, alongside `recover_workspaces`.
+    ///
+    /// Without this, `ListSessions` reads an empty map — the handler serves the
+    /// in-memory clone and nothing ever put the disk's sessions there. The
+    /// visible symptom was a client that could not see or reopen a single
+    /// previous session after a daemon restart, even with the files sitting in
+    /// `sessions/`, and `ListRuns` (which *does* read from disk) unreachable for
+    /// want of a session id to ask about.
+    pub async fn recover_sessions(&self) {
+        let persisted = match self.context.persistence.list_sessions() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("recover_sessions: list failed: {}", e);
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+        let mut sessions = self.context.sessions.lock().await;
+        let mut recovered = 0usize;
+        for session in persisted {
+            // An ended session is history, not state: rehydrating it would
+            // re-open a session the user deliberately closed.
+            if session.ended_at.is_some() {
+                continue;
+            }
+            if sessions.insert(session.id, session).is_none() {
+                recovered += 1;
+            }
+        }
+        info!(
+            "Recovered {} persisted session(s) ({} in memory)",
+            recovered,
+            sessions.len()
+        );
+    }
+
     /// Load persisted agents into the in-memory registry. Called once at
     /// startup, mirroring `recover_workspaces`.
     pub async fn recover_agents(&self) {
@@ -1960,7 +1999,45 @@ impl Dispatcher {
             )
             .await;
 
+        // `Preparing` is otherwise silent: the worktree is created, preflight
+        // runs, the CLI starts — all before a single byte of output. With no
+        // signal the panel looked hung, which is the whole reason these phase
+        // events exist. The UI renders them as "what is happening now".
+        self.context
+            .send_run_event(
+                workspace_id,
+                &reply_tx,
+                AppEvent::RunProgress {
+                    run_id,
+                    phase: if worktree_path.is_some() { "worktree" } else { "preparing" }.into(),
+                    detail: Some(
+                        worktree_path
+                            .as_ref()
+                            .unwrap_or(&project_root)
+                            .display()
+                            .to_string(),
+                    ),
+                },
+            )
+            .await;
+
         // Pre-flight check (delegated to helper)
+        self.context
+            .send_run_event(
+                workspace_id,
+                &reply_tx,
+                AppEvent::RunProgress {
+                    run_id,
+                    phase: "preflight".into(),
+                    detail: Some(
+                        agent
+                            .as_ref()
+                            .map(|a| format!("{:?} runner", a.runner))
+                            .unwrap_or_else(|| "default runner".into()),
+                    ),
+                },
+            )
+            .await;
         if self
             .run_preflight(
                 run_id,
@@ -2019,6 +2096,20 @@ impl Dispatcher {
                         },
                     )
                     .await;
+                // The process is up; from here on output drives the panel. Say so
+                // once, so a model that thinks for 30s before its first token
+                // still shows a reason to wait.
+                self.context
+                    .send_run_event(
+                        workspace_id,
+                        &reply_tx,
+                        AppEvent::RunProgress {
+                            run_id,
+                            phase: "streaming".into(),
+                            detail: None,
+                        },
+                    )
+                    .await;
 
                 // Supervisor task
                 let run_event_context = self.context.clone();
@@ -2056,6 +2147,11 @@ impl Dispatcher {
 
                     let mut line_number: usize = 0;
                     let mut result_event_seen = false;
+                    // Set from an error-level `RunNotice` (rate limit, failed
+                    // `result` envelope). When the stream then dies, this is the
+                    // reason worth reporting — "stream ended without result
+                    // event" tells the user nothing about why.
+                    let mut failure_reason: Option<String> = None;
                     let mut output_file = match tokio::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -2132,6 +2228,30 @@ impl Dispatcher {
                                         };
                                         broadcast_ws(&evt);
                                     }
+                                    Some(RunnerEvent::AssistantDelta(text)) => {
+                                        // Live-only: no disk write and no line
+                                        // number. The committed text for this
+                                        // block replaces the buffer in the UI, so
+                                        // the answer is streamed and then shown
+                                        // once — never twice.
+                                        let evt = AppEvent::RunOutputDelta { run_id, text };
+                                        broadcast_ws(&evt);
+                                    }
+                                    Some(RunnerEvent::Notice { level, message }) => {
+                                        // Chrome, not output: never written to the
+                                        // run log and never given a line number, so
+                                        // a notice cannot be mistaken for something
+                                        // the model said.
+                                        if level == NoticeLevel::Error {
+                                            failure_reason = Some(message.clone());
+                                        }
+                                        let evt = AppEvent::RunNotice {
+                                            run_id,
+                                            level,
+                                            message,
+                                        };
+                                        broadcast_ws(&evt);
+                                    }
                                     Some(RunnerEvent::ToolUse { id, name, input_preview }) => {
                                         line_number += 1;
                                         let log_line = format!("▸ tool: {name} {input_preview}");
@@ -2186,11 +2306,15 @@ impl Dispatcher {
                                     }
                                     Some(RunnerEvent::SessionInit { model, session_id }) => {
                                         line_number += 1;
-                                        let log_line = format!(
-                                            "session init: model={} session_id={}",
-                                            model.as_deref().unwrap_or("?"),
-                                            session_id.as_deref().unwrap_or("?"),
-                                        );
+                                        // The session id is run metadata, not something a
+                                        // human reads; "session init:" is jargon. Keep the
+                                        // model — the one fact worth having in the log — and
+                                        // drop the rest.
+                                        let _ = session_id;
+                                        let log_line = match model.as_deref() {
+                                            Some(m) => format!("model: {m}"),
+                                            None => "model: (unknown)".to_string(),
+                                        };
                                         if let Some(ref mut f) = output_file {
                                             let _ = tokio::io::AsyncWriteExt::write_all(
                                                 f,
@@ -2243,12 +2367,16 @@ impl Dispatcher {
                                         // If stream ended without a result event, the run failed
                                         // mid-stream (AI-BUG-01: #113).
                                         if !result_event_seen {
+                                            // A rate limit or a failed `result`
+                                            // envelope already told us why — use
+                                            // that instead of the opaque
+                                            // "stream ended" default.
+                                            let error = failure_reason.clone().unwrap_or_else(|| {
+                                                format!("the run ended without a result (exit code {exit_code})")
+                                            });
                                             let evt = AppEvent::RunFailed {
                                                 run_id,
-                                                error: format!(
-                                                    "stream ended without result event (exit_code={})",
-                                                    exit_code
-                                                ),
+                                                error,
                                                 phase: FailPhase::Execution,
                                             };
                                             broadcast_ws(&evt);
@@ -2725,7 +2853,27 @@ mod tests {
         assert!(production_source.contains("Some(RunnerEvent::ResultSeen)"));
         assert!(production_source.contains("if !result_event_seen"));
         assert!(production_source.contains("AppEvent::RunFailed"));
-        assert!(production_source.contains("stream ended without result event"));
+        // The message is no longer the opaque default: an error-level notice
+        // (rate limit, failed `result` envelope) is preferred when we have one.
+        assert!(production_source.contains("failure_reason"));
+        assert!(production_source.contains("the run ended without a result"));
         assert!(production_source.contains("phase: FailPhase::Execution"));
+    }
+
+    #[test]
+    fn supervisor_broadcasts_deltas_notices_and_progress() {
+        let source = include_str!("dispatcher.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap();
+
+        // Deltas stream to the UI without being persisted or numbered.
+        assert!(production_source.contains("AppEvent::RunOutputDelta"));
+        // Notices are chrome: a separate event, never a RunOutput line.
+        assert!(production_source.contains("Some(RunnerEvent::Notice { level, message })"));
+        assert!(production_source.contains("AppEvent::RunNotice"));
+        // Phase progress covers the silent stretch before the first byte.
+        assert!(production_source.contains("AppEvent::RunProgress"));
+        assert!(production_source.contains("\"worktree\""));
+        assert!(production_source.contains("\"preflight\""));
+        assert!(production_source.contains("\"streaming\""));
     }
 }

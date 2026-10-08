@@ -71,6 +71,9 @@ const SAMPLES: Record<AppEvent['type'], AppEvent> = {
     output_tokens: 0,
   },
   RunPreflightFailed: { type: 'RunPreflightFailed', run_id: 'r1', reason: 'x', suggestion: 'y' },
+  RunOutputDelta: { type: 'RunOutputDelta', run_id: 'r1', text: 'par' },
+  RunNotice: { type: 'RunNotice', run_id: 'r1', level: 'Warning', message: 'rate limited' },
+  RunProgress: { type: 'RunProgress', run_id: 'r1', phase: 'worktree', detail: '/tmp/wt' },
   SessionStarted: {
     type: 'SessionStarted',
     session: {

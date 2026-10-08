@@ -491,6 +491,15 @@ function AppContent() {
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
 
+  // On (re)connect, ask for the daemon's inventory. Nothing ever requested
+  // sessions, so `state.sessions` stayed empty and there was no way back to a
+  // previous session after a reload — even with the daemon holding them.
+  useEffect(() => {
+    if (status !== 'connected') return;
+    send({ type: 'ListSessions' });
+    send({ type: 'ListAgents' });
+  }, [status, send]);
+
   // Listen for git-auto-refresh events dispatched by TerminalPane when a git command completes.
   // The TerminalPane already debounces by 500ms before dispatching, so we just fire immediately.
   useEffect(() => {
@@ -654,6 +663,7 @@ function AppContent() {
         {status === 'connected' && !state.activeSession && (
           <WelcomeScreen
             tauriMode={tauriMode ?? false}
+            daemonSessions={Array.from(state.sessions.values())}
             onBrowse={tauriMode ? async () => {
               const { open } = await import('@tauri-apps/plugin-dialog');
               const selected = await open({ directory: true, title: 'Select project root' });

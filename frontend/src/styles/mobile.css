@@ -25,6 +25,12 @@
     --font-size-base: 14px;
     /* The chrome bar carries a hamburger on mobile: give it room. */
     --chrome-height: 48px;
+
+    /* The welcome card is desktop-sized by default; on a phone it must not
+       touch the screen edges and must spend its padding on content. */
+    --welcome-overlay-pad: 12px;
+    --welcome-card-pad: 20px 16px;
+    --welcome-card-gap: 16px;
   }
 
   /* Comfortable touch target. Use on anything a thumb has to hit. */

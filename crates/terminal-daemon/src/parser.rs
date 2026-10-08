@@ -1,17 +1,27 @@
-//! Stream-JSON parser for Claude Code's `--output-format stream-json` output.
+//! Stream-JSON parsers for runner output.
 //!
-//! Claude Code emits one JSON object per line. We care about these types:
+//! Two dialects share this module, both one JSON object per stdout line:
 //!
+//! **Claude Code** (`--output-format stream-json`):
 //! - `system` with `subtype: "init"` — session start, reports tools + model
 //! - `assistant` — model turn with content blocks (`text`, `tool_use`)
 //! - `user` — tool results (after Claude calls a tool)
 //! - `result` — run terminated: may be `success` or error subtype, carries
 //!   `num_turns`, `total_cost_usd`, `usage` (input/output tokens)
+//! - `stream_event` with `--include-partial-messages` — token deltas
+//!
+//! **Hermes** (`hermes chat --format stream-json`):
+//! - `system`/`init`, then `text` deltas, `tool_use` / `tool_result`, and one
+//!   terminal `result` envelope (exit code, final text, token stats)
 //!
 //! We translate these into `ParseEvent`s consumed by the runner supervisor.
-//! Unknown / malformed lines are surfaced as `RawLine` so nothing is lost.
+//! A line that is valid JSON but a shape we don't model becomes a `Notice`
+//! (chrome), not output: dumping machine JSON into the human log was the reason
+//! the run panel read as noise. Genuine non-JSON lines stay `RawLine` so
+//! nothing a human can read is ever dropped.
 
 use serde::Deserialize;
+use terminal_core::models::NoticeLevel;
 
 /// Events emitted by the parser. The supervisor maps these onto
 /// `RunnerEvent`s and ultimately onto protocol `AppEvent`s.
@@ -21,6 +31,9 @@ pub enum ParseEvent {
     SessionInit { model: Option<String>, session_id: Option<String> },
     /// Assistant emitted text (may be partial across multiple events).
     AssistantText(String),
+    /// A token-level delta from a partial-message stream. Rendered live and
+    /// then replaced by the committed `AssistantText` for the same block.
+    AssistantDelta(String),
     /// Assistant called a tool.
     ToolUse {
         id: String,
@@ -50,6 +63,11 @@ pub enum ParseEvent {
         output_tokens: u64,
         error_text: Option<String>,
     },
+    /// A stream event we model as chrome rather than output.
+    Notice {
+        level: NoticeLevel,
+        message: String,
+    },
     /// Line that didn't parse as JSON or wasn't a recognized shape.
     /// Preserved so nothing is silently dropped.
     RawLine(String),
@@ -74,6 +92,13 @@ enum WireEvent {
     User { message: UserMessage },
     #[serde(rename = "result")]
     Result(ResultEvent),
+    /// `--include-partial-messages`: wraps a raw Anthropic streaming event.
+    /// We only consume `content_block_delta` → `text_delta`.
+    #[serde(rename = "stream_event")]
+    StreamEvent {
+        #[serde(default)]
+        event: Option<serde_json::Value>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +190,7 @@ impl StreamParser {
 
         let wire: WireEvent = match serde_json::from_str(trimmed) {
             Ok(w) => w,
-            Err(_) => return vec![ParseEvent::RawLine(line.to_string())],
+            Err(_) => return vec![classify_unmodelled(trimmed)],
         };
 
         match wire {
@@ -173,7 +198,35 @@ impl StreamParser {
                 if subtype.as_deref() == Some("init") {
                     vec![ParseEvent::SessionInit { model, session_id }]
                 } else {
+                    // Compaction boundaries and other system chatter are real
+                    // state changes worth surfacing — but as chrome, not as a
+                    // line in the log.
+                    match subtype.as_deref() {
+                        Some("compact_boundary") => vec![ParseEvent::Notice {
+                            level: NoticeLevel::Info,
+                            message: "context compacted".into(),
+                        }],
+                        Some(other) => vec![ParseEvent::Notice {
+                            level: NoticeLevel::Info,
+                            message: format!("system: {other}"),
+                        }],
+                        None => Vec::new(),
+                    }
+                }
+            }
+            WireEvent::StreamEvent { event } => {
+                let delta = event
+                    .as_ref()
+                    .filter(|e| e.get("type").and_then(|t| t.as_str()) == Some("content_block_delta"))
+                    .and_then(|e| e.get("delta"))
+                    .filter(|d| d.get("type").and_then(|t| t.as_str()) == Some("text_delta"))
+                    .and_then(|d| d.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                if delta.is_empty() {
                     Vec::new()
+                } else {
+                    vec![ParseEvent::AssistantDelta(delta.to_string())]
                 }
             }
             WireEvent::Assistant { message } => {
@@ -251,6 +304,206 @@ impl StreamParser {
 }
 
 impl Default for StreamParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Classify a JSON line the Claude `WireEvent` shapes don't cover.
+///
+/// A rate-limit rejection is the single most important thing a user can be told
+/// about a run that produces no output and then dies, so it gets a purpose-built
+/// message. Anything else that is valid JSON becomes a low-key notice naming the
+/// event type — the alternative (dumping the object into the log, which is what
+/// this used to do) is what made the panel unreadable.
+fn classify_unmodelled(line: &str) -> ParseEvent {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        // Not JSON at all: real text a human wrote or a CLI printed. Keep it.
+        return ParseEvent::RawLine(line.to_string());
+    };
+    match value.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        "rate_limit_event" => ParseEvent::Notice {
+            level: NoticeLevel::Error,
+            message: rate_limit_message(&value),
+        },
+        "" => ParseEvent::RawLine(line.to_string()),
+        other => ParseEvent::Notice {
+            level: NoticeLevel::Info,
+            message: format!("stream event: {other}"),
+        },
+    }
+}
+
+/// One actionable sentence from Claude's `rate_limit_event`. The window that
+/// ran out (`seven_day`, `five_hour`, …) is what tells the user when it clears.
+fn rate_limit_message(value: &serde_json::Value) -> String {
+    let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if status == "rejected" || status == "blocked" {
+        let window = value
+            .get("rateLimitType")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                ["seven_day", "five_hour"]
+                    .into_iter()
+                    .find(|k| value.get(*k).is_some())
+                    .map(str::to_string)
+            });
+        match window {
+            Some(w) => format!("usage limit reached ({w}) — the model refused this run"),
+            None => "usage limit reached — the model refused this run".into(),
+        }
+    } else if status.is_empty() {
+        "rate limit update".into()
+    } else {
+        format!("rate limit: {status}")
+    }
+}
+
+// --- Hermes `chat --format stream-json` --------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum HermesWireEvent {
+    #[serde(rename = "system")]
+    System {
+        #[serde(default)]
+        subtype: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+    /// Incremental text: concatenating every `text` event reproduces the answer
+    /// byte for byte, which is what makes live streaming possible at all.
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        name: String,
+        #[serde(default)]
+        tool_call_id: Option<String>,
+        #[serde(default)]
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        tool_call_id: Option<String>,
+        #[serde(default)]
+        output: String,
+        #[serde(default)]
+        is_error: bool,
+    },
+    #[serde(rename = "result")]
+    Result(HermesResultEvent),
+}
+
+#[derive(Debug, Deserialize)]
+struct HermesResultEvent {
+    #[serde(default)]
+    exit_code: Option<i32>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    tokens: Option<HermesTokens>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HermesTokens {
+    #[serde(default)]
+    input: Option<u64>,
+    #[serde(default)]
+    output: Option<u64>,
+}
+
+/// Parser for the Hermes stream-json dialect. Same `ParseEvent` output as the
+/// Claude parser, so the supervisor treats both runners identically.
+pub struct HermesStreamParser;
+
+impl HermesStreamParser {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn feed_line(&mut self, line: &str) -> Vec<ParseEvent> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+
+        let wire: HermesWireEvent = match serde_json::from_str(trimmed) {
+            Ok(w) => w,
+            Err(_) => return vec![classify_unmodelled(trimmed)],
+        };
+
+        match wire {
+            HermesWireEvent::System { subtype, model, session_id } => {
+                if subtype.as_deref() == Some("init") {
+                    vec![ParseEvent::SessionInit { model, session_id }]
+                } else {
+                    Vec::new()
+                }
+            }
+            HermesWireEvent::Text { text } => {
+                if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![ParseEvent::AssistantDelta(text)]
+                }
+            }
+            HermesWireEvent::ToolUse { name, tool_call_id, input } => {
+                vec![ParseEvent::ToolUse {
+                    // Hermes always sends an id; fall back to the name so a
+                    // result can still be matched if it ever doesn't.
+                    id: tool_call_id.unwrap_or_else(|| name.clone()),
+                    input_preview: tool_input_preview(&name, &input),
+                    name,
+                }]
+            }
+            HermesWireEvent::ToolResult { name, tool_call_id, output, is_error } => {
+                vec![ParseEvent::ToolResult {
+                    tool_use_id: tool_call_id.or(name).unwrap_or_default(),
+                    is_error,
+                    preview: first_line(&output, 200),
+                }]
+            }
+            HermesWireEvent::Result(r) => {
+                let exit_code = r.exit_code.unwrap_or(0);
+                let input_tokens = r.tokens.as_ref().and_then(|t| t.input).unwrap_or(0);
+                let output_tokens = r.tokens.as_ref().and_then(|t| t.output).unwrap_or(0);
+                let success = exit_code == 0 && r.error.is_none();
+                let error_text = r.error.or_else(|| {
+                    (!success).then(|| format!("hermes exited with code {exit_code}"))
+                });
+
+                let mut out = Vec::new();
+                // Commit the final text as output. Its deltas already streamed
+                // live; committing clears the live buffer in the UI, so the
+                // answer is shown once and ends up in the persisted log.
+                if let Some(text) = r.text.filter(|t| !t.is_empty()) {
+                    out.push(ParseEvent::AssistantText(text));
+                }
+                out.push(ParseEvent::Result {
+                    success,
+                    subtype: if success { "success" } else { "error" }.to_string(),
+                    num_turns: 1,
+                    cost_usd: 0.0,
+                    input_tokens,
+                    output_tokens,
+                    error_text,
+                });
+                out
+            }
+        }
+    }
+}
+
+impl Default for HermesStreamParser {
     fn default() -> Self {
         Self::new()
     }
@@ -466,11 +719,136 @@ mod tests {
     }
 
     #[test]
-    fn unknown_event_type_is_silent() {
+    fn unknown_event_type_becomes_a_notice_not_raw_json() {
         let mut p = StreamParser::new();
-        // Unknown top-level type → serde_json error on untagged enum,
-        // falls back to RawLine.
+        // Valid JSON we don't model must not reach the log verbatim — dumping
+        // machine objects into the panel is what made it unreadable.
         let ev = p.feed_line(r#"{"type":"future_event_kind","foo":1}"#);
-        assert!(matches!(ev.as_slice(), [ParseEvent::RawLine(_)]));
+        assert!(
+            matches!(
+                ev.as_slice(),
+                [ParseEvent::Notice { level: NoticeLevel::Info, message }]
+                    if message.contains("future_event_kind")
+            ),
+            "expected an Info notice, got {ev:?}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_rejection_is_an_actionable_error_notice() {
+        let mut p = StreamParser::new();
+        let ev = p.feed_line(
+            r#"{"type":"rate_limit_event","status":"rejected","rateLimitType":"seven_day"}"#,
+        );
+        assert!(
+            matches!(
+                ev.as_slice(),
+                [ParseEvent::Notice { level: NoticeLevel::Error, message }]
+                    if message.contains("usage limit reached") && message.contains("seven_day")
+            ),
+            "expected an Error notice naming the window, got {ev:?}"
+        );
+    }
+
+    #[test]
+    fn plain_text_lines_are_still_preserved_verbatim() {
+        let mut p = StreamParser::new();
+        // Not JSON at all: real text. Must never be swallowed by classification.
+        let ev = p.feed_line("compiling widget v1.2.3");
+        assert!(matches!(ev.as_slice(), [ParseEvent::RawLine(l)] if l == "compiling widget v1.2.3"));
+    }
+
+    #[test]
+    fn partial_message_stream_event_yields_a_text_delta() {
+        let mut p = StreamParser::new();
+        let ev = p.feed_line(
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}}"#,
+        );
+        assert!(matches!(ev.as_slice(), [ParseEvent::AssistantDelta(t)] if t == "Hel"));
+    }
+
+    #[test]
+    fn non_text_stream_events_are_ignored() {
+        let mut p = StreamParser::new();
+        let ev = p.feed_line(
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}}"#,
+        );
+        assert!(ev.is_empty(), "expected no events, got {ev:?}");
+    }
+
+    // --- Hermes stream-json ---
+
+    #[test]
+    fn hermes_parses_init_and_text_deltas() {
+        let mut p = HermesStreamParser::new();
+        let init = p.feed_line(
+            r#"{"type": "system", "subtype": "init", "model": "deepseek-v4.1-flash", "session_id": "20261008_145451_695a4d"}"#,
+        );
+        assert!(matches!(
+            init.as_slice(),
+            [ParseEvent::SessionInit { model: Some(m), session_id: Some(s) }]
+                if m == "deepseek-v4.1-flash" && s == "20261008_145451_695a4d"
+        ));
+
+        // Deltas are fragments and must arrive unsplit, or streaming is pointless.
+        let a = p.feed_line(r#"{"type": "text", "text": "O Douro "}"#);
+        let b = p.feed_line(r#"{"type": "text", "text": "nasce na Serra"}"#);
+        assert!(matches!(a.as_slice(), [ParseEvent::AssistantDelta(t)] if t == "O Douro "));
+        assert!(matches!(b.as_slice(), [ParseEvent::AssistantDelta(t)] if t == "nasce na Serra"));
+    }
+
+    #[test]
+    fn hermes_parses_tool_use_and_result() {
+        let mut p = HermesStreamParser::new();
+        let use_ev = p.feed_line(
+            r#"{"type": "tool_use", "name": "Bash", "tool_call_id": "call_1", "input": {"command": "git status --short"}}"#,
+        );
+        assert!(matches!(
+            use_ev.as_slice(),
+            [ParseEvent::ToolUse { id, name, input_preview }]
+                if id == "call_1" && name == "Bash" && input_preview == "git status --short"
+        ));
+
+        let result_ev = p.feed_line(
+            r#"{"type": "tool_result", "name": "Bash", "tool_call_id": "call_1", "output": " M README.md\n", "duration_ms": 12, "is_error": false}"#,
+        );
+        // `first_line` trims, so the preview is the trimmed first line.
+        assert!(matches!(
+            result_ev.as_slice(),
+            [ParseEvent::ToolResult { tool_use_id, is_error: false, preview }]
+                if tool_use_id == "call_1" && preview == "M README.md"
+        ));
+    }
+
+    #[test]
+    fn hermes_result_commits_the_text_and_reports_tokens() {
+        let mut p = HermesStreamParser::new();
+        let ev = p.feed_line(
+            r#"{"type": "result", "session_id": "s", "exit_code": 0, "text": "OK", "tokens": {"input": 135, "output": 3, "total": 22156}, "duration_ms": 2943}"#,
+        );
+        // The committed text lands in the log; the deltas that streamed it are
+        // replaced in the UI, so the answer is shown once.
+        assert!(matches!(ev.first(), Some(ParseEvent::AssistantText(t)) if t == "OK"));
+        assert!(
+            matches!(
+                ev.last(),
+                Some(ParseEvent::Result { success: true, input_tokens: 135, output_tokens: 3, .. })
+            ),
+            "expected a successful Result with tokens, got {ev:?}"
+        );
+    }
+
+    #[test]
+    fn hermes_nonzero_exit_is_a_failed_result_with_a_reason() {
+        let mut p = HermesStreamParser::new();
+        let ev = p.feed_line(r#"{"type": "result", "exit_code": 2, "text": "", "error": "no credentials"}"#);
+        assert!(
+            matches!(
+                ev.last(),
+                Some(ParseEvent::Result { success: false, error_text: Some(e), .. })
+                    if e == "no credentials"
+            ),
+            "expected a failed Result carrying the error, got {ev:?}"
+        );
     }
 }

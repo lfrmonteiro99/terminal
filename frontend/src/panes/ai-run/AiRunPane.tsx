@@ -67,7 +67,7 @@ export function AiRunPane({ pane: _pane, workspaceId: _workspaceId }: PaneProps)
     const p = (overridePrompt ?? prompt).trim();
     if (!state.activeSession || !p) return;
     lastPromptRef.current = p;
-    dispatch({ type: 'MARK_RUN_PENDING' });
+    dispatch({ type: 'MARK_RUN_PENDING', prompt: p });
     runService.startRun({
       sessionId: state.activeSession,
       prompt: p,
@@ -210,8 +210,12 @@ function AgentPicker({
       >
         <AgentChip
           active={selectedId === null}
-          label="Default"
-          title="No agent — plain Claude with the default prompt"
+          // Named after what it actually runs. "Default" hid the fact that this
+          // is the Claude CLI — a different vendor with a different bill — so a
+          // user with a working Hermes agent could pick it, get a rate-limit
+          // failure, and blame the agent.
+          label="Claude"
+          title="No agent — runs the Claude CLI with the default prompt and bills your Anthropic account. Pick an agent to run on its Hermes profile instead."
           onClick={() => onSelect(null)}
         />
         {agents.map((a) => (
