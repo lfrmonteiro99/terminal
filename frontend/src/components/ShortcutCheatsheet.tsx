@@ -28,6 +28,7 @@ const CATEGORIES: Category[] = [
     shortcuts: [
       { id: 'pane:split-right', description: 'Split pane right' },
       { id: 'pane:split-down', description: 'Split pane down' },
+      { id: 'pane:close', description: 'Close focused pane' },
       { keys: 'Ctrl+Shift+Z', description: 'Zoom/restore pane' },
     ],
   },
@@ -56,6 +57,7 @@ const CATEGORIES: Category[] = [
       { id: 'layout:ai', description: 'AI session layout' },
       { id: 'layout:git', description: 'Git review layout' },
       { id: 'layout:browser', description: 'Browser + terminal layout' },
+      { id: 'layout:changes', description: 'Terminal + changes layout' },
     ],
   },
 ];

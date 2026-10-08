@@ -127,7 +127,10 @@ export function SettingsView() {
   const activeHex = accentHex(activeAccent, appearance);
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}>
+    <div
+      data-view="settings"
+      style={{ maxWidth: 720, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}
+    >
       <h1
         style={{
           fontSize: 'var(--font-size-lg)',

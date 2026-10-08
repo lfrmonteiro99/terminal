@@ -93,7 +93,7 @@ export function OverviewView() {
     dispatch({ type: 'SET_SIDEBAR_VIEW', view });
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} data-view="overview">
       {/* Intro */}
       <div style={styles.intro}>
         <div style={{ minWidth: 0 }}>

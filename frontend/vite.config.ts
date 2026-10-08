@@ -35,10 +35,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
+    // Vite rejects any request whose Host header it doesn't recognise. The dev
+    // server is reached from the phone over Tailscale (`…ts.net`), so the
+    // default localhost/IP allow-list 403s. `.ts.net` covers every device on
+    // the tailnet; the domain is only reachable from inside it.
+    allowedHosts: ['.ts.net', 'localhost'],
     proxy: wsProxy,
   },
   preview: {
     host: '0.0.0.0',
+    allowedHosts: ['.ts.net', 'localhost'],
     proxy: wsProxy,
   },
 })

@@ -12,6 +12,7 @@ export const PANE_LABELS: Record<string, string> = {
   GitHistory: 'Git History',
   Browser: 'Browser',
   Diff: 'Diff',
+  Changes: 'Changes',
   FileExplorer: 'Explorer',
   FileViewer: 'File',
   Search: 'Search',

@@ -18,7 +18,7 @@ function getStatusChar(status: FileStatus): string {
 
 function getStatusColor(status: FileStatus): string {
   if (status === 'Modified') return 'var(--accent-warn)';
-  if (status === 'Added') return '#4caf50';
+  if (status === 'Added') return 'var(--state-success)';
   if (status === 'Deleted') return 'var(--accent-error)';
   if (typeof status === 'object' && 'Renamed' in status) return 'var(--accent-warn)';
   return 'var(--text-muted)';
@@ -30,7 +30,12 @@ const overlayStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  // Token, not a literal: a dark scrim over an already-dark app dims almost
+  // nothing on its own — the blur is what separates the dialog from the
+  // surface behind it. ConfirmModal does the same; keep them in step.
+  backgroundColor: 'var(--scrim)',
+  backdropFilter: 'blur(3px)',
+  WebkitBackdropFilter: 'blur(3px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',

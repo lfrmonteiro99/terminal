@@ -3,11 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSend } from '../context/SendContext';
 import { useAppDispatch, useAppState } from '../context/AppContext';
-import type { PaneLayout } from '../domain/pane/types';
 import type { BranchInfo } from '../types/protocol';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 import { getShortcut, resetShortcuts } from '../core/shortcutMap';
-import { LAYOUT_PRESETS } from '../core/layoutPresets';
+import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER } from '../core/layoutPresets';
 import {
   getQuickCommands,
   saveQuickCommand,
@@ -26,9 +25,12 @@ interface Command {
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
-  onLayoutChange?: (layout: PaneLayout) => void;
+  /** Names a preset by id — the palette must not hand over a layout directly,
+   *  or it would bypass the "replace your custom layout?" guard in App. */
+  onLayoutPreset?: (preset: string) => void;
   onSplitH?: () => void;
   onSplitV?: () => void;
+  onClosePane?: () => void;
   onAddPane?: (kind: string, direction: 'Horizontal' | 'Vertical') => void;
   zoomedPaneId?: string | null;
   onZoomPane?: () => void;
@@ -36,14 +38,9 @@ interface CommandPaletteProps {
   onOpenSsh?: () => void;
 }
 
-// Use shared presets — map to PaneLayout for backward compat
-const PRESETS: Record<string, PaneLayout> = Object.fromEntries(
-  Object.entries(LAYOUT_PRESETS).map(([k, v]) => [k, v.layout])
-);
-
 type PaletteMode = 'commands' | 'quick-commands' | 'save-name' | 'save-cmd' | 'branches' | 'new-branch';
 
-export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onLayoutPreset, onSplitH, onSplitV, onClosePane, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh }: CommandPaletteProps) {
   const send = useSend();
   const dispatch = useAppDispatch();
   const [query, setQuery] = useState('');
@@ -100,33 +97,21 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { onSplitV?.(); },
       },
       {
-        id: 'layout:terminal',
-        label: 'Layout: Terminal Focus',
-        description: 'Single terminal pane',
-        shortcut: getShortcut('layout:terminal'),
-        action: () => { onLayoutChange?.(PRESETS.terminal); onClose(); },
+        id: 'pane:close',
+        label: 'Close Pane',
+        description: 'Close the focused pane',
+        shortcut: getShortcut('pane:close'),
+        action: () => { onClosePane?.(); },
       },
-      {
-        id: 'layout:ai',
-        label: 'Layout: AI Session',
-        description: 'Terminal + AI pane side by side',
-        shortcut: getShortcut('layout:ai'),
-        action: () => { onLayoutChange?.(PRESETS.ai); onClose(); },
-      },
-      {
-        id: 'layout:git',
-        label: 'Layout: Git Review',
-        description: 'Git status + git history side by side',
-        shortcut: getShortcut('layout:git'),
-        action: () => { onLayoutChange?.(PRESETS.git); onClose(); },
-      },
-      {
-        id: 'layout:browser',
-        label: 'Layout: Browser + Terminal',
-        description: 'Terminal + embedded browser side by side',
-        shortcut: getShortcut('layout:browser'),
-        action: () => { onLayoutChange?.(PRESETS.browser); onClose(); },
-      },
+      // Generated from the preset table: one edit adds a preset to the menu,
+      // the palette and the cheatsheet, and the label is the same in all three.
+      ...LAYOUT_PRESET_ORDER.map((id) => ({
+        id: `layout:${id}`,
+        label: `Layout: ${LAYOUT_PRESETS[id].label}`,
+        description: LAYOUT_PRESETS[id].description,
+        shortcut: getShortcut(`layout:${id}`),
+        action: () => { onLayoutPreset?.(id); onClose(); },
+      })),
       // Sidebar commands
       {
         id: 'sidebar:toggle',
@@ -232,6 +217,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
       { id: 'add:ai', label: 'Add Pane: AI Run', description: 'Add an AI prompt pane', action: () => { onAddPane?.('AiRun', 'Horizontal'); } },
       { id: 'add:browser', label: 'Add Pane: Browser', description: 'Add a browser pane', action: () => { onAddPane?.('Browser', 'Horizontal'); } },
       { id: 'add:gitstatus', label: 'Add Pane: Git Status', description: 'Add a git status pane', action: () => { onAddPane?.('GitStatus', 'Horizontal'); } },
+      { id: 'add:changes', label: 'Add Pane: Changes', description: 'Add a working-tree changes pane with its diff', action: () => { onAddPane?.('Changes', 'Horizontal'); } },
       { id: 'add:githistory', label: 'Add Pane: Git History', description: 'Add a git history pane', action: () => { onAddPane?.('GitHistory', 'Horizontal'); } },
       { id: 'add:empty', label: 'Add Pane: Empty', description: 'Add an empty pane and choose type', action: () => { onAddPane?.('Empty', 'Horizontal'); } },
       // Notifications
@@ -253,7 +239,7 @@ export function CommandPalette({ open, onClose, onLayoutChange, onSplitH, onSpli
         action: () => { applyTheme(theme.id); onClose(); },
       })),
     ],
-    [send, dispatch, onClose, onLayoutChange, onSplitH, onSplitV, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
+    [send, dispatch, onClose, onLayoutPreset, onSplitH, onSplitV, onClosePane, onAddPane, zoomedPaneId, onZoomPane, onShowShortcuts, onOpenSsh],
   );
 
   // Determine effective mode: if query starts with '!' override to quick-commands,

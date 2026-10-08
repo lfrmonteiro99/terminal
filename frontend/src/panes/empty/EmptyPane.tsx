@@ -1,6 +1,6 @@
 // EmptyPane — placeholder pane that lets users pick what to create here
 
-import { TerminalSquare, Bot, Globe, GitBranch, History, Server } from 'lucide-react';
+import { TerminalSquare, Bot, Globe, GitBranch, History, Server, FileDiff } from 'lucide-react';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 
@@ -9,6 +9,7 @@ const PANE_OPTIONS = [
   { kind: 'SSH', label: 'SSH', Icon: Server, description: 'Remote SSH session' },
   { kind: 'AiRun', label: 'AI Run', Icon: Bot, description: 'AI prompt & output' },
   { kind: 'Browser', label: 'Browser', Icon: Globe, description: 'Embedded browser' },
+  { kind: 'Changes', label: 'Changes', Icon: FileDiff, description: 'Changed files & diff' },
   { kind: 'GitStatus', label: 'Git Status', Icon: GitBranch, description: 'Staging & commits' },
   { kind: 'GitHistory', label: 'Git History', Icon: History, description: 'Commit log' },
 ];

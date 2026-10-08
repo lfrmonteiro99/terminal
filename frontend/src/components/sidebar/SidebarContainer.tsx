@@ -1,18 +1,23 @@
 // SidebarContainer — the navigation rail plus the resizable content panel.
 //
-// Desktop: the rail (NavRail) is always visible and the panel holds the list
-// surface for the selected view. Overview and Settings are full-width pages,
-// so the panel is hidden while they are active.
+// Desktop: the rail (NavRail) is always visible and the panel holds the
+// selected view. Every view lives here, Overview and Settings included — they
+// used to be full-width overlays laid over the pane surface, which put the
+// dashboard on top of the work and swallowed clicks meant for it. Navigation
+// belongs beside the work, not over it.
 //
 // Phone: there is no room for a 280px rail next to the work, so navigation
 // moves into an off-canvas drawer that the AppChrome hamburger opens. The
 // drawer holds the rail only; the selected view's content is rendered by App
-// as a full-width overlay, the same treatment Overview/Settings already get.
+// as a full-width overlay (MobileViewOverlay), which is the phone's equivalent
+// of this panel.
 
 import { useCallback, useState } from 'react';
 import { useAppState } from '../../context/AppContext';
 import { NavRail } from '../nav/NavRail';
 import { SessionStrip } from './SessionStrip';
+import { OverviewView } from './OverviewView';
+import { SettingsView } from '../SettingsView';
 import { ExplorerView } from './ExplorerView';
 import { ChangesView } from './ChangesView';
 import { GitView } from './GitView';
@@ -87,14 +92,14 @@ export function SidebarContainer({ mobile = false, mobileOpen = false, onMobileC
     );
   }
 
-  // Overview and Settings are full-width pages, not list surfaces.
-  const showPanel =
-    !state.sidebarCollapsed &&
-    state.activeSidebarView !== 'overview' &&
-    state.activeSidebarView !== 'settings';
+  // Every destination renders in this panel. Nothing overlays the pane surface,
+  // so the work stays visible and clickable while you read the dashboard.
+  const showPanel = !state.sidebarCollapsed;
 
   const ActiveView = (() => {
     switch (state.activeSidebarView) {
+      case 'overview': return OverviewView;
+      case 'settings': return SettingsView;
       case 'explorer': return ExplorerView;
       case 'changes': return ChangesView;
       case 'git': return GitView;

@@ -8,11 +8,13 @@ import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, FolderTree, FileDiff, GitBranch, Users, GitFork,
   ChevronDown, ChevronRight, TerminalSquare, Bot, Globe, RefreshCw,
-  SlidersHorizontal, Menu,
+  SlidersHorizontal, Menu, Check, Bookmark, Plus, X,
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
 import type { SidebarView } from '../types/sidebar';
+import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER } from '../core/layoutPresets';
+import type { CustomPreset } from '../state/customPresets';
 
 type View = SidebarView;
 
@@ -27,15 +29,27 @@ const VIEW_META: Record<View, { label: string; Icon: ChromeIcon }> = {
   settings: { label: 'Settings', Icon: SlidersHorizontal },
 };
 
-const LAYOUTS: { preset: string; label: string; Icon: ChromeIcon }[] = [
-  { preset: 'terminal', label: 'Terminal only', Icon: TerminalSquare },
-  { preset: 'ai', label: 'AI session', Icon: Bot },
-  { preset: 'git', label: 'Git review', Icon: GitFork },
-  { preset: 'browser', label: 'Browser + terminal', Icon: Globe },
-];
+// Icons are presentation, so they live with the chrome rather than in the
+// preset table; the labels and the order come from there.
+const PRESET_ICONS: Record<string, ChromeIcon> = {
+  terminal: TerminalSquare,
+  ai: Bot,
+  git: GitFork,
+  browser: Globe,
+  changes: FileDiff,
+};
 
 interface AppChromeProps {
   onLayoutPreset?: (preset: string) => void;
+  /** Which preset the current layout matches, or null when it is hand-built.
+   *  Drives the check mark and tells the user whether switching loses work. */
+  activePreset?: string | null;
+  /** The user's own saved arrangements, listed under the built-ins. */
+  customPresets?: CustomPreset[];
+  /** Save the current pane tree under a name the user types. */
+  onSaveLayout?: (label: string) => void;
+  /** Forget a saved arrangement. */
+  onDeletePreset?: (id: string) => void;
   /** Phone form: collapse to a hamburger + title and drop the desktop controls. */
   mobile?: boolean;
   /** Opens the off-canvas navigation drawer (mobile only). */
@@ -48,22 +62,49 @@ function projectName(root: string): string {
   return root.split(/[/\\]/).filter(Boolean).pop() ?? root;
 }
 
-export function AppChrome({ onLayoutPreset, mobile = false, onOpenDrawer, titleOverride }: AppChromeProps) {
+export function AppChrome({
+  onLayoutPreset,
+  activePreset = null,
+  customPresets = [],
+  onSaveLayout,
+  onDeletePreset,
+  mobile = false,
+  onOpenDrawer,
+  titleOverride,
+}: AppChromeProps) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
 
   const [menu, setMenu] = useState<null | 'layout'>(null);
+  // Naming the layout happens inline in the popover: a modal for one text field
+  // would be heavier than the thing it names.
+  const [savingLayout, setSavingLayout] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
   const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menu) return;
     const onDoc = (e: MouseEvent) => {
-      if (barRef.current && !barRef.current.contains(e.target as Node)) setMenu(null);
+      if (barRef.current && !barRef.current.contains(e.target as Node)) {
+        setMenu(null);
+        setSavingLayout(false);
+      }
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [menu]);
+
+  const closeMenu = () => {
+    setMenu(null);
+    setSavingLayout(false);
+    setNewLabel('');
+  };
+
+  const commitSave = () => {
+    onSaveLayout?.(newLabel);
+    closeMenu();
+  };
 
   const view = state.activeSidebarView as View;
   const meta = VIEW_META[view] ?? VIEW_META.overview;
@@ -255,18 +296,118 @@ export function AppChrome({ onLayoutPreset, mobile = false, onOpenDrawer, titleO
           </button>
           {menu === 'layout' && (
             <div style={popoverStyle}>
-              {LAYOUTS.map(({ preset, label, Icon }) => (
-                <div
-                  key={preset}
-                  onClick={() => { onLayoutPreset?.(preset); setMenu(null); }}
-                  style={popoverRowStyle}
+              {LAYOUT_PRESET_ORDER.map((id) => {
+                const preset = LAYOUT_PRESETS[id];
+                const Icon = PRESET_ICONS[id];
+                if (!preset || !Icon) return null;
+                const isActive = activePreset === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isActive}
+                    title={preset.description}
+                    onClick={() => { onLayoutPreset?.(id); closeMenu(); }}
+                    style={{
+                      ...popoverRowStyle,
+                      ...rowResetStyle,
+                      color: isActive ? 'var(--accent-primary)' : 'var(--text-primary)',
+                      fontWeight: isActive ? 600 : 500,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--tint-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <Icon size={14} strokeWidth={1.9} />
+                    <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap' }}>{preset.label}</span>
+                    {isActive && <Check size={13} strokeWidth={2.4} />}
+                  </button>
+                );
+              })}
+
+              {/* The user's own arrangements. Five fixed trees are not enough —
+                  this is where "Terminal + changes + Git" lives. */}
+              {customPresets.length > 0 && (
+                <>
+                  <div style={popoverSectionStyle}>Your layouts</div>
+                  {customPresets.map((preset) => {
+                    const isActive = activePreset === preset.id;
+                    return (
+                      <div key={preset.id} style={{ display: 'flex', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          onClick={() => { onLayoutPreset?.(preset.id); closeMenu(); }}
+                          style={{
+                            ...popoverRowStyle,
+                            ...rowResetStyle,
+                            flex: 1,
+                            minWidth: 0,
+                            color: isActive ? 'var(--accent-primary)' : 'var(--text-primary)',
+                            fontWeight: isActive ? 600 : 500,
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--tint-hover)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          <Bookmark size={14} strokeWidth={1.9} />
+                          <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {preset.label}
+                          </span>
+                          {isActive && <Check size={13} strokeWidth={2.4} />}
+                        </button>
+                        <button
+                          type="button"
+                          title={`Delete “${preset.label}”`}
+                          aria-label={`Delete ${preset.label}`}
+                          onClick={() => onDeletePreset?.(preset.id)}
+                          style={presetDeleteBtnStyle}
+                        >
+                          <X size={12} strokeWidth={2.2} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              <div style={popoverDividerStyle} />
+
+              {/* Saving is the whole point of the custom library, so it is a row
+                  of the menu rather than something buried in Settings. */}
+              {savingLayout ? (
+                <input
+                  autoFocus
+                  value={newLabel}
+                  onChange={e => setNewLabel(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commitSave();
+                    if (e.key === 'Escape') { setSavingLayout(false); setNewLabel(''); }
+                  }}
+                  placeholder="Name this layout"
+                  aria-label="Layout name"
+                  style={popoverInputStyle}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSavingLayout(true)}
+                  style={{ ...popoverRowStyle, ...rowResetStyle }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--tint-hover)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
-                  <Icon size={14} strokeWidth={1.9} />
-                  {label}
+                  <Plus size={14} strokeWidth={2} />
+                  <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap' }}>Save current layout…</span>
+                </button>
+              )}
+
+              {/* Only worth saying when it is true: a preset is a whole-layout
+                  replacement, so a hand-built arrangement is about to go. */}
+              {activePreset === null && (
+                <div style={popoverNoteStyle}>
+                  Your layout is custom — picking a preset replaces it.
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -333,4 +474,71 @@ const popoverRowStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-xs)',
   cursor: 'pointer',
   color: 'var(--text-primary)',
+};
+
+/** Reset the browser's button chrome so a row can be a real <button> (focusable,
+ *  keyboard-operable) without looking like one. */
+const rowResetStyle: React.CSSProperties = {
+  width: '100%',
+  border: 'none',
+  background: 'transparent',
+  fontFamily: 'inherit',
+  fontSize: 'inherit',
+};
+
+const popoverNoteStyle: React.CSSProperties = {
+  marginTop: 4,
+  padding: '6px 9px 2px',
+  borderTop: '1px solid var(--tint-border)',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--font-size-micro)',
+  lineHeight: 1.45,
+};
+
+const popoverSectionStyle: React.CSSProperties = {
+  padding: '8px 9px 4px',
+  marginTop: 4,
+  borderTop: '1px solid var(--tint-border)',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--font-size-micro)',
+  fontWeight: 600,
+  letterSpacing: '0.07em',
+  textTransform: 'uppercase',
+};
+
+const popoverDividerStyle: React.CSSProperties = {
+  height: 1,
+  margin: '6px 4px',
+  background: 'var(--tint-border)',
+};
+
+const popoverInputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 30,
+  padding: '0 9px',
+  background: 'var(--bg-base)',
+  // Longhands: the focus ring below mutates borderColor imperatively.
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--accent-primary)',
+  borderRadius: 'var(--radius-xs)',
+  color: 'var(--text-primary)',
+  fontFamily: 'var(--font-display)',
+  fontSize: 'var(--font-size-small)',
+  outline: 'none',
+  boxSizing: 'border-box',
+};
+
+const presetDeleteBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 24,
+  height: 24,
+  flexShrink: 0,
+  border: 'none',
+  background: 'transparent',
+  borderRadius: 'var(--radius-xs)',
+  color: 'var(--text-muted)',
+  cursor: 'pointer',
 };

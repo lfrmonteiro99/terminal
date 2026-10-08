@@ -219,7 +219,7 @@ function FileRow({
 
 // --- Main Component ---
 
-export function ChangesView() {
+export function ChangesView({ inlineDiff = true }: { inlineDiff?: boolean } = {}) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
@@ -385,8 +385,10 @@ export function ChangesView() {
         )}
       </div>
 
-      {/* Inline DiffPanel */}
-      {diffPanel.mode === 'inline' && diffPanel.open && (
+      {/* Inline DiffPanel. Suppressed when this view is hosted inside a Changes
+          pane, which renders its own diff beside the list — two copies of the
+          same diff in one screen is worse than none. */}
+      {inlineDiff && diffPanel.mode === 'inline' && diffPanel.open && (
         <DiffPanel displayMode="inline" />
       )}
     </div>

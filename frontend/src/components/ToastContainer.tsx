@@ -1,6 +1,7 @@
 // ToastContainer — bottom-right toast notifications for background terminal commands
 
 import { useEffect, useState } from 'react';
+import { newId } from '../core/id';
 
 interface Toast {
   id: string;
@@ -21,7 +22,7 @@ export function ToastContainer() {
         const next = [
           ...prev,
           {
-            id: crypto.randomUUID(),
+            id: newId(),
             paneId,
             paneLabel,
             message,

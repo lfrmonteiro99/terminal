@@ -8,6 +8,7 @@ export type PaneKind =
   | 'FileExplorer'
   | 'Browser'
   | 'Diff'
+  | 'Changes'
   | 'FileViewer'
   | 'Search'
   | 'Empty';

@@ -6,10 +6,12 @@ const STORAGE_KEY = 'terminal:shortcuts';
 const DEFAULTS: Record<string, string> = {
   'pane:split-right': 'Ctrl+Shift+|',
   'pane:split-down': 'Ctrl+Shift+_',
+  'pane:close': 'Ctrl+Shift+X',
   'layout:terminal': 'Ctrl+Alt+1',
   'layout:ai': 'Ctrl+Alt+2',
   'layout:git': 'Ctrl+Alt+3',
   'layout:browser': 'Ctrl+Alt+4',
+  'layout:changes': 'Ctrl+Alt+5',
   'sidebar:toggle': 'Ctrl+B',
   'sidebar:explorer': 'Ctrl+Shift+E',
   'sidebar:changes': 'Ctrl+Shift+G',

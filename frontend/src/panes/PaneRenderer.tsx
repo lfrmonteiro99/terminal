@@ -139,7 +139,10 @@ function PaneHeader({ kind, label, focused, paneIndex, canClose, onSplitH, onSpl
           display: 'flex',
           alignItems: 'center',
           gap: 2,
-          opacity: hovered ? 1 : 0,
+          // Controls stay visible (dimmed) so Close is discoverable; they go
+          // full-opacity on hover. Previously opacity:0 hid them entirely until
+          // hover, which made "there is no way to close a pane" a fair reading.
+          opacity: hovered ? 1 : 0.45,
           transition: 'opacity 120ms',
         }}
       >

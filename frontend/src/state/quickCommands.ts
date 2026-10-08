@@ -1,5 +1,7 @@
 // Quick Commands — saved command snippets stored in localStorage (TERMINAL-047)
 
+import { newId } from '../core/id';
+
 export interface QuickCommand {
   id: string;
   name: string;
@@ -27,7 +29,7 @@ function persistQuickCommands(list: QuickCommand[]): void {
 export function saveQuickCommand(name: string, command: string): QuickCommand {
   const list = getQuickCommands();
   const entry: QuickCommand = {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: name.trim(),
     command: command.trim(),
     createdAt: new Date().toISOString(),

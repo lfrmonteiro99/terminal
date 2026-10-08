@@ -139,6 +139,16 @@ const inlineContainerStyle: React.CSSProperties = {
   flexDirection: 'column',
 };
 
+/** Fills the pane that owns it — no fixed height, no resize handle, because the
+ * pane's own splitter already decides how much room the diff gets. */
+const paneContainerStyle: React.CSSProperties = {
+  backgroundColor: 'var(--bg-base)',
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
 const STORAGE_KEY = 'diff-panel-height';
 const DEFAULT_HEIGHT = 280;
 const MIN_HEIGHT = 150;
@@ -228,7 +238,7 @@ function getStoredHeight(): number {
 // --- Component ---
 
 interface DiffPanelProps {
-  displayMode?: 'split' | 'overlay' | 'inline';
+  displayMode?: 'split' | 'overlay' | 'inline' | 'pane';
 }
 
 export function DiffPanel({ displayMode }: DiffPanelProps) {
@@ -367,6 +377,10 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
         </div>
       )}
 
+      {/* The Split/Overlay/Inline select answers "where does the diff render".
+          Inside a Changes pane that question is already answered by the pane
+          itself, so offering the control would be a switch that does nothing. */}
+      {mode !== 'pane' && (
       <select
         value={state.diffPanel.mode}
         onChange={handleModeChange}
@@ -386,6 +400,7 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
         <option value="overlay">Overlay</option>
         <option value="inline">Inline</option>
       </select>
+      )}
 
       <button
         style={canExplain ? explainBtnStyle : explainBtnDisabledStyle}
@@ -449,6 +464,15 @@ export function DiffPanel({ displayMode }: DiffPanelProps) {
   if (mode === 'inline') {
     return (
       <div style={inlineContainerStyle}>
+        {headerEl}
+        {contentEl}
+      </div>
+    );
+  }
+
+  if (mode === 'pane') {
+    return (
+      <div style={paneContainerStyle}>
         {headerEl}
         {contentEl}
       </div>
