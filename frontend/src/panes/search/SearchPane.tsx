@@ -262,7 +262,10 @@ export function SearchPane(_props: PaneProps) {
   const toggleStyle = (active: boolean): React.CSSProperties => ({
     padding: '2px 7px',
     borderRadius: 3,
-    border: '1px solid',
+    // Longhands: `border` shorthand plus `borderColor` in the same object makes
+    // React drop the colour on rerender ("Removing borderColor border").
+    borderWidth: 1,
+    borderStyle: 'solid',
     borderColor: active ? 'var(--accent-primary)' : 'var(--border-default, #444)',
     background: active ? 'rgba(var(--accent-primary-rgb), 0.12)' : 'transparent',
     color: active ? 'var(--accent-primary)' : 'var(--text-muted, #888)',

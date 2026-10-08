@@ -1,22 +1,121 @@
+/* =============================================================================
+   Terminal Engine — design tokens
+   -----------------------------------------------------------------------------
+   Two independent layers:
+
+     1. APPEARANCE (light / dark)  → neutral + semantic surfaces.
+        Dark is the default. `:root[data-appearance="light"]` overrides the
+        neutral block only. Toggled by src/styles/appearance.ts.
+
+     2. ACCENT (user-chosen)       → --accent-* only.
+        Set inline by src/styles/appearance.ts from src/styles/palettes.ts so
+        the accent is a user setting, not a theme side-effect.
+
+   Rules
+     - Components never hardcode hex; they read these variables.
+     - Legacy variable names are kept as aliases at the bottom of the neutral
+       block so existing components keep working through the migration.
+   ============================================================================= */
+
 :root {
-  /* Backgrounds (4 tiers, darkest to lightest) — neutral graphite, not IDE blue */
+  /* --- Appearance: dark (default) ---------------------------------------- */
+
+  /* Surfaces — 4 tiers, darkest to lightest. Neutral graphite, never IDE blue. */
   --bg-base: #0c0e0d;
   --bg-surface: #131615;
   --bg-raised: #1a1e1c;
   --bg-overlay: #232927;
 
   /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);   /* hairline separators */
   --border-default: #2c3330;
-  --border-focus: #35d399;
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-focus: var(--accent-primary);
 
-  /* Text */
+  /* Text — 3 tiers of emphasis. Muted must stay >= 4.5:1 on --bg-surface. */
   --text-primary: #e7ebe9;
   --text-secondary: #98a39e;
-  --text-muted: #5d6a64;
+  --text-muted: #7a857f;
 
-  /* Accents — phosphor green (terminal heritage), amber warn, coral error */
-  --accent-primary: #35d399;
-  --accent-primary-rgb: 53, 211, 153;
+  /* Neutral tints — let regions differ without introducing hues */
+  --tint-hover: rgba(255, 255, 255, 0.04);
+  --tint-active: rgba(255, 255, 255, 0.07);
+  --tint-card: rgba(255, 255, 255, 0.02);
+  --tint-border: rgba(255, 255, 255, 0.07);
+
+  /* Elevation — dark UIs convey depth with shadow + border, not shadow alone */
+  --shadow-elevated: 0 2px 8px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.48), 0 0 0 1px var(--tint-border);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* Glass + gradient surfaces */
+  --bg-glass: rgba(19, 22, 21, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --gradient-surface: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
+
+  /* State — semantic, never decorative */
+  --state-success: #3fb987;
+  --state-warning: #e0a83c;
+  --state-danger: #e5484d;
+  --disabled-opacity: 0.5;
+
+  /* Accent — defaults; overwritten inline by appearance.ts */
+  --accent-primary: #4f46e5;
+  --accent-primary-rgb: 79, 70, 229;
+  --accent-fg: #ffffff;                          /* text/icons ON the accent */
+  --accent-primary-08: rgba(var(--accent-primary-rgb), 0.08);
+  --accent-primary-15: rgba(var(--accent-primary-rgb), 0.15);
+  --accent-primary-25: rgba(var(--accent-primary-rgb), 0.25);
+  --accent-soft: rgba(var(--accent-primary-rgb), 0.12);      /* selected rows */
+  --accent-softer: rgba(var(--accent-primary-rgb), 0.06);    /* hovered rows  */
+  --accent-border: rgba(var(--accent-primary-rgb), 0.4);
+
+  /* Diff / git semantics — convention colours, distinct from accent */
+  --diff-add: #3fb987;
+  --diff-add-bg: rgba(63, 185, 135, 0.12);
+  --diff-del: #e5484d;
+  --diff-del-bg: rgba(229, 72, 77, 0.12);
+
+  /* Glows — legacy; prefer --shadow-elevated. Kept for existing components. */
+  --glow-accent: 0 0 20px rgba(var(--accent-primary-rgb), 0.14);
+  --glow-accent-strong: 0 0 32px rgba(var(--accent-primary-rgb), 0.24);
+  --glow-error: 0 0 16px rgba(229, 72, 77, 0.18);
+  --glow-warn: 0 0 16px rgba(224, 168, 60, 0.18);
+
+  /* --- Terminal ANSI palette ---------------------------------------------
+     Shell output arrives as ANSI, not as our tokens: `ls --color`, git status,
+     a PS1 prompt and any TUI all pick from these 16 slots. Mapping them to the
+     accent would destroy that meaning, so they stay a palette — but a palette
+     we own, so it flips with the appearance instead of relying on xterm's
+     built-in defaults (which are tuned for a pure-black background and look
+     wrong on our graphite, and unreadable on light).
+
+     Values are chosen for >= 4.5:1 against the appearance's --bg-base, except
+     `black`, which exists to be dim. The light counterparts live in the
+     appearance block below; both sets are asserted in termPalette.test.ts. */
+  --term-black: #5a635e;
+  --term-red: #f0707a;
+  --term-green: #3fb987;
+  --term-yellow: #e0a83c;
+  --term-blue: #7ba3f7;
+  --term-magenta: #d09bf0;
+  --term-cyan: #5ec9c9;
+  --term-white: #d5dbd8;
+  --term-bright-black: #7f8a84;
+  --term-bright-red: #ff8f8f;
+  --term-bright-green: #62d9a6;
+  --term-bright-yellow: #f0c063;
+  --term-bright-blue: #a3c0ff;
+  --term-bright-magenta: #e2b8ff;
+  --term-bright-cyan: #86dede;
+  --term-bright-white: #f2f5f3;
+
+  /* Terminal selection — tinted by the accent so it reads as "ours" while the
+     16 colours above stay conventional. */
+  --term-selection: rgba(var(--accent-primary-rgb), 0.28);
+
+  /* --- Legacy aliases (pre-design-system names) -------------------------- */
+
   --accent-warn: #f0a83c;
   --accent-warn-rgb: 240, 168, 60;
   --accent-error: #f26a5a;
@@ -24,51 +123,140 @@
   --accent-info: #6e9bf5;
   --accent-info-rgb: 110, 155, 245;
 
-  /* Accent fills (per-theme — derived from --accent-primary-rgb) */
-  --accent-primary-08: rgba(var(--accent-primary-rgb), 0.08);
-  --accent-primary-15: rgba(var(--accent-primary-rgb), 0.15);
-  --accent-primary-25: rgba(var(--accent-primary-rgb), 0.25);
+  /* --- Typography ---------------------------------------------------------
+     A real scale: 10 / 11 / 12 / 13 / 15 / 18 / 22. Each step is a token, and
+     hierarchy is size + weight + colour together, never size alone. */
+  --font-size-2xs: 10px;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
 
-  /* Glow effects */
-  --glow-accent: 0 0 20px rgba(var(--accent-primary-rgb), 0.14);
-  --glow-accent-strong: 0 0 32px rgba(var(--accent-primary-rgb), 0.24);
-  --glow-error: 0 0 16px rgba(var(--accent-error-rgb), 0.18);
-  --glow-warn: 0 0 16px rgba(var(--accent-warn-rgb), 0.18);
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
 
-  /* Elevation shadows */
-  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
-  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.45), 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.55;
 
-  /* Glass surfaces */
-  --bg-glass: rgba(19, 22, 21, 0.82);
-  --glass-border: rgba(255, 255, 255, 0.06);
-
-  /* Gradients */
-  --gradient-surface: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
-
-  /* State */
-  --disabled-opacity: 0.55;
-
-  /* Typography */
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   --font-display: "InterVariable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-size-content: 13px;
-  --font-size-chrome: 11px;
-  --font-size-badge: 10px;
-  --font-size-label: 12px;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
 
-  /* Spacing */
+  /* Legacy type-size aliases */
+  --font-size-body: var(--font-size-base);
+  --font-size-title: var(--font-size-md);
+  --font-size-small: var(--font-size-sm);
+  --font-size-micro: var(--font-size-2xs);
+  --font-size-content: var(--font-size-base);
+  --font-size-chrome: var(--font-size-xs);
+  --font-size-badge: var(--font-size-2xs);
+  --font-size-label: var(--font-size-sm);
+
+  /* --- Space scale (4px base) -------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* --- Radius scale ------------------------------------------------------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* --- Fixed chrome metrics ---------------------------------------------- */
   --chrome-height: 46px;
   --statusbar-height: 24px;
   --activitybar-width: 40px;
   --pane-header-height: 32px;
 
-  /* Motion — easing curves */
+  /* Shell layout — labelled nav rail + resizable content panel */
+  --rail-width: 210px;
+  --rail-width-collapsed: 52px;
+  --panel-min-width: 220px;
+  --panel-max-width: 460px;
+  --panel-default-width: 280px;
+
+  /* --- Motion ------------------------------------------------------------- */
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 240ms;
+
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out-quint: cubic-bezier(0.86, 0, 0.07, 1);
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease: var(--ease-out-soft);
+}
+
+/* --- Appearance: light --------------------------------------------------- */
+/* Only the neutral layer flips. Accent variables are owned by appearance.ts
+   and are re-derived per appearance there, so one palette works in both. */
+
+:root[data-appearance="light"] {
+  --bg-base: #f7f8f8;
+  --bg-surface: #ffffff;
+  --bg-raised: #f1f3f4;
+  --bg-overlay: #ffffff;
+
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: #e3e6e7;
+  --border-strong: rgba(0, 0, 0, 0.18);
+
+  --text-primary: #14171a;
+  --text-secondary: #5b636b;
+  --text-muted: #7d858c;
+
+  --tint-hover: rgba(0, 0, 0, 0.035);
+  --tint-active: rgba(0, 0, 0, 0.06);
+  --tint-card: rgba(0, 0, 0, 0.012);
+  --tint-border: rgba(0, 0, 0, 0.08);
+
+  --shadow-elevated: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+  --shadow-overlay: 0 12px 32px rgba(16, 24, 40, 0.16), 0 0 0 1px var(--tint-border);
+  --shadow-toast: 0 8px 24px rgba(16, 24, 40, 0.12);
+
+  --bg-glass: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(0, 0, 0, 0.06);
+  --gradient-surface: var(--bg-surface);
+
+  --glow-accent: none;
+  --glow-accent-strong: none;
+
+  /* Terminal ANSI palette — light variants.
+     Same 16 slots and the same hues as dark, re-derived for a light canvas:
+     hue and saturation are kept and only HSL lightness drops. Two invariants,
+     asserted in `termPalette.test.ts`:
+       - every slot clears 4.5:1 against this appearance's --bg-base;
+       - `bright-*` clears a higher bar (6.5:1) so the normal/bright ladder
+         survives — at a single threshold both collapse to the same colour.
+     Neutrals are pinned rather than derived: on light, ANSI "white" is dark
+     text, and deriving it flattens black/bright-black/white/bright-white into
+     one grey. */
+  --term-black: #33383d;
+  --term-red: #dc1b2a;
+  --term-green: #2b7e5c;
+  --term-yellow: #926817;
+  --term-blue: #2e69e5;
+  --term-magenta: #a239e1;
+  --term-cyan: #297c7c;
+  --term-white: #4b5157;
+  --term-bright-black: #6b7178;
+  --term-bright-red: #b11616;
+  --term-bright-green: #196645;
+  --term-bright-yellow: #76530f;
+  --term-bright-blue: #1950c8;
+  --term-bright-magenta: #8319cd;
+  --term-bright-cyan: #1b6363;
+  --term-bright-white: #14171a;
 }
 
 * {
@@ -79,28 +267,39 @@ body {
   margin: 0;
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-content);
+  font-family: var(--font-display);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--leading-snug);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
 /* Custom scrollbars */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-surface); }
-::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 3px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* Utility class: display typography (Inter) */
 .display {
   font-family: var(--font-display);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
 }
 
 /* Global keyboard focus ring — visible only for keyboard navigation */
 :focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

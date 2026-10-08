@@ -162,11 +162,18 @@ function FileRow({
   const style: React.CSSProperties = {
     ...fileRowBaseStyle,
     ...(selected
-      ? { backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)', borderLeft: '2px solid #4ecdc4' }
+      ? { backgroundColor: 'var(--accent-soft)', borderLeft: '2px solid var(--accent-primary)' }
       : hover
-        ? { backgroundColor: 'rgba(255, 255, 255, 0.05)' }
+        ? { backgroundColor: 'var(--tint-hover)' }
         : {}),
   };
+
+  // Split the path so the basename never truncates. A single ellipsised string
+  // turns `crates/terminal-daemon/src/dispatcher.rs` into
+  // `crates/terminal-daemon/src/d…`, which hides the only part you scan for.
+  const slash = file.path.lastIndexOf('/');
+  const dir = slash >= 0 ? file.path.slice(0, slash) : '';
+  const base = slash >= 0 ? file.path.slice(slash + 1) : file.path;
 
   return (
     <div
@@ -174,6 +181,7 @@ function FileRow({
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      title={file.path}
     >
       <span
         style={{
@@ -183,8 +191,15 @@ function FileRow({
       >
         {getStatusChar(file.status)}
       </span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }}>
-        {file.path}
+      <span style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>
+          {base}
+        </span>
+        {dir && (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--font-size-micro)', color: 'var(--text-muted)' }}>
+            {dir}
+          </span>
+        )}
       </span>
       {showStageButton && onStageAction && (
         <button

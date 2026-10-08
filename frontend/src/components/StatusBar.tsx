@@ -31,7 +31,7 @@ function StatusBarItem({ onClick, title, children }: StatusBarItemProps) {
   );
 }
 
-export function StatusBar() {
+export function StatusBar({ compact = false }: { compact?: boolean } = {}) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const repo = state.repoStatus;
@@ -39,19 +39,22 @@ export function StatusBar() {
   const isDisconnected = state.connection.status === 'disconnected';
 
   return (
-    <div style={{
-      height: 'var(--statusbar-height)',
-      backgroundColor: 'var(--bg-base)',
-      borderTop: '1px solid var(--border-default)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 6px',
-      gap: 4,
-      fontSize: 'var(--font-size-chrome)',
-      color: 'var(--text-secondary)',
-      fontFamily: 'var(--font-mono)',
-      flexShrink: 0,
-    }}>
+    <div
+      className="safe-area-bottom"
+      style={{
+        height: 'var(--statusbar-height)',
+        backgroundColor: 'var(--bg-base)',
+        borderTop: '1px solid var(--border-default)',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 6px',
+        gap: 4,
+        fontSize: 'var(--font-size-chrome)',
+        color: 'var(--text-secondary)',
+        fontFamily: 'var(--font-mono)',
+        flexShrink: 0,
+      }}
+    >
       {repo && (
         <StatusBarItem
           onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' })}
@@ -59,7 +62,11 @@ export function StatusBar() {
         >
           <span style={{ color: 'var(--accent-primary)' }}>&#9679;</span>
           {repo.branch}
-          {repo.head && <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>{repo.head.slice(0, 7)}</span>}
+          {/* The commit hash is desktop detail: on a phone the bar is 320px
+              wide and the branch is the part that identifies where you are. */}
+          {repo.head && !compact && (
+            <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>{repo.head.slice(0, 7)}</span>
+          )}
         </StatusBarItem>
       )}
 

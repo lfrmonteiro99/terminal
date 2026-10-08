@@ -62,7 +62,10 @@ export function PromptComposer({ value, onChange, onSubmit, placeholder, disable
           lineHeight: 1.55,
           backgroundColor: 'var(--bg-raised)',
           color: 'var(--text-primary)',
-          border: '1px solid var(--border-default)',
+          // Longhands: borderColor is mutated on focus/blur below.
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: 'var(--border-default)',
           borderRadius: 6,
           outline: 'none',
           resize: 'none',

@@ -397,6 +397,16 @@ pub struct Agent {
     /// Optional model pin forwarded as `--model`. `None` = the CLI default.
     #[serde(default)]
     pub model: Option<String>,
+    /// Optional inference provider, forwarded as `--provider` to the Hermes
+    /// runner. Hermes-only: Claude Code has no provider flag, so it is ignored
+    /// (and hidden in the UI) when `runner` is `Claude`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Optional Hermes profile — a named, isolated Hermes home with its own
+    /// config, model set, skills and memory — forwarded as `-p <name>`.
+    /// Hermes-only, same as `provider`.
+    #[serde(default)]
+    pub profile: Option<String>,
     /// Autonomy applied to runs when the client does not specify one.
     #[serde(default)]
     pub default_autonomy: AutonomyLevel,
@@ -442,6 +452,12 @@ pub struct AgentSummary {
     pub runner: Runner,
     pub description: String,
     pub model: Option<String>,
+    /// Provider pin (Hermes runner only); carried so the edit form can show it.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Hermes profile pin; carried so the edit form can show it.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub default_autonomy: AutonomyLevel,
     /// The agent-specific instructions. Carried in the summary so the edit form
     /// can show what is actually saved — without it an operator editing an
@@ -461,6 +477,8 @@ impl From<&Agent> for AgentSummary {
             runner: a.runner,
             description: a.description.clone(),
             model: a.model.clone(),
+            provider: a.provider.clone(),
+            profile: a.profile.clone(),
             default_autonomy: a.default_autonomy,
             instructions: a.instructions.clone(),
             updated_at: a.updated_at,
@@ -796,6 +814,8 @@ mod tests {
             description: String::new(),
             instructions: instructions.into(),
             model: None,
+            provider: None,
+            profile: None,
             default_autonomy: AutonomyLevel::default(),
             created_at: now,
             updated_at: now,

@@ -3,21 +3,6 @@ import { useAppState } from '../../context/AppContext';
 import { useSend } from '../../context/SendContext';
 import { FileTreeNode } from './FileTreeNode';
 
-// --- Styles ---
-
-const headerLabelStyle: React.CSSProperties = {
-  fontSize: 10,
-  color: 'var(--text-muted)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
-};
-
-const projectNameStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: 'var(--accent-primary)',
-  fontWeight: 'bold',
-};
-
 // --- Component ---
 
 export function ExplorerView() {
@@ -48,30 +33,20 @@ export function ExplorerView() {
     setSelectedFile(path);
   }, []);
 
-  // Derive project folder name from active session
-  const activeSession = state.activeSession ? state.sessions.get(state.activeSession) : undefined;
-  const projectName = activeSession
-    ? activeSession.project_root.split('/').pop() || activeSession.project_root
-    : 'No project';
-
   const rootEntries = state.explorerTree.get('.');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Header */}
-      <div style={{ padding: '8px 12px 4px', flexShrink: 0 }}>
-        <div style={headerLabelStyle}>EXPLORER</div>
-        <div style={projectNameStyle}>{projectName}</div>
-      </div>
+      {/* The page title lives in the top bar — no duplicate panel header here. */}
 
       {/* Tree */}
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6 }}>
         {rootEntries === undefined ? (
-          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace' }}>
-            Loading...
+          <div style={{ padding: '8px 14px', color: 'var(--text-muted)', fontSize: 'var(--font-size-small)' }}>
+            Loading…
           </div>
         ) : rootEntries.length === 0 ? (
-          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'monospace', fontStyle: 'italic' }}>
+          <div style={{ padding: '8px 14px', color: 'var(--text-muted)', fontSize: 'var(--font-size-small)', fontStyle: 'italic' }}>
             (empty)
           </div>
         ) : (

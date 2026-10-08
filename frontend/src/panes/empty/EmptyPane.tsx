@@ -46,7 +46,8 @@ export function EmptyPane({ pane }: PaneProps) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
               padding: '16px 12px', backgroundColor: 'var(--bg-raised)',
-              border: '1px solid var(--border-default)', borderRadius: 8,
+              // Longhands: borderColor is mutated on hover below.
+              borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-default)', borderRadius: 8,
               cursor: 'pointer', color: 'var(--text-primary)',
               fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-chrome)',
               transition: 'border-color 120ms, background-color 120ms',

@@ -148,6 +148,10 @@ interface FormState {
   description: string;
   instructions: string;
   model: string;
+  /** Hermes runner only: inference provider (`--provider`). */
+  provider: string;
+  /** Hermes runner only: profile name (`-p <name>`). */
+  profile: string;
 }
 
 const emptyForm: FormState = {
@@ -158,6 +162,8 @@ const emptyForm: FormState = {
   description: '',
   instructions: '',
   model: '',
+  provider: '',
+  profile: '',
 };
 
 /** Catalogue entry being edited inline (role or personality). `id: null` = new. */
@@ -200,6 +206,18 @@ export function AgentsView() {
     (id ? state.roles.get(id)?.name : null) ?? null;
   const personalityName = (id: string | null) =>
     (id ? state.personalities.get(id)?.name : null) ?? null;
+  // What actually drives a run: the runner, its model pin, and (Hermes only) the
+  // profile and provider. Surfaced in the list so an operator can tell two
+  // same-named workers apart without opening the form.
+  const pins = (a: AgentSummary) => {
+    const parts: string[] = [a.runner];
+    if (a.model) parts.push(a.model);
+    if (a.runner === 'Hermes') {
+      if (a.profile) parts.push(`profile ${a.profile}`);
+      if (a.provider) parts.push(a.provider);
+    }
+    return parts.join(' · ');
+  };
 
   // Select a just-created catalogue entry once it appears in the snapshot.
   useEffect(() => {
@@ -235,6 +253,8 @@ export function AgentsView() {
       description: agent.description,
       instructions: agent.instructions,
       model: agent.model ?? '',
+      provider: agent.provider ?? '',
+      profile: agent.profile ?? '',
     });
     setSelectedId(agent.id);
     setMode('edit');
@@ -251,6 +271,11 @@ export function AgentsView() {
     // An empty model field means "no pin" — send null so the daemon clears it
     // rather than passing a literal empty --model.
     const model = form.model.trim().length > 0 ? form.model.trim() : null;
+    // Same rule for the Hermes-only pins. They are kept on the record even when
+    // the runner is Claude (the daemon ignores them there) so switching runners
+    // back and forth does not silently discard what the operator typed.
+    const provider = form.provider.trim().length > 0 ? form.provider.trim() : null;
+    const profile = form.profile.trim().length > 0 ? form.profile.trim() : null;
     // Empty reference = no overlay. On create that is simply absent; on update
     // the empty string is what clears an existing reference.
     const role_id = form.roleId || undefined;
@@ -266,6 +291,8 @@ export function AgentsView() {
         description: form.description,
         instructions: form.instructions,
         model,
+        provider,
+        profile,
       });
     } else if (mode === 'edit' && selectedId) {
       send({
@@ -280,6 +307,8 @@ export function AgentsView() {
         // the whole truth: send it unconditionally (this also allows clearing).
         instructions: form.instructions,
         model,
+        provider,
+        profile,
       });
     }
     cancel();
@@ -531,9 +560,38 @@ export function AgentsView() {
           <input
             style={inputStyle}
             value={form.model}
-            placeholder="leave empty for the runner default"
+            placeholder={
+              form.runner === 'Hermes'
+                ? 'e.g. anthropic/claude-sonnet-4.6'
+                : 'e.g. claude-opus-4-5'
+            }
             onChange={(e) => setForm({ ...form, model: e.target.value })}
           />
+
+          {/* Provider and profile are Hermes levers: Claude Code accepts
+              neither, so offering them there would be a lie. */}
+          {form.runner === 'Hermes' && (
+            <>
+              <div style={fieldLabelStyle}>Provider (optional)</div>
+              <input
+                style={inputStyle}
+                value={form.provider}
+                placeholder="e.g. openrouter, nous, ollama"
+                onChange={(e) => setForm({ ...form, provider: e.target.value })}
+              />
+
+              <div style={fieldLabelStyle}>Hermes profile (optional)</div>
+              <input
+                style={inputStyle}
+                value={form.profile}
+                placeholder="e.g. fast, smart"
+                onChange={(e) => setForm({ ...form, profile: e.target.value })}
+              />
+              <div style={hintStyle}>
+                {`Passed as -p <profile>: that profile's own config, providers, skills and memory. Empty = the profile the daemon was launched with. \`hermes profile list\` shows them.`}
+              </div>
+            </>
+          )}
 
           <div style={fieldLabelStyle}>Description</div>
           <input
@@ -601,7 +659,7 @@ export function AgentsView() {
               <span style={metaStyle}>
                 {roleName(agent.role_id) ?? 'no role'}
                 {agent.personality_id ? ` · ${personalityName(agent.personality_id)}` : ''}
-                {` · ${agent.runner}`}
+                {` · ${pins(agent)}`}
               </span>
             </div>
           ))

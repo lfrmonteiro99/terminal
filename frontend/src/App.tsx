@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { debug } from './util/log';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
+import { OverviewView } from './components/sidebar/OverviewView.tsx';
+import { SettingsView } from './components/SettingsView.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
@@ -13,6 +15,10 @@ import { DiffPanel } from './components/DiffPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { ShortcutCheatsheet } from './components/ShortcutCheatsheet';
 import { PaneRenderer } from './panes/PaneRenderer';
+import { PANE_LABELS } from './panes/labels';
+import { MobileViewOverlay } from './components/MobileViewOverlay';
+import { MobilePaneSwitcher } from './components/MobilePaneSwitcher';
+import { useIsMobile } from './hooks/useMediaQuery';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
 import { splitPane, closePane, collectPanes, nextPaneId } from './domain/pane/types';
 import { LAYOUT_PRESETS } from './core/layoutPresets';
@@ -76,6 +82,28 @@ function AppContent() {
   const [projectRoot, setProjectRoot] = useState(() => localStorage.getItem('terminal:projectRoot') || '');
   const [tauriMode, setTauriMode] = useState<boolean | null>(null); // null = unknown yet
 
+  // --- Mobile shell state ---
+  // A phone cannot show a 280px rail next to the work, so navigation moves to
+  // an off-canvas drawer and the working surface shows one pane at a time.
+  const isMobile = useIsMobile();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Which surface the phone is showing: the panes, or the sidebar view that the
+  // drawer just opened (Files/Changes/Git/Agents/Overview/Settings).
+  const [mobileShowPanes, setMobileShowPanes] = useState(true);
+
+  // Choosing a destination in the drawer closes it and reveals that view. The
+  // drawer is the phone's only navigation, so this is the single funnel.
+  const handleMobileNavigate = useCallback(() => {
+    setDrawerOpen(false);
+    setMobileShowPanes(false);
+  }, []);
+
+  // Rotating a phone back to a desktop width must not leave a stale drawer
+  // open behind the fixed rail.
+  useEffect(() => {
+    if (!isMobile && drawerOpen) setDrawerOpen(false);
+  }, [isMobile, drawerOpen]);
+
   // Persist connection settings across page refreshes
   useEffect(() => { if (daemonUrl) localStorage.setItem('terminal:daemonUrl', daemonUrl); }, [daemonUrl]);
   useEffect(() => { if (authToken) localStorage.setItem('terminal:authToken', authToken); }, [authToken]);
@@ -87,6 +115,9 @@ function AppContent() {
   }));
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
   const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
+
+  // Flat pane list — drives the phone's pane switcher and the chrome title.
+  const paneList = useMemo(() => collectPanes(layout), [layout]);
 
   // Persist layout on every change — debounced because pane-resize drag emits
   // a layout update per mousemove (potentially 60 Hz), and each
@@ -441,6 +472,10 @@ function AppContent() {
         e.preventDefault();
         dispatch({ type: 'TOGGLE_SIDEBAR' });
       }
+      if (e.ctrlKey && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'overview' });
+      }
       if (e.ctrlKey && e.shiftKey && e.key === 'E') {
         e.preventDefault();
         dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' });
@@ -532,10 +567,10 @@ function AppContent() {
   return (
     <SendProvider value={send}>
       <div
+        className="app-root"
         style={{
           display: 'flex',
           flexDirection: 'column',
-          height: '100vh',
           background: 'var(--bg-base)',
         }}
       >
@@ -587,24 +622,73 @@ function AppContent() {
         {/* Main layout (when session is active) */}
         {state.activeSession && (
           <>
-            {/* AppChrome header — command bar (identity, workspace, views, layout, status) */}
-            <AppChrome onLayoutPreset={(preset) => {
-              const p = LAYOUT_PRESETS[preset];
-              if (p) {
-                setLayout(p.layout);
-                setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
+            {/* AppChrome header — command bar. On a phone it collapses to a
+                hamburger + title; navigation and the workspace live in the
+                drawer, so the bar keeps only what a thumb needs. */}
+            <AppChrome
+              mobile={isMobile}
+              onOpenDrawer={() => setDrawerOpen(true)}
+              titleOverride={
+                isMobile && mobileShowPanes
+                  ? (PANE_LABELS[paneList.find(p => p.id === focusedPaneId)?.kind ?? ''] ?? 'Panes')
+                  : undefined
               }
-            }} />
+              onLayoutPreset={(preset) => {
+                const p = LAYOUT_PRESETS[preset];
+                if (p) {
+                  setLayout(p.layout);
+                  setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
+                }
+              }}
+            />
 
             {/* Main content: sidebar + pane area */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <SidebarContainer />
-              <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+              <SidebarContainer
+                mobile={isMobile}
+                mobileOpen={drawerOpen}
+                onMobileClose={handleMobileNavigate}
+              />
+              <div style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
+                display: 'flex',
+                // A phone stacks the pane surface over the bottom switcher;
+                // desktop lays them out side by side (switcher absent).
+                flexDirection: isMobile ? 'column' : 'row',
+                background: 'var(--bg-surface)',
+                position: 'relative',
+              }}>
+                {/* Overview / Settings are full-width pages. On desktop they
+                    overlay the pane surface; on a phone they are one of the
+                    drawer destinations and render inside MobileViewOverlay. */}
+                {!isMobile && state.activeSidebarView === 'overview' && (
+                  <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: 'var(--bg-base)', zIndex: 5 }}>
+                    <OverviewView />
+                  </div>
+                )}
+                {!isMobile && state.activeSidebarView === 'settings' && (
+                  <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: 'var(--bg-base)', zIndex: 5 }}>
+                    <SettingsView />
+                  </div>
+                )}
+
+                {/* Phone: the view chosen in the drawer takes the surface. The
+                    panes stay mounted underneath so terminals keep running. */}
+                {isMobile && !mobileShowPanes && (
+                  <MobileViewOverlay
+                    view={state.activeSidebarView}
+                    onBack={() => setMobileShowPanes(true)}
+                  />
+                )}
+
                 <PaneRenderer
                   layout={layout}
                   workspaceId={state.activeSession ?? ''}
                   focusedPaneId={focusedPaneId}
                   zoomedPaneId={zoomedPaneId}
+                  mobile={isMobile}
                   onFocusPane={setFocusedPaneId}
                   onLayoutChange={setLayout}
                   onSplitPane={(paneId, direction) => {
@@ -616,10 +700,20 @@ function AppContent() {
                   }}
                   onClosePane={handleClosePane}
                 />
+
+                {/* Phone: one pane is visible at a time, so this is the only
+                    way to move between them. Nothing to switch with one pane. */}
+                {isMobile && mobileShowPanes && paneList.length > 1 && (
+                  <MobilePaneSwitcher
+                    panes={paneList}
+                    focusedPaneId={focusedPaneId}
+                    onSelect={setFocusedPaneId}
+                  />
+                )}
               </div>
             </div>
 
-            <StatusBar />
+            <StatusBar compact={isMobile} />
           </>
         )}
 

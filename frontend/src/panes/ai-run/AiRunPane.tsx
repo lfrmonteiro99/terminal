@@ -219,7 +219,11 @@ function AgentPicker({
             key={a.id}
             active={selectedId === a.id}
             label={a.name}
-            title={`${roleLabel(a.role_id)} · ${a.runner}${a.model ? ' · ' + a.model : ''}${a.description ? ' — ' + a.description : ''}`}
+            title={`${roleLabel(a.role_id)} · ${a.runner}${a.model ? ' · ' + a.model : ''}${
+              a.runner === 'Hermes' && a.profile ? ' · profile ' + a.profile : ''
+            }${a.runner === 'Hermes' && a.provider ? ' · ' + a.provider : ''}${
+              a.description ? ' — ' + a.description : ''
+            }`}
             onClick={() => onSelect(a.id)}
           />
         ))}

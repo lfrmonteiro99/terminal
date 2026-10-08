@@ -81,6 +81,13 @@ pub enum AppCommand {
         instructions: String,
         #[serde(default)]
         model: Option<String>,
+        /// Inference provider for the Hermes runner (`--provider`). Ignored by
+        /// the Claude runner, which has no such flag.
+        #[serde(default)]
+        provider: Option<String>,
+        /// Hermes profile for the Hermes runner (`-p <name>`). Ignored by Claude.
+        #[serde(default)]
+        profile: Option<String>,
         #[serde(default)]
         default_autonomy: AutonomyLevel,
     },
@@ -100,6 +107,10 @@ pub enum AppCommand {
         instructions: Option<String>,
         #[serde(default)]
         model: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
         #[serde(default)]
         default_autonomy: Option<AutonomyLevel>,
     },
@@ -1420,6 +1431,8 @@ mod tests {
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::default(),
             },
             AppCommand::UpdateAgent {
@@ -1431,6 +1444,8 @@ mod tests {
                 description: None,
                 instructions: None,
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: None,
             },
             AppCommand::DeleteAgent { agent_id: uuid() },
@@ -1762,6 +1777,8 @@ mod tests {
                     runner: Runner::Claude,
                     description: String::new(),
                     model: None,
+                    provider: None,
+                    profile: None,
                     default_autonomy: AutonomyLevel::default(),
                     instructions: String::new(),
                     updated_at: chrono::Utc::now(),
@@ -1776,6 +1793,8 @@ mod tests {
                     runner: Runner::Hermes,
                     description: String::new(),
                     model: None,
+                    provider: Some("openrouter".into()),
+                    profile: Some("fast".into()),
                     default_autonomy: AutonomyLevel::default(),
                     instructions: "be terse".into(),
                     updated_at: chrono::Utc::now(),

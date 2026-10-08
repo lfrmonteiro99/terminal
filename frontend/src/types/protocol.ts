@@ -247,6 +247,10 @@ export interface AgentSummary {
   runner: Runner;
   description: string;
   model: string | null;
+  /** Inference provider (`--provider`). Hermes runner only. */
+  provider: string | null;
+  /** Hermes profile (`-p <name>`). Hermes runner only. */
+  profile: string | null;
   default_autonomy: AutonomyLevel;
   instructions: string;
   updated_at: string;
@@ -274,6 +278,10 @@ export type AppCommand =
       description?: string;
       instructions?: string;
       model?: string | null;
+      /** Hermes-only: inference provider (`--provider`). */
+      provider?: string | null;
+      /** Hermes-only: profile name (`-p <name>`). */
+      profile?: string | null;
       default_autonomy?: AutonomyLevel;
     }
   | {
@@ -287,6 +295,8 @@ export type AppCommand =
       description?: string;
       instructions?: string;
       model?: string | null;
+      provider?: string | null;
+      profile?: string | null;
       default_autonomy?: AutonomyLevel;
     }
   | { type: 'DeleteAgent'; agent_id: string }

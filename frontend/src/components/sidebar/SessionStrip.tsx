@@ -1,3 +1,7 @@
+// SessionStrip — the run list for the active workspace, at the top of the
+// content panel. Rows are selectable: selecting a run drives RunPanel /
+// PostRunSummary (diff, merge, revert) in the pane surface.
+
 import { useAppState, useAppDispatch } from '../../context/AppContext';
 import type { RunState } from '../../types/protocol';
 
@@ -7,7 +11,7 @@ function getStatusColor(state: RunState): string {
     case 'Preparing':
       return 'var(--accent-primary)';
     case 'Completed':
-      return 'var(--accent-primary)';
+      return state.exit_code === 0 ? 'var(--accent-primary)' : 'var(--accent-warn)';
     case 'Failed':
       return 'var(--accent-error)';
     case 'Cancelled':
@@ -21,9 +25,16 @@ function isRunning(state: RunState): boolean {
   return state.type === 'Running' || state.type === 'Preparing';
 }
 
+function stateLabel(state: RunState): string {
+  if (state.type === 'Running' || state.type === 'Preparing') return 'running';
+  if (state.type === 'Completed') return state.exit_code === 0 ? 'done' : `exit ${state.exit_code}`;
+  if (state.type === 'Failed') return 'failed';
+  if (state.type === 'Cancelled') return 'cancelled';
+  return state.type.toLowerCase();
+}
+
 function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max) + '...';
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 const pulseKeyframes = `
@@ -40,87 +51,115 @@ export function SessionStrip() {
   const session = state.activeSession ? state.sessions.get(state.activeSession) : null;
   if (!session) return null;
 
-  // Get runs for this session, sorted chronologically
   const sessionRuns = Array.from(state.runs.values())
-    .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
-
-  const folderName = session.project_root.split(/[/\\]/).pop() ?? session.id.slice(0, 8);
+    .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
 
   return (
     <div style={{
       flexShrink: 0,
-      borderBottom: '1px solid var(--border-default)',
-      fontFamily: 'monospace',
-      fontSize: 12,
+      borderBottom: '1px solid var(--tint-border)',
+      fontFamily: 'var(--font-display)',
     }}>
       <style>{pulseKeyframes}</style>
-      <div style={{
-        padding: '8px 12px 4px',
-        color: 'var(--accent-primary)',
-        fontWeight: 'bold',
-        fontSize: 13,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        {truncate(folderName, 28)}
-      </div>
-      <div style={{
-        padding: '0 12px 4px',
-        color: 'var(--text-muted)',
-        fontSize: 11,
-      }}>
-        {session.id.slice(0, 8)}... | {session.run_count} runs
-      </div>
-      <div style={{
-        maxHeight: 120,
-        overflowY: 'auto',
-        padding: '0 8px 8px',
-      }}>
-        {sessionRuns.map((run) => {
-          const isSelected = run.id === state.selectedRun;
-          const running = isRunning(run.state);
-          const dotColor = getStatusColor(run.state);
 
-          return (
-            <div
-              key={run.id}
-              onClick={() => dispatch({ type: 'SELECT_RUN', runId: run.id })}
-              style={{
-                padding: '3px 6px',
-                marginBottom: 1,
-                borderRadius: 3,
-                cursor: 'pointer',
-                backgroundColor: isSelected ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'transparent',
-                borderLeft: isSelected ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <span style={{
-                display: 'inline-block',
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                backgroundColor: dotColor,
-                flexShrink: 0,
-                animation: running ? 'pulse-dot 1.5s ease-in-out infinite' : 'none',
-              }} />
-              <span style={{
-                color: 'var(--text-primary)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                flex: 1,
-                fontSize: 11,
-              }}>
-                {truncate(run.prompt_preview, 30)}
-              </span>
-            </div>
-          );
-        })}
+      <div style={sectionHeadStyle}>
+        <span>Runs</span>
+        <span style={countPillStyle}>{sessionRuns.length}</span>
       </div>
+
+      {sessionRuns.length === 0 ? (
+        <div style={{ padding: '0 14px 10px', fontSize: 'var(--font-size-small)', color: 'var(--text-muted)' }}>
+          No runs in this workspace yet.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 168, overflowY: 'auto', padding: '0 8px 8px' }}>
+          {sessionRuns.map((run) => {
+            const isSelected = run.id === state.selectedRun;
+            const running = isRunning(run.state);
+            return (
+              <button
+                key={run.id}
+                onClick={() => dispatch({ type: 'SELECT_RUN', runId: run.id })}
+                title={run.prompt_preview}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  width: '100%',
+                  padding: '6px 8px',
+                  marginBottom: 1,
+                  border: 'none',
+                  borderRadius: 'var(--radius-sm)',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  background: isSelected ? 'rgba(var(--accent-primary-rgb), 0.13)' : 'transparent',
+                  color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)',
+                  fontFamily: 'var(--font-display)',
+                }}
+                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--tint-hover)'; }}
+                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{
+                  display: 'inline-block',
+                  width: 7,
+                  height: 7,
+                  marginTop: 5,
+                  borderRadius: '50%',
+                  backgroundColor: getStatusColor(run.state),
+                  flexShrink: 0,
+                  animation: running ? 'pulse-dot 1.5s ease-in-out infinite' : 'none',
+                }} />
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{
+                    display: 'block',
+                    fontSize: 'var(--font-size-small)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {truncate(run.prompt_preview || '(no prompt)', 40)}
+                  </span>
+                  <span style={{
+                    display: 'block',
+                    marginTop: 1,
+                    fontSize: 'var(--font-size-micro)',
+                    color: 'var(--text-muted)',
+                  }}>
+                    {stateLabel(run.state)}
+                    {run.modified_file_count > 0 ? ` · ${run.modified_file_count} files` : ''}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
+
+const sectionHeadStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '12px 14px 6px',
+  fontSize: 'var(--font-size-micro)',
+  fontWeight: 600,
+  letterSpacing: '0.09em',
+  textTransform: 'uppercase',
+  color: 'var(--text-secondary)',
+};
+
+const countPillStyle: React.CSSProperties = {
+  minWidth: 18,
+  height: 16,
+  padding: '0 6px',
+  borderRadius: 'var(--radius-pill)',
+  background: 'var(--tint-active)',
+  color: 'var(--text-secondary)',
+  fontSize: 'var(--font-size-micro)',
+  fontWeight: 600,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};

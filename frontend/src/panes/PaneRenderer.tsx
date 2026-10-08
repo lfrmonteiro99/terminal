@@ -5,19 +5,7 @@ import { Columns2, Rows2, X } from 'lucide-react';
 import type { PaneLayout } from '../domain/pane/types';
 import { isSingle, isSplit, collectPanes, updatePaneLabel } from '../domain/pane/types';
 import { getPane } from './registry';
-
-const PANE_LABELS: Record<string, string> = {
-  Terminal: 'Terminal',
-  AiRun: 'AI Run',
-  GitStatus: 'Git Status',
-  GitHistory: 'Git History',
-  Browser: 'Browser',
-  Diff: 'Diff',
-  FileExplorer: 'Explorer',
-  FileViewer: 'File',
-  Search: 'Search',
-  Empty: 'New Pane',
-};
+import { PANE_LABELS } from './labels';
 
 // --- PaneHeader ---
 
@@ -357,6 +345,8 @@ interface PaneRendererProps {
   workspaceId: string;
   focusedPaneId: string | null;
   zoomedPaneId?: string | null;
+  /** Phone form: one pane fills the surface; the split tree is not drawn. */
+  mobile?: boolean;
   onFocusPane: (id: string) => void;
   onLayoutChange?: (layout: PaneLayout) => void;
   onSplitPane?: (paneId: string, direction: 'Horizontal' | 'Vertical') => void;
@@ -368,6 +358,7 @@ export function PaneRenderer({
   workspaceId,
   focusedPaneId,
   zoomedPaneId,
+  mobile = false,
   onFocusPane,
   onLayoutChange,
   onSplitPane,
@@ -399,7 +390,24 @@ export function PaneRenderer({
   const rects = useMemo(() => computePaneRects(layout), [layout]);
 
   // When a pane is zoomed give it the full rect; collapse others to zero-size
+  //
+  // On a phone the split tree is never drawn: the focused pane takes the whole
+  // surface and the rest collapse to zero. They stay mounted (hidden ones get
+  // `display: none` below) so terminals and run buffers survive the switch —
+  // this reuses the zoom mechanism exactly, only the target differs.
   const displayRects = useMemo(() => {
+    if (mobile) {
+      const target = focusedPaneId ?? allPanes[0]?.id ?? null;
+      const single = new Map<string, Rect>();
+      for (const [id] of rects) {
+        single.set(
+          id,
+          id === target ? { x: 0, y: 0, w: 1, h: 1 } : { x: 0, y: 0, w: 0, h: 0 },
+        );
+      }
+      return single;
+    }
+
     if (!zoomedPaneId) return rects;
     const zoomed = new Map<string, Rect>();
     for (const [id] of rects) {
@@ -411,7 +419,7 @@ export function PaneRenderer({
       );
     }
     return zoomed;
-  }, [rects, zoomedPaneId]);
+  }, [rects, zoomedPaneId, mobile, focusedPaneId, allPanes]);
 
   return (
     <div
@@ -429,6 +437,9 @@ export function PaneRenderer({
         return (
           <div
             key={pane.id}
+            data-pane-id={pane.id}
+            data-pane-kind={pane.kind}
+            data-pane-visible={hidden ? 'false' : 'true'}
             style={{
               position: 'absolute',
               left: `${rect.x * 100}%`,
@@ -439,9 +450,11 @@ export function PaneRenderer({
               flexDirection: 'column',
               overflow: 'hidden',
               boxSizing: 'border-box',
-              // 3 px border on right + bottom for visual separation between panes
-              borderRight: '3px solid var(--border-default, #333)',
-              borderBottom: '3px solid var(--border-default, #333)',
+              // 3 px border on right + bottom for visual separation between
+              // panes. On a phone there is a single pane, so a border would be
+              // a stray frame against the device edge.
+              borderRight: mobile ? 'none' : '3px solid var(--border-default, #333)',
+              borderBottom: mobile ? 'none' : '3px solid var(--border-default, #333)',
             }}
             onClick={() => onFocusPane(pane.id)}
           >
@@ -451,8 +464,8 @@ export function PaneRenderer({
               focused={focused}
               paneIndex={index + 1}
               canClose={allPanes.length > 1}
-              onSplitH={() => onSplitPane?.(pane.id, 'Horizontal')}
-              onSplitV={() => onSplitPane?.(pane.id, 'Vertical')}
+              onSplitH={mobile ? undefined : () => onSplitPane?.(pane.id, 'Horizontal')}
+              onSplitV={mobile ? undefined : () => onSplitPane?.(pane.id, 'Vertical')}
               onClose={() => onClosePane?.(pane.id)}
               onRename={(newLabel) => {
                 onLayoutChange?.(updatePaneLabel(layout, pane.id, newLabel));
@@ -482,8 +495,9 @@ export function PaneRenderer({
         );
       })}
 
-      {/* Interactive splitter overlays for drag-to-resize */}
-      {!zoomedPaneId && computeSplitters(layout).map((sp, i) => (
+      {/* Interactive splitter overlays for drag-to-resize. Not on a phone —
+          there is nothing to resize when a single pane owns the surface. */}
+      {!zoomedPaneId && !mobile && computeSplitters(layout).map((sp, i) => (
         <div
           key={`splitter-${i}`}
           className="pane-splitter"

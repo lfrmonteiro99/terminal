@@ -131,7 +131,7 @@ const buttonRowStyle: React.CSSProperties = {
 
 const primaryButtonStyle: React.CSSProperties = {
   backgroundColor: 'var(--accent-primary)',
-  color: 'var(--bg-base)',
+  color: 'var(--accent-fg)',
   fontWeight: 'bold',
   padding: '10px 20px',
   borderRadius: 4,
@@ -144,7 +144,10 @@ const primaryButtonStyle: React.CSSProperties = {
 const secondaryButtonStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
   color: 'var(--text-primary)',
-  border: '1px solid var(--text-muted)',
+  // Longhands: borderColor is mutated on hover below.
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--text-muted)',
   padding: '10px 20px',
   borderRadius: 4,
   cursor: 'pointer',

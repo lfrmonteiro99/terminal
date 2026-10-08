@@ -182,12 +182,31 @@ fn append_agent_args(args: &mut Vec<String>, agent: Option<&Agent>) {
 /// to the prompt as an explicit preamble — the only lever hermes exposes.
 fn hermes_args_for(prompt: &str, agent: Option<&Agent>) -> Vec<String> {
     let mut args = Vec::new();
+    // Profile first: `-p` is Hermes' pre-argparse profile flag, and it re-homes
+    // the child onto that profile's config (model set, providers, skills,
+    // memory). It must not be mistaken for a flag of the subcommand.
+    if let Some(profile) = agent
+        .and_then(|a| a.profile.as_ref())
+        .filter(|p| !p.trim().is_empty())
+    {
+        args.push("-p".to_string());
+        args.push(profile.clone());
+    }
     if let Some(model) = agent
         .and_then(|a| a.model.as_ref())
         .filter(|m| !m.trim().is_empty())
     {
         args.push("-m".to_string());
         args.push(model.clone());
+    }
+    // `--provider` picks the inference provider (e.g. `openrouter`, `nous`).
+    // The profile already carries a default; this is the per-agent override.
+    if let Some(provider) = agent
+        .and_then(|a| a.provider.as_ref())
+        .filter(|p| !p.trim().is_empty())
+    {
+        args.push("--provider".to_string());
+        args.push(provider.clone());
     }
     args.push("-z".to_string());
     args.push(match agent {
@@ -721,6 +740,8 @@ mod tests {
             description: String::new(),
             instructions: "Check the work and report evidence.".into(),
             model: Some("claude-opus".into()),
+            provider: None,
+            profile: None,
             default_autonomy: AutonomyLevel::Autonomous,
             created_at: now,
             updated_at: now,
@@ -740,6 +761,44 @@ mod tests {
     }
 
     #[test]
+    fn claude_args_ignore_provider_and_profile() {
+        // Provider/profile are Hermes levers. Claude Code takes neither flag, so
+        // they must not leak into its argv (the UI hides them for Claude too).
+        let cfg = DaemonConfig::default();
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "claude-worker".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Claude,
+            legacy_role: None,
+            description: String::new(),
+            instructions: String::new(),
+            model: None,
+            provider: Some("openrouter".into()),
+            profile: Some("fast".into()),
+            default_autonomy: AutonomyLevel::Autonomous,
+            created_at: now,
+            updated_at: now,
+        };
+        let args = claude_args_for(
+            "hi",
+            &RunMode::Free,
+            AutonomyLevel::Autonomous,
+            &cfg,
+            false,
+            Some(&agent),
+        );
+        // `-p` here is Claude's own print flag (its value is the prompt), not a
+        // Hermes profile: the pins must not appear anywhere in the argv.
+        assert_eq!(args.first().map(String::as_str), Some("-p"));
+        assert_eq!(args.get(1).map(String::as_str), Some("hi"));
+        assert!(!args.iter().any(|a| a == "--provider"));
+        assert!(!args.iter().any(|a| a == "openrouter" || a == "fast"));
+    }
+
+    #[test]
     fn hermes_args_carry_model_and_prepend_instructions() {
         let now = chrono::Utc::now();
         let agent = Agent {
@@ -752,12 +811,18 @@ mod tests {
             description: String::new(),
             instructions: "Be adversarial.".into(),
             model: Some("anthropic/claude-sonnet-4.6".into()),
+            provider: Some("openrouter".into()),
+            profile: Some("fast".into()),
             default_autonomy: AutonomyLevel::default(),
             created_at: now,
             updated_at: now,
         };
         let args = hermes_args_for("review the diff", Some(&agent));
+        assert!(args.windows(2).any(|w| w == ["-p", "fast"]));
         assert!(args.windows(2).any(|w| w == ["-m", "anthropic/claude-sonnet-4.6"]));
+        assert!(args.windows(2).any(|w| w == ["--provider", "openrouter"]));
+        // The profile flag is pre-argparse: it must lead the invocation.
+        assert_eq!(args.first().map(String::as_str), Some("-p"));
         // hermes has no --append-system-prompt: instructions are prepended.
         let prompt = args.last().expect("prompt arg");
         assert!(prompt.starts_with("Be adversarial."), "got {prompt:?}");
@@ -785,6 +850,8 @@ mod tests {
             description: String::new(),
             instructions: "   ".into(),
             model: None,
+            provider: None,
+            profile: None,
             default_autonomy: AutonomyLevel::Autonomous,
             created_at: now,
             updated_at: now,
@@ -888,5 +955,67 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_lowercase().contains("empty"));
+    }
+
+    /// End-to-end through the real spawn path. A stub binary stands in for the
+    /// hermes CLI and echoes its own argv, so what the runner actually execs is
+    /// read back from the child's stdout: no network, no model, no quota.
+    #[tokio::test]
+    async fn hermes_spawn_forwards_profile_model_and_provider() {
+        let now = chrono::Utc::now();
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            name: "reviewer".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Hermes,
+            legacy_role: None,
+            description: String::new(),
+            instructions: String::new(),
+            model: Some("anthropic/claude-sonnet-4.6".into()),
+            provider: Some("openrouter".into()),
+            profile: Some("fast".into()),
+            default_autonomy: AutonomyLevel::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        let cfg = DaemonConfig {
+            hermes_binary: "/bin/echo".into(),
+            ..Default::default()
+        };
+        let runner = ClaudeRunner::new(cfg);
+        let (mut rx, mut child) = runner
+            .spawn(
+                Uuid::new_v4(),
+                "hello",
+                &RunMode::Free,
+                AutonomyLevel::Autonomous,
+                Some(&agent),
+                Path::new("/tmp"),
+            )
+            .expect("spawn");
+
+        let mut lines: Vec<String> = Vec::new();
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await;
+            match next {
+                Ok(Some(RunnerEvent::StdoutLine(line))) => lines.push(line),
+                Ok(Some(RunnerEvent::ResultSeen)) | Ok(None) => break,
+                Ok(Some(_)) => {}
+                Err(_) => panic!("timed out waiting for the stub to finish"),
+            }
+        }
+        let _ = child.wait();
+        let argv = lines.join(" ");
+        assert!(argv.contains("-p fast"), "profile missing from argv: {argv}");
+        assert!(
+            argv.contains("-m anthropic/claude-sonnet-4.6"),
+            "model missing from argv: {argv}"
+        );
+        assert!(
+            argv.contains("--provider openrouter"),
+            "provider missing from argv: {argv}"
+        );
+        assert!(argv.trim_end().ends_with("hello"), "prompt missing: {argv}");
     }
 }

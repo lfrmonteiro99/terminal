@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch
 import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
+import type { SidebarView } from '../types/sidebar';
 
 // --- State ---
 
@@ -29,7 +30,7 @@ export interface AppState {
   dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string } | null;
   stashDrawerOpen: boolean;
   // Sidebar layout
-  activeSidebarView: 'explorer' | 'changes' | 'git' | 'agents';
+  activeSidebarView: SidebarView;
   sidebarCollapsed: boolean;
   /** Agent registry last reported by the daemon. Consumed by AgentsView. */
   agents: Map<string, AgentSummary>;
@@ -101,7 +102,7 @@ const initialState: AppState = {
   stashDiffs: new Map(),
   dirtyWarning: null,
   stashDrawerOpen: false,
-  activeSidebarView: 'changes',
+  activeSidebarView: 'overview',
   sidebarCollapsed: false,
   agents: new Map(),
   roles: new Map(),

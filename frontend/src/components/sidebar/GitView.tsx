@@ -51,7 +51,10 @@ const textareaBaseStyle: React.CSSProperties = {
   resize: 'vertical',
   backgroundColor: 'var(--bg-base)',
   color: 'var(--text-primary)',
-  border: '1px solid var(--border-default)',
+  // Longhands: callers spread a `borderColor` override on top of this object.
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--border-default)',
   borderRadius: 3,
   fontSize: 11,
   fontFamily: 'monospace',

@@ -34,6 +34,8 @@ impl AgentDispatcher {
                 description,
                 instructions,
                 model,
+                provider,
+                profile,
                 default_autonomy,
             } => {
                 self.create(
@@ -44,6 +46,8 @@ impl AgentDispatcher {
                     description,
                     instructions,
                     model,
+                    provider,
+                    profile,
                     default_autonomy,
                     reply_tx,
                 )
@@ -58,6 +62,8 @@ impl AgentDispatcher {
                 description,
                 instructions,
                 model,
+                provider,
+                profile,
                 default_autonomy,
             } => {
                 self.update(
@@ -69,6 +75,8 @@ impl AgentDispatcher {
                     description,
                     instructions,
                     model,
+                    provider,
+                    profile,
                     default_autonomy,
                     reply_tx,
                 )
@@ -154,6 +162,8 @@ impl AgentDispatcher {
         description: String,
         instructions: String,
         model: Option<String>,
+        provider: Option<String>,
+        profile: Option<String>,
         default_autonomy: terminal_core::models::AutonomyLevel,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
@@ -181,6 +191,8 @@ impl AgentDispatcher {
             description,
             instructions,
             model: normalize_model(model),
+            provider: normalize_model(provider),
+            profile: normalize_model(profile),
             default_autonomy,
             created_at: now,
             updated_at: now,
@@ -246,6 +258,8 @@ impl AgentDispatcher {
         description: Option<String>,
         instructions: Option<String>,
         model: Option<String>,
+        provider: Option<String>,
+        profile: Option<String>,
         default_autonomy: Option<terminal_core::models::AutonomyLevel>,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
@@ -321,6 +335,12 @@ impl AgentDispatcher {
         if let Some(model) = model {
             agent.model = normalize_model(Some(model));
         }
+        if let Some(provider) = provider {
+            agent.provider = normalize_model(Some(provider));
+        }
+        if let Some(profile) = profile {
+            agent.profile = normalize_model(Some(profile));
+        }
         if let Some(default_autonomy) = default_autonomy {
             agent.default_autonomy = default_autonomy;
         }
@@ -369,8 +389,8 @@ impl AgentDispatcher {
     }
 }
 
-/// Treat an empty/whitespace model string as "clear the pin" rather than a
-/// literal empty `--model`.
+/// Treat an empty/whitespace string as "clear the pin" rather than a literal
+/// empty flag value. Shared by the model, provider and profile pins.
 fn normalize_model(model: Option<String>) -> Option<String> {
     model.and_then(|m| {
         let m = m.trim().to_string();
@@ -432,6 +452,8 @@ mod tests {
                 description: "drafts a plan".into(),
                 instructions: "You produce a plan only.".into(),
                 model: Some("claude-sonnet".into()),
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::ReviewPlan,
             },
             tx.clone(),
@@ -475,6 +497,8 @@ mod tests {
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::default(),
             },
             tx,
@@ -505,6 +529,8 @@ mod tests {
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::default(),
             },
             tx,
@@ -532,6 +558,8 @@ mod tests {
                 description: String::new(),
                 instructions: "old mission".into(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::Autonomous,
             },
             tx.clone(),
@@ -552,6 +580,8 @@ mod tests {
                 description: None,
                 instructions: Some("new mission".into()),
                 model: Some("claude-opus".into()),
+                provider: None,
+                profile: None,
                 default_autonomy: None,
             },
             tx,
@@ -577,6 +607,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_and_profile_pins_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let d = make_seeded_dispatcher(&tmp).await;
+        let (tx, mut rx) = mpsc::channel(8);
+
+        d.handle(
+            AppCommand::CreateAgent {
+                name: "hermes-worker".into(),
+                role_id: None,
+                personality_id: None,
+                runner: Runner::Hermes,
+                description: String::new(),
+                instructions: String::new(),
+                model: Some("anthropic/claude-sonnet-4.6".into()),
+                provider: Some("openrouter".into()),
+                profile: Some("fast".into()),
+                default_autonomy: AutonomyLevel::default(),
+            },
+            tx.clone(),
+        )
+        .await;
+
+        let id = match recv(&mut rx).await {
+            AppEvent::AgentCreated { agent } => {
+                assert_eq!(agent.provider.as_deref(), Some("openrouter"));
+                assert_eq!(agent.profile.as_deref(), Some("fast"));
+                agent.id
+            }
+            other => panic!("expected AgentCreated, got {other:?}"),
+        };
+
+        // An empty string clears the pin; absent leaves it alone.
+        d.handle(
+            AppCommand::UpdateAgent {
+                agent_id: id,
+                name: None,
+                role_id: None,
+                personality_id: None,
+                runner: None,
+                description: None,
+                instructions: None,
+                model: None,
+                provider: Some(String::new()),
+                profile: None,
+                default_autonomy: None,
+            },
+            tx,
+        )
+        .await;
+
+        match recv(&mut rx).await {
+            AppEvent::AgentUpdated { agent } => {
+                assert_eq!(agent.provider, None, "empty provider must clear the pin");
+                assert_eq!(
+                    agent.profile.as_deref(),
+                    Some("fast"),
+                    "absent profile must be untouched"
+                );
+            }
+            other => panic!("expected AgentUpdated, got {other:?}"),
+        }
+
+        let loaded = d.ctx.persistence.load_agent(id).unwrap().unwrap();
+        assert_eq!(loaded.provider, None);
+        assert_eq!(loaded.profile.as_deref(), Some("fast"));
+    }
+
+    #[tokio::test]
     async fn update_can_clear_a_reference_with_an_empty_string() {
         let tmp = TempDir::new().unwrap();
         let d = make_seeded_dispatcher(&tmp).await;
@@ -591,6 +689,8 @@ mod tests {
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::default(),
             },
             tx.clone(),
@@ -611,6 +711,8 @@ mod tests {
                 description: None,
                 instructions: None,
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: None,
             },
             tx,
@@ -646,6 +748,8 @@ mod tests {
                 description: None,
                 instructions: None,
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: None,
             },
             tx,
@@ -672,6 +776,8 @@ mod tests {
                 description: String::new(),
                 instructions: String::new(),
                 model: None,
+                provider: None,
+                profile: None,
                 default_autonomy: AutonomyLevel::default(),
             },
             tx,

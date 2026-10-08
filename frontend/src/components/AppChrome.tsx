@@ -1,69 +1,59 @@
-// AppChrome — single horizontal command bar.
-// Replaces the VS Code layout of (title bar + vertical activity rail + editor tabs)
-// with one band: identity · workspace selector · view switcher · layout · status.
+// TopBar — page header for the active view.
+//
+// Navigation lives in the rail; this band answers only three questions:
+// where am I (breadcrumb + title), what is the state of this view (meta chips),
+// and what can I do here (contextual primary action, layout, command palette).
 
 import { useState, useRef, useEffect } from 'react';
 import {
-  FolderTree, FileDiff, GitBranch, Users, TerminalSquare, Bot, Globe,
-  ChevronDown, Plus, X, Check,
+  LayoutDashboard, FolderTree, FileDiff, GitBranch, Users, GitFork,
+  ChevronDown, ChevronRight, TerminalSquare, Bot, Globe, RefreshCw,
+  SlidersHorizontal, Menu,
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
+import type { SidebarView } from '../types/sidebar';
 
-type SidebarView = 'explorer' | 'changes' | 'git' | 'agents';
+type View = SidebarView;
 
-const VIEWS: { view: SidebarView; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
-  { view: 'explorer', label: 'Files', Icon: FolderTree },
-  { view: 'changes', label: 'Changes', Icon: FileDiff },
-  { view: 'git', label: 'Git', Icon: GitBranch },
-  { view: 'agents', label: 'Agents', Icon: Users },
-];
+type ChromeIcon = React.ComponentType<{ size?: number; strokeWidth?: number; style?: React.CSSProperties }>;
 
-const LAYOUTS: { preset: string; label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }> }[] = [
-  { preset: 'terminal', label: 'Terminal', Icon: TerminalSquare },
+const VIEW_META: Record<View, { label: string; Icon: ChromeIcon }> = {
+  overview: { label: 'Overview', Icon: LayoutDashboard },
+  explorer: { label: 'Files', Icon: FolderTree },
+  changes: { label: 'Changes', Icon: FileDiff },
+  git: { label: 'Git', Icon: GitBranch },
+  agents: { label: 'Agents', Icon: Users },
+  settings: { label: 'Settings', Icon: SlidersHorizontal },
+};
+
+const LAYOUTS: { preset: string; label: string; Icon: ChromeIcon }[] = [
+  { preset: 'terminal', label: 'Terminal only', Icon: TerminalSquare },
   { preset: 'ai', label: 'AI session', Icon: Bot },
-  { preset: 'browser', label: 'Browser', Icon: Globe },
+  { preset: 'git', label: 'Git review', Icon: GitFork },
+  { preset: 'browser', label: 'Browser + terminal', Icon: Globe },
 ];
 
 interface AppChromeProps {
   onLayoutPreset?: (preset: string) => void;
+  /** Phone form: collapse to a hamburger + title and drop the desktop controls. */
+  mobile?: boolean;
+  /** Opens the off-canvas navigation drawer (mobile only). */
+  onOpenDrawer?: () => void;
+  /** Replaces the view title — the phone names the focused pane while working. */
+  titleOverride?: string;
 }
 
-/** The app mark — a bracketed prompt cursor, mono-native, no gradient clip. */
-function Mark() {
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 22,
-        height: 22,
-        borderRadius: 6,
-        border: '1px solid var(--accent-primary)',
-        color: 'var(--accent-primary)',
-        backgroundColor: 'var(--accent-primary-08)',
-        fontFamily: 'var(--font-mono)',
-        fontSize: 13,
-        fontWeight: 700,
-        lineHeight: 1,
-        userSelect: 'none',
-      }}
-    >
-      ▸
-    </span>
-  );
+function projectName(root: string): string {
+  return root.split(/[/\\]/).filter(Boolean).pop() ?? root;
 }
 
-export function AppChrome({ onLayoutPreset }: AppChromeProps) {
+export function AppChrome({ onLayoutPreset, mobile = false, onOpenDrawer, titleOverride }: AppChromeProps) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
 
-  const [menu, setMenu] = useState<null | 'workspace' | 'layout'>(null);
-  const [addingSession, setAddingSession] = useState(false);
-  const [newPath, setNewPath] = useState('');
+  const [menu, setMenu] = useState<null | 'layout'>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,6 +65,39 @@ export function AppChrome({ onLayoutPreset }: AppChromeProps) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, [menu]);
 
+  const view = state.activeSidebarView as View;
+  const meta = VIEW_META[view] ?? VIEW_META.overview;
+  const title = titleOverride ?? meta.label;
+  const active = state.activeSession ? state.sessions.get(state.activeSession) : null;
+  const repo = state.repoStatus;
+  const dirtyTotal = (repo?.staged_count ?? 0) + (repo?.unstaged_count ?? 0);
+
+  const refresh = () => {
+    switch (view) {
+      case 'explorer':
+        send({ type: 'ListDirectory', path: '.' });
+        break;
+      case 'changes':
+        send({ type: 'GetRepoStatus' });
+        send({ type: 'GetChangedFiles', mode: 'working' });
+        break;
+      case 'git':
+        send({ type: 'GetRepoStatus' });
+        send({ type: 'GetCommitHistory', limit: 20 });
+        send({ type: 'ListBranches' });
+        break;
+      case 'agents':
+        send({ type: 'ListAgents' });
+        send({ type: 'ListCatalog' });
+        break;
+      default:
+        send({ type: 'GetRepoStatus' });
+        send({ type: 'GetChangedFiles', mode: 'working' });
+        send({ type: 'GetCommitHistory', limit: 20 });
+        if (state.activeSession) send({ type: 'ListRuns', session_id: state.activeSession });
+    }
+  };
+
   const connectionStatus = state.connection.status;
   const statusColor =
     connectionStatus === 'connected'
@@ -83,283 +106,231 @@ export function AppChrome({ onLayoutPreset }: AppChromeProps) {
         ? 'var(--accent-warn)'
         : 'var(--accent-error)';
 
-  const sessions = Array.from(state.sessions.values());
-  const active = state.activeSession ? state.sessions.get(state.activeSession) : null;
-  const projectName = (root: string) => root.split(/[/\\]/).filter(Boolean).pop() ?? root;
-
-  const activeView = state.sidebarCollapsed ? null : state.activeSidebarView;
-
-  const handleNewSession = () => {
-    const path = newPath.trim();
-    if (!path) return;
-    send({ type: 'StartSession', project_root: path });
-    setNewPath('');
-    setAddingSession(false);
-    setMenu(null);
-  };
-
-  const handleCloseSession = (sessionId: string) => {
-    send({ type: 'EndSession', session_id: sessionId });
-    if (sessionId === state.activeSession) {
-      const remaining = sessions.filter(s => s.id !== sessionId);
-      if (remaining.length > 0) {
-        dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: remaining[0].id });
-      }
-    }
-  };
-
-  const chipStyle: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 26,
-    padding: '0 8px',
-    border: '1px solid var(--border-default)',
-    borderRadius: 6,
-    background: 'transparent',
-    color: 'var(--text-secondary)',
-    cursor: 'pointer',
-    fontFamily: 'var(--font-display)',
-    fontSize: 12,
-    whiteSpace: 'nowrap',
-    transition: 'color 140ms var(--ease-out-expo), border-color 140ms var(--ease-out-expo)',
-  };
-
-  const popoverStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: 'calc(100% + 6px)',
-    left: 0,
-    minWidth: 260,
-    background: 'var(--bg-overlay)',
-    border: '1px solid var(--border-default)',
-    borderRadius: 8,
-    boxShadow: 'var(--shadow-overlay)',
-    padding: 6,
-    zIndex: 50,
-    fontFamily: 'var(--font-display)',
-    fontSize: 12,
-  };
-
   return (
     <div
       ref={barRef}
       style={{
         height: 'var(--chrome-height)',
         backgroundColor: 'var(--bg-surface)',
-        borderBottom: '1px solid var(--border-default)',
+        borderBottom: '1px solid var(--tint-border)',
         display: 'flex',
         alignItems: 'center',
-        paddingLeft: 12,
+        paddingLeft: 16,
         paddingRight: 12,
         gap: 10,
         flexShrink: 0,
         position: 'relative',
         zIndex: 40,
+        fontFamily: 'var(--font-display)',
       }}
     >
-      {/* Identity */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 4 }}>
-        <Mark />
-        <span
+      {/* Drawer trigger (mobile only) */}
+      {mobile && (
+        <button
+          onClick={onOpenDrawer}
+          aria-label="Open navigation"
+          title="Navigation"
           style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 600,
-            fontSize: 13,
-            letterSpacing: '-0.005em',
-            color: 'var(--text-primary)',
-            whiteSpace: 'nowrap',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 34, height: 34, flexShrink: 0,
+            background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)',
+            color: 'var(--text-secondary)', cursor: 'pointer', padding: 0,
           }}
         >
-          Engine
+          <Menu size={18} strokeWidth={1.9} />
+        </button>
+      )}
+
+      {/* Breadcrumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+        {/* The workspace switcher doubles as the Overview link on desktop; on a
+            phone the drawer owns both jobs, so the bar keeps only the title. */}
+        {!mobile && (
+          <>
+            <button
+              onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'overview' })}
+              title={active?.project_root ?? 'No workspace'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 7,
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: 'var(--text-secondary)',
+                fontSize: 'var(--font-size-body)',
+                fontFamily: 'var(--font-display)',
+                maxWidth: 220,
+              }}
+            >
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%',
+                backgroundColor: statusColor,
+                flexShrink: 0,
+              }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {active ? projectName(active.project_root) : 'No workspace'}
+              </span>
+            </button>
+
+            <ChevronRight size={13} strokeWidth={2} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          </>
+        )}
+
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: 'var(--text-primary)', fontSize: 'var(--font-size-title)', fontWeight: 600, letterSpacing: '-0.01em', minWidth: 0 }}>
+          <meta.Icon size={15} strokeWidth={1.9} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         </span>
       </div>
 
-      {/* Workspace selector */}
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={() => setMenu(m => (m === 'workspace' ? null : 'workspace'))}
-          title={active?.project_root ?? 'No workspace'}
-          style={{
-            ...chipStyle,
-            color: 'var(--text-primary)',
-            borderColor: menu === 'workspace' ? 'var(--accent-primary)' : 'var(--border-default)',
-          }}
-        >
-          <span
-            style={{
-              width: 6, height: 6, borderRadius: '50%',
-              backgroundColor: statusColor,
-              boxShadow: connectionStatus === 'connected' ? '0 0 6px currentColor' : 'none',
-              flexShrink: 0,
-            }}
-          />
-          {active ? projectName(active.project_root) : 'No workspace'}
-          <ChevronDown size={13} strokeWidth={2} style={{ opacity: 0.6 }} />
-        </button>
-
-        {menu === 'workspace' && (
-          <div style={popoverStyle}>
-            <div style={{ padding: '4px 8px', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              Workspaces
-            </div>
-            {sessions.length === 0 && (
-              <div style={{ padding: '6px 8px', color: 'var(--text-muted)' }}>none open</div>
-            )}
-            {sessions.map(s => {
-              const isActive = s.id === state.activeSession;
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => { dispatch({ type: 'SET_ACTIVE_SESSION', sessionId: s.id }); setMenu(null); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '6px 8px', borderRadius: 5, cursor: 'pointer',
-                    color: 'var(--text-primary)',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <span style={{ width: 12, display: 'inline-flex' }}>
-                    {isActive && <Check size={12} strokeWidth={2.5} style={{ color: 'var(--accent-primary)' }} />}
-                  </span>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {projectName(s.project_root)}
-                  </span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{s.run_count} runs</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleCloseSession(s.id); }}
-                    title="Close workspace"
-                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              );
-            })}
-
-            <div style={{ height: 1, background: 'var(--border-default)', margin: '5px 4px' }} />
-
-            {addingSession ? (
-              <input
-                autoFocus
-                value={newPath}
-                onChange={e => setNewPath(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') handleNewSession();
-                  if (e.key === 'Escape') { setAddingSession(false); setNewPath(''); }
-                }}
-                placeholder="/path/to/project"
-                style={{
-                  width: '100%', backgroundColor: 'var(--bg-raised)',
-                  border: '1px solid var(--border-default)', color: 'var(--text-primary)',
-                  padding: '5px 7px', borderRadius: 5, fontFamily: 'var(--font-mono)', fontSize: 12,
-                }}
-              />
-            ) : (
-              <div
-                onClick={() => setAddingSession(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 5, cursor: 'pointer', color: 'var(--accent-primary)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <span style={{ width: 12, display: 'inline-flex' }}><Plus size={12} strokeWidth={2.5} /></span>
-                Open workspace…
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div style={{ width: 1, height: 18, background: 'var(--border-default)', flexShrink: 0 }} />
-
-      {/* View switcher — segmented, replaces the vertical activity rail */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          background: 'var(--bg-base)',
-          border: '1px solid var(--border-default)',
-          borderRadius: 7,
-          padding: 2,
-        }}
-      >
-        {VIEWS.map(({ view, label, Icon }) => {
-          const isActive = activeView === view;
-          return (
+      {/* Meta chips — desktop only; the drawer and StatusBar carry this on a phone. */}
+      {!mobile && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {repo && (
+            <span style={chipStyle} title="Current branch">
+              <GitBranch size={11} strokeWidth={2} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{repo.branch}</span>
+            </span>
+          )}
+          {dirtyTotal > 0 ? (
             <button
-              key={view}
-              title={label}
-              onClick={() => {
-                if (isActive) dispatch({ type: 'TOGGLE_SIDEBAR' });
-                else dispatch({ type: 'SET_SIDEBAR_VIEW', view });
-              }}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                height: 24, padding: '0 9px', border: 'none', borderRadius: 5, cursor: 'pointer',
-                background: isActive ? 'var(--accent-primary-15)' : 'transparent',
-                color: isActive ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: isActive ? 600 : 500,
-                transition: 'color 140ms var(--ease-out-expo), background-color 140ms var(--ease-out-expo)',
-              }}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-primary)'; }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
+              onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' })}
+              style={{ ...chipStyle, color: 'var(--accent-warn)', cursor: 'pointer' }}
+              title="Uncommitted changes"
             >
-              <Icon size={14} strokeWidth={1.9} />
-              {label}
+              {dirtyTotal} changed
             </button>
-          );
-        })}
-      </div>
+          ) : repo ? (
+            <span style={{ ...chipStyle, color: 'var(--text-muted)' }}>clean</span>
+          ) : null}
+        </div>
+      )}
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Layout presets */}
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={() => setMenu(m => (m === 'layout' ? null : 'layout'))}
-          style={{ ...chipStyle, borderColor: menu === 'layout' ? 'var(--accent-primary)' : 'var(--border-default)' }}
-          title="Layout"
-        >
-          Layout
-          <ChevronDown size={13} strokeWidth={2} style={{ opacity: 0.6 }} />
-        </button>
-        {menu === 'layout' && (
-          <div style={{ ...popoverStyle, left: 'auto', right: 0, minWidth: 180 }}>
-            {LAYOUTS.map(({ preset, label, Icon }) => (
-              <div
-                key={preset}
-                onClick={() => { onLayoutPreset?.(preset); setMenu(null); }}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 5, cursor: 'pointer', color: 'var(--text-primary)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <Icon size={14} strokeWidth={1.9} />
-                {label}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Command hint */}
-      <span
+      {/* Contextual primary action */}
+      <button
+        onClick={refresh}
+        title={`Reload ${meta.label.toLowerCase()}`}
+        aria-label={`Reload ${meta.label.toLowerCase()}`}
         style={{
-          color: 'var(--text-muted)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '2px 8px',
-          border: '1px solid var(--border-default)',
-          borderRadius: 4,
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          letterSpacing: '0.04em',
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          height: 28, padding: mobile ? 0 : '0 10px',
+          width: mobile ? 30 : undefined,
+          justifyContent: 'center',
+          // Longhands, not `border`: the hover handlers below mutate
+          // borderColor imperatively, and shorthand+longhand mixing makes React
+          // lose the colour on the next rerender.
+          borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--tint-border)',
+          borderRadius: 'var(--radius-sm)',
+          background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer',
+          fontFamily: 'var(--font-display)', fontSize: 'var(--font-size-small)', fontWeight: 550,
         }}
+        onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--border-default)'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--tint-border)'; }}
       >
-        ⌘K
-      </span>
+        <RefreshCw size={13} strokeWidth={2} />
+        {!mobile && 'Refresh'}
+      </button>
+
+      {/* Layout presets — desktop only. A phone shows one pane at a time, so
+          there is no grid to arrange; the pane switcher covers what is left. */}
+      {!mobile && (
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setMenu(m => (m === 'layout' ? null : 'layout'))}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              height: 28, padding: '0 10px',
+              border: `1px solid ${menu === 'layout' ? 'var(--accent-primary)' : 'var(--tint-border)'}`,
+              borderRadius: 'var(--radius-sm)', background: 'transparent',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              fontFamily: 'var(--font-display)', fontSize: 'var(--font-size-small)', fontWeight: 550,
+            }}
+            title="Pane layout presets"
+          >
+            Layout
+            <ChevronDown size={13} strokeWidth={2} style={{ opacity: 0.6 }} />
+          </button>
+          {menu === 'layout' && (
+            <div style={popoverStyle}>
+              {LAYOUTS.map(({ preset, label, Icon }) => (
+                <div
+                  key={preset}
+                  onClick={() => { onLayoutPreset?.(preset); setMenu(null); }}
+                  style={popoverRowStyle}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--tint-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <Icon size={14} strokeWidth={1.9} />
+                  {label}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Command palette hint — desktop only; there is no ⌘K on a phone. */}
+      {!mobile && (
+        <span
+          title="Command palette (⌘K)"
+          style={{
+            color: 'var(--text-muted)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '3px 7px',
+            border: '1px solid var(--tint-border)',
+            borderRadius: 'var(--radius-xs)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--font-size-micro)',
+            letterSpacing: '0.04em',
+          }}
+        >
+          ⌘K
+        </span>
+      )}
     </div>
   );
 }
+
+const chipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  height: 22,
+  padding: '0 8px',
+  border: '1px solid var(--tint-border)',
+  borderRadius: 'var(--radius-pill)',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-display)',
+  fontSize: 'var(--font-size-micro)',
+  whiteSpace: 'nowrap',
+};
+
+const popoverStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 6px)',
+  right: 0,
+  minWidth: 190,
+  background: 'var(--bg-overlay)',
+  border: '1px solid var(--border-default)',
+  borderRadius: 'var(--radius-md)',
+  boxShadow: 'var(--shadow-overlay)',
+  padding: 6,
+  zIndex: 50,
+  fontFamily: 'var(--font-display)',
+  fontSize: 'var(--font-size-small)',
+};
+
+const popoverRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '7px 9px',
+  borderRadius: 'var(--radius-xs)',
+  cursor: 'pointer',
+  color: 'var(--text-primary)',
+};

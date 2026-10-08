@@ -2639,6 +2639,8 @@ mod tests {
             description: String::new(),
             instructions: String::new(),
             model: None,
+            provider: None,
+            profile: None,
             default_autonomy,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

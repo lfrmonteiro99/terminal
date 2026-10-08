@@ -259,7 +259,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
               style={{
                 padding: '8px 14px',
                 background: 'var(--accent-primary)',
-                color: 'var(--bg-base)',
+                color: 'var(--accent-fg)',
                 border: 'none',
                 borderRadius: 6,
                 cursor: 'pointer',

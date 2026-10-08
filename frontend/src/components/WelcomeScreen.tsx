@@ -394,7 +394,7 @@ const styles: Record<string, React.CSSProperties> = {
   openBtn: {
     padding: '6px 14px',
     background: 'var(--accent-primary)',
-    color: 'var(--bg-base)',
+    color: 'var(--accent-fg)',
     border: 'none',
     borderRadius: 5,
     cursor: 'pointer',
@@ -432,7 +432,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '9px 12px',
     background: 'var(--bg-raised)',
     color: 'var(--text-primary)',
-    border: '1px solid var(--border-default)',
+    // Longhands: pathInputFocused adds a borderColor override below.
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'var(--border-default)',
     borderRadius: 6,
     fontFamily: 'var(--font-mono)',
     fontSize: 13,
@@ -460,7 +463,7 @@ const styles: Record<string, React.CSSProperties> = {
   startBtn: {
     padding: '8px 20px',
     background: 'var(--accent-primary)',
-    color: 'var(--bg-base)',
+    color: 'var(--accent-fg)',
     border: 'none',
     borderRadius: 6,
     cursor: 'pointer',

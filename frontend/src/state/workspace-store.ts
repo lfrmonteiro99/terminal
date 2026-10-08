@@ -19,6 +19,7 @@ import type {
   TerminalSessionSummary,
   ToolCall,
 } from '../types/protocol';
+import type { SidebarView } from '../types/sidebar';
 
 export interface SearchResult {
   query: string;
@@ -71,7 +72,7 @@ export interface WorkspaceStore {
   stashDrawerOpen: boolean;
 
   // Sidebar layout
-  activeSidebarView: 'explorer' | 'changes' | 'git' | 'agents';
+  activeSidebarView: SidebarView;
   sidebarCollapsed: boolean;
 
   // Content state
@@ -130,7 +131,7 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     dirtyWarning: null,
     dirtyState: null,
     stashDrawerOpen: false,
-    activeSidebarView: 'changes',
+    activeSidebarView: 'overview',
     sidebarCollapsed: false,
     changesContext: { mode: 'working' },
     changedFiles: null,

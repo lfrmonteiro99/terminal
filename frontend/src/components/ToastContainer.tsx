@@ -136,7 +136,7 @@ export function ToastContainer() {
               alignSelf: 'flex-start',
               padding: '4px 12px',
               backgroundColor: 'var(--accent-primary)',
-              color: 'var(--bg-base)',
+              color: 'var(--accent-fg)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',
