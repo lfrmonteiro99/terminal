@@ -273,6 +273,53 @@ fn hermes_args_for(prompt: &str, agent: Option<&Agent>, autonomy: AutonomyLevel)
     args
 }
 
+/// Collapses consecutive identical stderr lines into one with a count.
+///
+/// A child that spawns many short-lived processes emits the same diagnostic
+/// once per process: a real run produced 75 copies of one provider-plugin
+/// warning, and 9 copies inside a run with a single tool call. Those lines are
+/// diagnostics, not output, so the flood buries the run without adding a fact.
+/// Folding them keeps the fact visible — with the count that says how often it
+/// happened — instead of hiding it or repeating it.
+///
+/// Only *consecutive* duplicates collapse: an identical line separated by other
+/// output is a fresh occurrence and is emitted again.
+#[derive(Default)]
+struct StderrCollapser {
+    pending: Option<(String, u32)>,
+}
+
+impl StderrCollapser {
+    /// Fold `line` in. Returns the text to emit, if that ends a run of
+    /// identical lines (so emission lags by one line until the run breaks).
+    fn push(&mut self, line: String) -> Option<String> {
+        match &mut self.pending {
+            Some((prev, count)) if *prev == line => {
+                *count += 1;
+                None
+            }
+            _ => {
+                let out = self.pending.take().map(Self::render);
+                self.pending = Some((line, 1));
+                out
+            }
+        }
+    }
+
+    /// Emit whatever is still held — the stream ended.
+    fn flush(&mut self) -> Option<String> {
+        self.pending.take().map(Self::render)
+    }
+
+    fn render((line, count): (String, u32)) -> String {
+        if count > 1 {
+            format!("{line}   (×{count})")
+        } else {
+            line
+        }
+    }
+}
+
 /// Read a hermes `--format stream-json` run into the shared `RunnerEvent`
 /// channel. Hermes emits the same high-level shapes Claude does (`system/init`,
 /// `text` deltas, `tool_use`/`tool_result`, terminal `result`), so its parser
@@ -315,10 +362,16 @@ fn spawn_hermes_readers(
     tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
+        let mut collapse = StderrCollapser::default();
         while let Ok(Some(line)) = lines.next_line().await {
             // Hermes writes diagnostics and the `session_id:` footer to stderr.
             // Those are chrome, not output — the JSON stream carries the answer.
-            let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
+            if let Some(out) = collapse.push(line) {
+                let _ = event_tx_stderr.send(RunnerEvent::StderrLine(out)).await;
+            }
+        }
+        if let Some(out) = collapse.flush() {
+            let _ = event_tx_stderr.send(RunnerEvent::StderrLine(out)).await;
         }
     });
 }
@@ -471,10 +524,13 @@ fn spawn_stream_readers(
     tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
+        let mut collapse = StderrCollapser::default();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    let _ = event_tx_stderr.send(RunnerEvent::StderrLine(line)).await;
+                    if let Some(out) = collapse.push(line) {
+                        let _ = event_tx_stderr.send(RunnerEvent::StderrLine(out)).await;
+                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -482,6 +538,9 @@ fn spawn_stream_readers(
                     break;
                 }
             }
+        }
+        if let Some(out) = collapse.flush() {
+            let _ = event_tx_stderr.send(RunnerEvent::StderrLine(out)).await;
         }
         debug!("claude stderr reader finished for run {run_id}");
     });
@@ -748,6 +807,51 @@ pub fn output_file_path(data_dir: &Path, run_id: &Uuid) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_collapser_passes_a_lone_line_through() {
+        let mut c = StderrCollapser::default();
+        assert_eq!(c.push("one diagnostic".into()), None);
+        assert_eq!(c.flush(), Some("one diagnostic".to_string()));
+        assert_eq!(c.flush(), None, "the buffer must not re-emit");
+    }
+
+    #[test]
+    fn stderr_collapser_folds_a_flood_into_one_counted_line() {
+        // The shape a run actually produced: one warning, 75 times.
+        let mut c = StderrCollapser::default();
+        let mut emitted = Vec::new();
+        for _ in 0..75 {
+            if let Some(out) = c.push("Failed to load bundled provider plugin solstice".into()) {
+                emitted.push(out);
+            }
+        }
+        emitted.extend(c.flush());
+        assert_eq!(
+            emitted,
+            vec!["Failed to load bundled provider plugin solstice   (×75)".to_string()]
+        );
+    }
+
+    #[test]
+    fn stderr_collapser_ends_a_run_when_the_line_changes() {
+        let mut c = StderrCollapser::default();
+        assert_eq!(c.push("a".into()), None);
+        assert_eq!(c.push("a".into()), None);
+        assert_eq!(c.push("b".into()), Some("a   (×2)".to_string()));
+        assert_eq!(c.flush(), Some("b".to_string()));
+    }
+
+    #[test]
+    fn stderr_collapser_only_folds_consecutive_duplicates() {
+        // The same line separated by other output is a new occurrence, not a
+        // repeat: collapsing it would hide when something happened twice.
+        let mut c = StderrCollapser::default();
+        assert_eq!(c.push("a".into()), None);
+        assert_eq!(c.push("b".into()), Some("a".to_string()));
+        assert_eq!(c.push("a".into()), Some("b".to_string()));
+        assert_eq!(c.flush(), Some("a".to_string()));
+    }
 
     #[test]
     fn autonomous_run_modes_map_to_expected_permissions() {
