@@ -184,6 +184,29 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
             {run.state.type}
           </div>
         </div>
+        {/* The reason, not just the verdict. The daemon always carried a
+            message on a failed run; the summary rendered the word "Failed" and
+            dropped it, so a missing directory and a crashed model looked
+            identical. */}
+        {run.state.type === 'Failed' && run.state.error && (
+          <div style={{ flexBasis: '100%', minWidth: 0 }}>
+            <div style={labelStyle}>Why it failed</div>
+            <div
+              data-run-error
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: 'var(--accent-error)',
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {run.state.error}
+              {run.state.phase ? ` (phase: ${run.state.phase})` : ''}
+            </div>
+          </div>
+        )}
         {run.autonomy && (
           <div>
             <div style={labelStyle}>Mode</div>

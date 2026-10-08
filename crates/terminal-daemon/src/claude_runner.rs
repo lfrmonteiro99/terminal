@@ -607,7 +607,18 @@ impl ClaudeRunner {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("failed to spawn `{}`: {}", binary, e))?;
+            .map_err(|e| {
+                // Name the working directory: the most common spawn failure is
+                // not a missing binary but a `current_dir` that doesn't exist,
+                // and the bare OS error ("No such file or directory") points at
+                // the binary and sends the reader the wrong way.
+                format!(
+                    "failed to start `{}` in {}: {}",
+                    binary,
+                    working_dir.display(),
+                    e
+                )
+            })?;
 
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;
@@ -645,7 +656,14 @@ impl ClaudeRunner {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("failed to spawn `{}`: {}", self.config.claude_binary, e))?;
+            .map_err(|e| {
+                format!(
+                    "failed to start `{}` in {}: {}",
+                    self.config.claude_binary,
+                    working_dir.display(),
+                    e
+                )
+            })?;
 
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;

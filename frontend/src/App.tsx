@@ -29,6 +29,7 @@ import { saveSession, getSession } from './state/sessionStore';
 import { getCurrentThemeId, applyTheme } from './styles/themes';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ToastContainer } from './components/ToastContainer';
+import { ErrorBanner } from './components/ErrorBanner';
 import { SshConnectDialog } from './components/SshConnectDialog';
 import type { SshConnectConfig } from './components/SshConnectDialog';
 import { resolveDaemonWsUrl } from './core/daemon/resolveDaemonWsUrl';
@@ -634,6 +635,17 @@ function AppContent() {
           background: 'var(--bg-base)',
         }}
       >
+        {/* Daemon-level errors. Rendered here, above everything and outside the
+            activeSession branch, because the errors that matter most —
+            PROJECT_ROOT_MISSING from StartSession, a failed auth — happen when
+            there is no session yet. */}
+        {state.error && (
+          <ErrorBanner
+            message={state.error}
+            onDismiss={() => dispatch({ type: 'CLEAR_ERROR' })}
+          />
+        )}
+
         {/* Connection setup (show when disconnected, browser mode only) */}
         {!tauriMode && status === 'disconnected' && (
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>

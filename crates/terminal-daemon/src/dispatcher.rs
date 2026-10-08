@@ -329,6 +329,24 @@ impl Dispatcher {
             AppCommand::StartSession { project_root } => {
                 let session_id = Uuid::new_v4();
 
+                // Refuse a root that isn't there. A session pinned to a missing
+                // directory is a trap: it persists, shows up in "recent", and
+                // every run started from it dies at spawn with a message that
+                // blames the runner binary. Better to say no here, where the
+                // client can still show the real path in the error.
+                if !project_root.is_dir() {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "PROJECT_ROOT_MISSING".into(),
+                            message: format!(
+                                "Project directory does not exist: {}",
+                                project_root.display()
+                            ),
+                        })
+                        .await;
+                    return;
+                }
+
                 // Read initial_head from git if applicable
                 let initial_head = if crate::git_engine::is_git_repo(&project_root).await {
                     match crate::git_engine::head_oid(&project_root).await {
@@ -1771,6 +1789,25 @@ impl Dispatcher {
             return;
         }
 
+        // The project directory has to exist before anything else runs. Without
+        // this check a missing root (a renamed project, a session restored from
+        // a stale "recent" entry) only surfaced at `Command::spawn`, whose
+        // `current_dir()` failure is reported as "failed to spawn `hermes`: No
+        // such file or directory" — i.e. it blamed the binary, never the path,
+        // and the user could not tell what was actually missing.
+        if !project_root.is_dir() {
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "PROJECT_ROOT_MISSING".into(),
+                    message: format!(
+                        "Project directory does not exist: {}. It may have been renamed or moved — start a new session pointing at the current path.",
+                        project_root.display()
+                    ),
+                })
+                .await;
+            return;
+        }
+
         let run_id = Uuid::new_v4();
         let output_path = output_file_path(&self.context.config.data_dir, &run_id);
 
@@ -1977,6 +2014,14 @@ impl Dispatcher {
                     let _ =
                         crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
                 }
+                // The run is already persisted as `Preparing`; leaving it
+                // there would strand it as active forever (see
+                // `persist_run_failure`).
+                self.persist_run_failure(
+                    &run,
+                    format!("Session {} disappeared during setup", session_id),
+                    FailPhase::Preparation,
+                );
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "SESSION_NOT_FOUND".into(),
@@ -2537,9 +2582,11 @@ impl Dispatcher {
             }
             Err(e) => {
                 // Cleanup session
-                let mut sessions = self.context.sessions.lock().await;
-                if let Some(session) = sessions.get_mut(&session_id) {
-                    session.active_run = None;
+                {
+                    let mut sessions = self.context.sessions.lock().await;
+                    if let Some(session) = sessions.get_mut(&session_id) {
+                        session.active_run = None;
+                    }
                 }
                 // Concurrency entry is released automatically when
                 // `concurrency_guard` drops at end of scope.
@@ -2558,6 +2605,7 @@ impl Dispatcher {
                         }
                     }
                 }
+                self.persist_run_failure(&run, e.clone(), FailPhase::Preparation);
                 let _ = reply_tx
                     .send(AppEvent::RunFailed {
                         run_id,
@@ -2638,6 +2686,26 @@ impl Dispatcher {
             if session.active_run == Some(run_id) {
                 session.active_run = None;
             }
+        }
+    }
+
+    /// Persist a run that died between `save_run(Preparing)` and the supervisor
+    /// taking ownership.
+    ///
+    /// Every early return in that window must call this. `Preparing` is
+    /// `is_active()`, so a run left in it reads as still-running forever: the
+    /// panel shows a phase that never resolves, and the next daemon start
+    /// "recovers" it as `Daemon crashed during run` — a wrong diagnosis for a
+    /// run that failed cleanly and told the client why.
+    fn persist_run_failure(&self, run: &Run, error: String, phase: FailPhase) {
+        let failed = Run {
+            state: RunState::Failed { error, phase },
+            ended_at: Some(chrono::Utc::now()),
+            last_modified: chrono::Utc::now(),
+            ..run.clone()
+        };
+        if let Err(e) = self.context.persistence.save_run(&failed) {
+            warn!("failed to persist failed run {}: {}", run.id, e);
         }
     }
 
