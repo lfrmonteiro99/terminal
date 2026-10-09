@@ -126,7 +126,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version ^2 --locked
+        # Pinned to the 2.11 series: tauri-cli 2.12+ requires rustc 1.90 while
+        # this workflow installs 1.88. `^2` silently resolved to 2.12.1 and
+        # broke the release on the next push to main. 2.11.5 is the last of its
+        # series (all of 2.11 requires only 1.77.2), so `~2.11` is deterministic.
+        run: cargo install tauri-cli --version ~2.11 --locked
 
       - name: Install frontend dependencies
         working-directory: frontend
