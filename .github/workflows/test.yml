@@ -17,7 +17,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88
-          components: clippy
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -35,9 +34,53 @@ jobs:
       - name: Run Rust tests
         run: cargo test -p terminal-core -p terminal-daemon
 
-      # Clippy is a merge gate, not a release gate. It used to live only in
-      # release.yml (push to main), so a green PR could still kill the release:
-      # warnings are denied there and nothing checked them before the merge.
+  # Clippy is a merge gate, not a release gate. It used to run only in
+  # release.yml, on push to main: a pull request could not fail on a clippy
+  # warning, everything went green, and the merge then turned main red and
+  # killed the release -- after the point where anyone could still act on it.
+  #
+  # It gets its own job because `--workspace` includes the Tauri shell, which
+  # needs GTK/WebKit present or the build dies in gio-sys' pkg-config probe
+  # rather than on a lint. The rust-tests job installs nothing but git, so the
+  # system libraries come along here, mirroring the release job that has always
+  # built this workspace.
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            pkg-config
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88
+          components: clippy
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # Same invocation as release.yml, so the merge gate and the release gate
+      # cannot disagree about what a warning is.
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::uninlined_format_args
 
