@@ -80,7 +80,10 @@ export function GitHistoryPane({ pane: _pane }: PaneProps) {
             width: 22,
             height: 22,
             background: 'transparent',
-            border: '1px solid var(--border-default)',
+            // Longhands: borderColor is mutated on hover below.
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: 'var(--border-default)',
             color: 'var(--text-muted)',
             borderRadius: 4,
             cursor: 'pointer',

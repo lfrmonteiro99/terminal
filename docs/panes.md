@@ -131,6 +131,15 @@ Do **not** create a README inside `frontend/src/panes/<kind>/`. The checklist ab
 
 Panes should not draw their own outer border or title bar. Let the chrome handle it.
 
+## DOM identity
+
+`PaneRenderer` is the only place that stamps pane identity on the DOM, on the wrapper it renders around each pane:
+
+- `data-pane-id` — the pane's id, the handle tests and the UAT use to find a pane
+- `data-pane-kind` — the `PaneKind` from the layout, capitalised (`Terminal`, `GitStatus`, `FileExplorer`, …)
+
+The invariant is **one pane, one `data-pane-kind`**. A pane component must not stamp the attribute on anything of its own: a second one lower in the tree makes `[data-pane-kind]` match the same pane twice, so any code that enumerates or counts panes (keybinding scope checks, UAT probes) reads two of something there is one of. If a test needs to find an element inside a specific pane, select it as a descendant — `[data-pane-kind="Terminal"] .xterm-screen` — rather than adding a marker that looks like pane identity.
+
 ## Related
 
 - [modes.md](modes.md) — which panes a new workspace starts with

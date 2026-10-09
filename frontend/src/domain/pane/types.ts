@@ -8,8 +8,17 @@ export type PaneKind =
   | 'FileExplorer'
   | 'Browser'
   | 'Diff'
+  | 'Changes'
   | 'FileViewer'
   | 'Search'
+  // Navigation destinations. One per rail item: the rail opens a pane of that
+  // kind rather than rendering the view inside the sidebar panel. They are
+  // client-side only — the daemon never parses a layout.
+  | 'Overview'
+  | 'Runs'
+  | 'Git'
+  | 'Agents'
+  | 'Settings'
   | 'Empty';
 
 export interface PaneDefinition {
@@ -121,6 +130,35 @@ export function updatePaneLabel(layout: PaneLayout, paneId: string, label?: stri
     };
   }
   return layout;
+}
+
+/** Replace a pane's kind in place, minting a fresh id for the new component.
+ *  Returns null when the id is not in the tree. Used by navigation: taking over
+ *  the focused slot must not leave the old pane's component mounted under a
+ *  stale id. */
+export function replacePaneKind(
+  layout: PaneLayout,
+  paneId: string,
+  kind: PaneKind,
+): { layout: PaneLayout; newPaneId: string } | null {
+  if (isSingle(layout)) {
+    if (layout.Single.id !== paneId) return null;
+    const newPaneId = nextPaneId(kind);
+    return { layout: { Single: { id: newPaneId, kind, resource_id: null } }, newPaneId };
+  }
+
+  if (isSplit(layout)) {
+    const first = replacePaneKind(layout.Split.first, paneId, kind);
+    if (first) {
+      return { layout: { Split: { ...layout.Split, first: first.layout } }, newPaneId: first.newPaneId };
+    }
+    const second = replacePaneKind(layout.Split.second, paneId, kind);
+    if (second) {
+      return { layout: { Split: { ...layout.Split, second: second.layout } }, newPaneId: second.newPaneId };
+    }
+  }
+
+  return null;
 }
 
 /** Close a pane by ID. Returns the remaining layout, or null if it was the last pane. */

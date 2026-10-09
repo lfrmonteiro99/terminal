@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Eye, Zap } from 'lucide-react';
-import { useAppState } from '../context/AppContext.tsx';
+import { useAppState, useAppDispatch } from '../context/AppContext.tsx';
+import { RunErrorNotice } from './RunErrorNotice';
 
 interface PostRunSummaryProps {
   runId: string;
@@ -93,6 +94,7 @@ const mutedButton: React.CSSProperties = {
 
 export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApprovePlan }: PostRunSummaryProps) {
   const state = useAppState();
+  const dispatch = useAppDispatch();
   const [showDiff, setShowDiff] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
@@ -112,6 +114,14 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
   const conflict = state.mergeConflict?.runId === runId ? state.mergeConflict : null;
 
   const handleShowDiff = () => {
+    // Asking for a diff of a run whose worktree is gone is a request that can
+    // only fail. Guarding it here — not just in RunsView — is what stopped a
+    // failed-cleanup run from answering NOT_FOUND and painting an app-level
+    // error banner for something the UI already knew.
+    if (!run.worktree_present) {
+      setShowDiff(true);
+      return;
+    }
     if (!cached) {
       onGetDiff(runId);
     }
@@ -184,6 +194,29 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
             {run.state.type}
           </div>
         </div>
+        {/* The reason, not just the verdict. The daemon always carried a
+            message on a failed run; the summary rendered the word "Failed" and
+            dropped it, so a missing directory and a crashed model looked
+            identical. */}
+        {run.state.type === 'Failed' && run.state.error && (
+          <div style={{ flexBasis: '100%', minWidth: 0 }}>
+            <div style={labelStyle}>Why it failed</div>
+            <div
+              data-run-error
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: 'var(--accent-error)',
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {run.state.error}
+              {run.state.phase ? ` (phase: ${run.state.phase})` : ''}
+            </div>
+          </div>
+        )}
         {run.autonomy && (
           <div>
             <div style={labelStyle}>Mode</div>
@@ -259,7 +292,7 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
               style={{
                 padding: '8px 14px',
                 background: 'var(--accent-primary)',
-                color: 'var(--bg-base)',
+                color: 'var(--accent-fg)',
                 border: 'none',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -325,9 +358,25 @@ export function PostRunSummary({ runId, onGetDiff, onMerge, onRevert, onApproveP
         </div>
       )}
 
+      {/* A failure about THIS run, from the daemon. Rendered here, in the run's
+          own pane, rather than in the app banner at the top of the window. */}
+      {state.runErrors.get(runId) && (
+        <div style={{ marginBottom: 16 }}>
+          <RunErrorNotice
+            message={state.runErrors.get(runId)!}
+            onDismiss={() => dispatch({ type: 'DISMISS_RUN_ERROR', runId })}
+          />
+        </div>
+      )}
+
       {/* Actions */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <button onClick={handleShowDiff} style={accentButton}>
+        <button
+          onClick={handleShowDiff}
+          style={run.worktree_present ? accentButton : mutedButton}
+          disabled={!run.worktree_present}
+          title={run.worktree_present ? 'Load this run’s diff' : 'The worktree is gone — there is nothing left to diff'}
+        >
           Show diff
         </button>
         {hasDiffStat && !confirmMerge && !confirmRevert && (

@@ -58,7 +58,38 @@ export type RunState =
   | { type: 'Cancelled'; reason: string };
 
 export type PauseReason = 'BlockingQuestion' | 'SupervisorIntervention' | 'PolicyViolation';
+
+/**
+ * The daemon serialises `RunState` as an externally-tagged enum — `"Running"`,
+ * `{"Completed":{"exit_code":0}}` — while this UI models it as
+ * `{ type: 'Completed', exit_code: 0 }`. Convert at the edge so no consumer
+ * (post-run summary, session strip, status dot) has to know the wire shape.
+ */
+export function normalizeRunState(raw: unknown): RunState {
+  if (typeof raw === 'string') return { type: raw } as RunState;
+  if (raw && typeof raw === 'object') {
+    const [tag, payload] = Object.entries(raw as Record<string, unknown>)[0] ?? [];
+    if (typeof tag === 'string') {
+      return (payload && typeof payload === 'object'
+        ? { type: tag, ...(payload as Record<string, unknown>) }
+        : { type: tag }) as RunState;
+    }
+  }
+  return { type: 'Preparing' } as RunState;
+}
 export type FailPhase = 'Preflight' | 'Preparation' | 'Execution' | 'Parsing' | 'Cleanup';
+
+/** Severity of a run notice — chrome shown beside a run, never inside its log. */
+export type NoticeLevel = 'Info' | 'Warning' | 'Error';
+
+/** A notice as the panel consumes it, tagged with the run it belongs to so a
+ *  late event from a previous run cannot land in the current one. */
+export interface RunNotice {
+  runId: string;
+  level: NoticeLevel;
+  message: string;
+  at: number;
+}
 export type RunMode = 'Free' | 'Guided' | 'Strict';
 
 /**
@@ -80,6 +111,29 @@ export interface RunSummary {
   ended_at: string | null;
   diff_stat: DiffStat | null;
   autonomy?: AutonomyLevel;
+  /**
+   * Session that owns the run. A project's history spans one session per
+   * `StartSession`, so a run has to be able to say where it came from.
+   */
+  session_id: string;
+  /** Branch the run's worktree lives on. Empty when the run never got that far. */
+  branch: string;
+  /** Agent that drove the run; `null` = the implicit default (Claude CLI). */
+  agent_id: string | null;
+  /**
+   * The full prompt, not `prompt_preview`. Re-running must resubmit what the
+   * user actually asked for; the preview is capped at 100 chars and would
+   * silently rewrite the request.
+   */
+  prompt: string;
+  mode: RunMode;
+  /**
+   * Whether the run's worktree still exists on disk — i.e. whether its work is
+   * still awaiting a merge or a revert. Merge and revert delete the metadata
+   * but leave the run's own state untouched, so this is the only honest way to
+   * tell reviewed work from unreviewed work.
+   */
+  worktree_present: boolean;
 }
 
 export interface RunMetrics {
@@ -194,6 +248,49 @@ export interface SshConfig {
   identity_file?: string;
 }
 
+// --- Agents ---
+
+/** Which CLI drives an agent's runs. */
+export type Runner = 'Claude' | 'Hermes';
+
+/** A reusable role: the base mission an agent inherits. Catalogue-backed, so
+ *  the list is whatever the daemon seeded plus whatever the operator added. */
+export interface Role {
+  id: string;
+  name: string;
+  instructions: string;
+  builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A reusable personality: the tone, layered on top of a role. */
+export interface Personality {
+  id: string;
+  name: string;
+  prompt: string;
+  builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  role_id: string | null;
+  personality_id: string | null;
+  runner: Runner;
+  description: string;
+  model: string | null;
+  /** Inference provider (`--provider`). Hermes runner only. */
+  provider: string | null;
+  /** Hermes profile (`-p <name>`). Hermes runner only. */
+  profile: string | null;
+  default_autonomy: AutonomyLevel;
+  instructions: string;
+  updated_at: string;
+}
+
 // --- Commands (Client -> Daemon) ---
 
 export type AppCommand =
@@ -201,11 +298,48 @@ export type AppCommand =
   | { type: 'StartSession'; project_root: string }
   | { type: 'EndSession'; session_id: string }
   | { type: 'ListSessions' }
-  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel }
+  | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel; agent_id?: string }
   | { type: 'CancelRun'; run_id: string; reason: string }
   | { type: 'GetRunStatus'; run_id: string }
-  | { type: 'ListRuns'; session_id: string }
+  | { type: 'ListRuns'; session_id: string; all_sessions?: boolean }
   | { type: 'GetRunOutput'; run_id: string; offset: number; limit: number }
+  | { type: 'ListAgents' }
+  | {
+      type: 'CreateAgent';
+      name: string;
+      role_id?: string;
+      personality_id?: string;
+      runner?: Runner;
+      description?: string;
+      instructions?: string;
+      model?: string | null;
+      /** Hermes-only: inference provider (`--provider`). */
+      provider?: string | null;
+      /** Hermes-only: profile name (`-p <name>`). */
+      profile?: string | null;
+      default_autonomy?: AutonomyLevel;
+    }
+  | {
+      type: 'UpdateAgent';
+      agent_id: string;
+      name?: string;
+      /** Empty string clears the reference; omit to leave it untouched. */
+      role_id?: string;
+      personality_id?: string;
+      runner?: Runner;
+      description?: string;
+      instructions?: string;
+      model?: string | null;
+      provider?: string | null;
+      profile?: string | null;
+      default_autonomy?: AutonomyLevel;
+    }
+  | { type: 'DeleteAgent'; agent_id: string }
+  | { type: 'ListCatalog' }
+  | { type: 'SaveRole'; role: Role }
+  | { type: 'DeleteRole'; id: string }
+  | { type: 'SavePersonality'; personality: Personality }
+  | { type: 'DeletePersonality'; id: string }
   | { type: 'GetDiff'; run_id: string }
   | { type: 'RevertRun'; run_id: string }
   | { type: 'MergeRun'; run_id: string }
@@ -218,7 +352,7 @@ export type AppCommand =
   | { type: 'PopStash'; index: number }
   | { type: 'ApplyStash'; index: number }
   | { type: 'DropStash'; index: number }
-  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string }
+  | { type: 'StashAndRun'; session_id: string; prompt: string; mode: RunMode; stash_message: string; autonomy?: AutonomyLevel; agent_id?: string }
   // Phase 3: Sidebar commands
   | { type: 'ListDirectory'; path: string }
   | { type: 'GetChangedFiles'; mode: 'working' | 'run'; run_id?: string }
@@ -282,21 +416,36 @@ export type AppEvent =
   | { type: 'RunToolResult'; run_id: string; tool_id: string; is_error: boolean; preview: string }
   | { type: 'RunMetrics'; run_id: string; num_turns: number; cost_usd: number; input_tokens: number; output_tokens: number }
   | { type: 'RunPreflightFailed'; run_id: string; reason: string; suggestion: string }
+  /** Token-level text delta. Rendered in the panel's live buffer and dropped
+   *  when the committed RunOutput for the same text arrives. */
+  | { type: 'RunOutputDelta'; run_id: string; text: string }
+  /** Run chrome (rate limits, compaction, unmodelled stream events). Never part
+   *  of the output log — the panel shows it beside the run, not inside it. */
+  | { type: 'RunNotice'; run_id: string; level: NoticeLevel; message: string }
+  /** What the supervisor is doing before any output exists (`worktree`,
+   *  `preflight`, `streaming`). This is what stops the panel looking frozen. */
+  | { type: 'RunProgress'; run_id: string; phase: string; detail: string | null }
   | { type: 'SessionStarted'; session: SessionSummary }
   | { type: 'SessionEnded'; session_id: string }
   | { type: 'SessionList'; sessions: SessionSummary[] }
   | { type: 'RunList'; session_id: string; runs: RunSummary[] }
+  | { type: 'AgentList'; agents: AgentSummary[] }
+  | { type: 'AgentCreated'; agent: AgentSummary }
+  | { type: 'AgentUpdated'; agent: AgentSummary }
+  | { type: 'AgentDeleted'; agent_id: string }
+  | { type: 'CatalogUpdated'; roles: Role[]; personalities: Personality[] }
   | { type: 'RunOutputPage'; run_id: string; offset: number; lines: string[]; has_more: boolean }
   | { type: 'StatusUpdate'; active_runs: number; session_count: number }
   | { type: 'Pong' }
   | { type: 'Error'; code: string; message: string }
+  | { type: 'RunError'; run_id: string; code: string; message: string }
   | { type: 'StashList'; stashes: StashEntry[] }
   | { type: 'StashFiles'; stash_index: number; files: FileChange[] }
   | { type: 'StashDiff'; stash_index: number; diff: string; stat: DiffStat | null }
   | { type: 'StashApplied'; index: number; had_conflicts: boolean }
   | { type: 'StashDropped'; index: number }
   | { type: 'DirtyState'; status: DirtyStatus }
-  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode }
+  | { type: 'DirtyWarning'; status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string }
   // Phase 3: Sidebar events
   | { type: 'DirectoryListing'; path: string; entries: FileTreeEntry[] }
   | { type: 'ChangedFilesList'; mode: 'working' | 'run'; run_id?: string; files: FileChange[] }

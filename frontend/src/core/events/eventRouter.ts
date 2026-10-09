@@ -30,6 +30,11 @@ const APP_LEVEL_EVENTS = new Set<AppEvent['type']>([
   'WorkspaceCreated',
   'WorkspaceClosed',
   'WorkspaceActivated',
+  'AgentList',
+  'AgentCreated',
+  'AgentUpdated',
+  'AgentDeleted',
+  'CatalogUpdated',
 ]);
 
 export class EventRouter {
@@ -95,6 +100,23 @@ export class EventRouter {
       case 'WorkspaceActivated':
         this.appDispatch({ type: 'SET_ACTIVE_WORKSPACE', workspaceId: event.workspace_id });
         break;
+      case 'AgentList':
+        this.appDispatch({ type: 'SET_AGENTS', agents: event.agents });
+        break;
+      case 'AgentCreated':
+      case 'AgentUpdated':
+        this.appDispatch({ type: 'ADD_AGENT', agent: event.agent });
+        break;
+      case 'AgentDeleted':
+        this.appDispatch({ type: 'REMOVE_AGENT', agentId: event.agent_id });
+        break;
+      case 'CatalogUpdated':
+        this.appDispatch({
+          type: 'SET_CATALOG',
+          roles: event.roles,
+          personalities: event.personalities,
+        });
+        break;
       default:
         // Should be unreachable — events in APP_LEVEL_EVENTS must be handled above.
         console.warn('[eventRouter] unhandled app-level event', event);
@@ -120,6 +142,11 @@ export class EventRouter {
       case 'WorkspaceCreated':
       case 'WorkspaceClosed':
       case 'WorkspaceActivated':
+      case 'AgentList':
+      case 'AgentCreated':
+      case 'AgentUpdated':
+      case 'AgentDeleted':
+      case 'CatalogUpdated':
         this.routeToApp(event);
         break;
 
@@ -128,8 +155,36 @@ export class EventRouter {
         dispatch({ type: 'SET_ACTIVE_RUN', runId: event.run_id });
         dispatch({ type: 'SET_RUN_STATE', runState: event.new_state });
         break;
+      case 'RunError':
+        // Intentionally ignored in this router. The failure is about one run and
+        // must render beside it — never in the app-level error slot that `Error`
+        // feeds. The running app keeps these in AppContext's `runErrors` slice
+        // (see RunErrorNotice); this router is a separate, currently unwired path.
+        break;
       case 'RunOutput':
         dispatch({ type: 'APPEND_OUTPUT', line: event.line });
+        break;
+      case 'RunOutputDelta':
+        // Live token stream: buffered for display, replaced by the committed
+        // line for the same text.
+        dispatch({ type: 'APPEND_OUTPUT_DELTA', runId: event.run_id, text: event.text });
+        break;
+      case 'RunNotice':
+        dispatch({
+          type: 'ADD_RUN_NOTICE',
+          runId: event.run_id,
+          level: event.level,
+          message: event.message,
+          at: Date.now(),
+        });
+        break;
+      case 'RunProgress':
+        dispatch({
+          type: 'SET_RUN_PHASE',
+          runId: event.run_id,
+          phase: event.phase,
+          detail: event.detail,
+        });
         break;
       case 'RunOutputPage':
         // Paginated history load: append each line in order.

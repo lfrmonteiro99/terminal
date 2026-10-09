@@ -1,4 +1,11 @@
-// Theme definitions — each theme overrides the CSS custom properties from tokens.css
+// Theme definitions — neutral palettes, applied via `data-theme` on <html>.
+//
+// The colour values below are the source of truth for `styles/themes.css`,
+// which is generated from this table. Nothing here writes inline styles at
+// runtime: that was the bug that made a light/dark toggle impossible, because
+// an inline custom property beats every stylesheet rule.
+
+import { applyThemeId, loadSavedScheme, savedAccentId, THEME_KEY } from './appearance';
 
 export interface Theme {
   id: string;
@@ -11,19 +18,19 @@ export const themes: Theme[] = [
     id: 'terminal-engine',
     name: 'Terminal Engine (signature)',
     colors: {
-      '--bg-base': '#0c0e17',
-      '--bg-surface': '#141624',
-      '--bg-raised': '#1a1d2e',
-      '--bg-overlay': '#232738',
-      '--border-default': '#2a2d3d',
-      '--border-focus': '#5fe3d9',
-      '--text-primary': '#eaecf2',
-      '--text-secondary': '#9ca0b5',
-      '--text-muted': '#616682',
-      '--accent-primary': '#5fe3d9',
-      '--accent-warn': '#ecb04a',
-      '--accent-error': '#ec6a6a',
-      '--accent-info': '#8a97f8',
+      '--bg-base': '#0c0e0d',
+      '--bg-surface': '#131615',
+      '--bg-raised': '#1a1e1c',
+      '--bg-overlay': '#232927',
+      '--border-default': '#2c3330',
+      '--border-focus': '#35d399',
+      '--text-primary': '#e7ebe9',
+      '--text-secondary': '#98a39e',
+      '--text-muted': '#5d6a64',
+      '--accent-primary': '#35d399',
+      '--accent-warn': '#f0a83c',
+      '--accent-error': '#f26a5a',
+      '--accent-info': '#6e9bf5',
     },
   },
   {
@@ -217,53 +224,46 @@ export const themes: Theme[] = [
       '--accent-info': '#6c71c4',
     },
   },
+  {
+    // Neutral counterpart of the default dark scheme. Kept in the same table so
+    // "Appearance: Light" is just a theme switch — one writer, no conflict.
+    id: 'terminal-engine-light',
+    name: 'Terminal Engine · Light',
+    colors: {
+      '--bg-base': '#f7f8f8',
+      '--bg-surface': '#ffffff',
+      '--bg-raised': '#f1f3f4',
+      '--bg-overlay': '#ffffff',
+      '--border-default': '#e3e6e7',
+      '--border-focus': '#4f46e5',
+      '--text-primary': '#14171a',
+      '--text-secondary': '#5b636b',
+      '--text-muted': '#7d858c',
+      '--accent-primary': '#4f46e5',
+      '--accent-warn': '#b45309',
+      '--accent-error': '#d1242f',
+      '--accent-info': '#0969da',
+    },
+  },
 ];
 
-const THEME_KEY = 'terminal:theme';
+export const DEFAULT_THEME_ID = 'terminal-engine';
 
-/** Convert "#rrggbb" → "r, g, b" string, usable inside rgba(var(--x), a). */
-function hexToRgbTriplet(hex: string): string {
-  const normalized = hex.trim().replace(/^#/, '');
-  if (normalized.length !== 6) return '78, 205, 196'; // fallback: default teal
-  const r = parseInt(normalized.slice(0, 2), 16);
-  const g = parseInt(normalized.slice(2, 4), 16);
-  const b = parseInt(normalized.slice(4, 6), 16);
-  if ([r, g, b].some(Number.isNaN)) return '78, 205, 196';
-  return `${r}, ${g}, ${b}`;
-}
-
-const RGB_DERIVED = [
-  ['--accent-primary', '--accent-primary-rgb'],
-  ['--accent-warn', '--accent-warn-rgb'],
-  ['--accent-error', '--accent-error-rgb'],
-  ['--accent-info', '--accent-info-rgb'],
-] as const;
-
+/**
+ * Apply a neutral palette.
+ *
+ * Colours live in themes.css (`:root[data-theme=…]`), not in inline styles —
+ * see the file header. The accent is the user's setting, so it is re-applied
+ * alongside the scheme instead of being taken from the theme.
+ */
 export function applyTheme(themeId: string): void {
-  const theme = themes.find(t => t.id === themeId);
-  if (!theme) return;
-  const root = document.documentElement;
-  for (const [prop, value] of Object.entries(theme.colors)) {
-    root.style.setProperty(prop, value);
-  }
-  // Re-derive RGB triplets so glow tokens auto-retint per theme.
-  for (const [hexVar, rgbVar] of RGB_DERIVED) {
-    const hex = theme.colors[hexVar];
-    if (hex) root.style.setProperty(rgbVar, hexToRgbTriplet(hex));
-  }
-  localStorage.setItem(THEME_KEY, themeId);
+  if (!themes.some((t) => t.id === themeId)) return;
+  applyThemeId(themeId, savedAccentId());
 }
-
-const DEFAULT_THEME_ID = 'terminal-engine';
 
 export function loadSavedTheme(): string {
-  const saved = localStorage.getItem(THEME_KEY);
-  if (saved && themes.some(t => t.id === saved)) {
-    applyTheme(saved);
-    return saved;
-  }
-  applyTheme(DEFAULT_THEME_ID);
-  return DEFAULT_THEME_ID;
+  loadSavedScheme();
+  return getCurrentThemeId();
 }
 
 export function getCurrentThemeId(): string {

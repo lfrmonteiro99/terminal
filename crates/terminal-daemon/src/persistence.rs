@@ -2,8 +2,8 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use terminal_core::models::{
-    FailPhase, RestorableTerminalSession, Run, RunState, Session, TerminalSessionMeta, Workspace,
-    WorktreeMeta,
+    Agent, FailPhase, Personality, RestorableTerminalSession, Role, Run, RunState, Session,
+    TerminalSessionMeta, Workspace, WorktreeMeta,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ pub struct Persistence {
 impl Persistence {
     /// Creates a new Persistence instance, ensuring the required subdirectories exist.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
-        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+        for sub in &["sessions", "runs", "worktrees", "terminals", "workspaces", "agents"] {
             let dir = base_dir.join(sub);
             fs::create_dir_all(&dir)?;
             #[cfg(unix)]
@@ -185,6 +185,146 @@ impl Persistence {
     }
 
     // -----------------------------------------------------------------------
+    // Agents
+    // -----------------------------------------------------------------------
+
+    pub fn save_agent(&self, agent: &Agent) -> Result<()> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", agent.id));
+        let data = serde_json::to_string_pretty(agent)?;
+        Self::atomic_write(&path, data.as_bytes())
+    }
+
+    pub fn load_agent(&self, id: Uuid) -> Result<Option<Agent>> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", id));
+        match fs::read_to_string(&path) {
+            Ok(data) => Ok(Some(serde_json::from_str(&data)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_agents(&self) -> Result<Vec<Agent>> {
+        let dir = self.base_dir.join("agents");
+        let mut agents = Vec::new();
+
+        if !dir.exists() {
+            return Ok(agents);
+        }
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<Agent>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(agent) => agents.push(agent),
+                Err(e) => {
+                    warn!("Failed to parse agent file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        agents.sort_by_key(|a| a.created_at);
+        Ok(agents)
+    }
+
+    pub fn delete_agent(&self, id: Uuid) -> Result<()> {
+        let path = self.base_dir.join("agents").join(format!("{}.json", id));
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Role / personality catalogue
+    // -----------------------------------------------------------------------
+    //
+    // Both catalogues are stored as one file per entry, keyed by the entry's id
+    // (a slug for built-ins, a UUID string for operator-created entries). The
+    // ids reach the filesystem, so they are sanitised to a conservative
+    // character set — a role named "../../etc/passwd" must not become a path.
+
+    fn catalog_path(&self, kind: &str, id: &str) -> Result<PathBuf> {
+        let safe: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if safe.is_empty() {
+            return Err(PersistenceError::NotFound(
+                "catalogue id has no safe characters".into(),
+            ));
+        }
+        Ok(self.base_dir.join(kind).join(format!("{}.json", safe)))
+    }
+
+    fn list_catalog<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Result<Vec<T>> {
+        let dir = self.base_dir.join(kind);
+        let mut out = Vec::new();
+        if !dir.exists() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<T>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(v) => out.push(v),
+                Err(e) => warn!("Failed to parse {} file {:?}: {}", kind, path, e),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save_role(&self, role: &Role) -> Result<()> {
+        fs::create_dir_all(self.base_dir.join("roles"))?;
+        let path = self.catalog_path("roles", &role.id)?;
+        Self::atomic_write(&path, serde_json::to_string_pretty(role)?.as_bytes())
+    }
+
+    pub fn list_roles(&self) -> Result<Vec<Role>> {
+        self.list_catalog("roles")
+    }
+
+    pub fn delete_role(&self, id: &str) -> Result<()> {
+        let path = self.catalog_path("roles", id)?;
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_personality(&self, personality: &Personality) -> Result<()> {
+        fs::create_dir_all(self.base_dir.join("personalities"))?;
+        let path = self.catalog_path("personalities", &personality.id)?;
+        Self::atomic_write(&path, serde_json::to_string_pretty(personality)?.as_bytes())
+    }
+
+    pub fn list_personalities(&self) -> Result<Vec<Personality>> {
+        self.list_catalog("personalities")
+    }
+
+    pub fn delete_personality(&self, id: &str) -> Result<()> {
+        let path = self.catalog_path("personalities", id)?;
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Runs
     // -----------------------------------------------------------------------
 
@@ -202,6 +342,34 @@ impl Persistence {
         let data = fs::read_to_string(&path)?;
         let run: Run = serde_json::from_str(&data)?;
         Ok(run)
+    }
+
+    /// Every persisted run, oldest first. `list_runs_for_session` is this same
+    /// scan with a filter: a project's history spans one session per
+    /// `StartSession`, so an unfiltered read is what the runs view needs.
+    pub fn list_all_runs(&self) -> Result<Vec<Run>> {
+        let dir = self.base_dir.join("runs");
+        let mut runs = Vec::new();
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<Run>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(run) => runs.push(run),
+                Err(e) => {
+                    warn!("Failed to parse run file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        runs.sort_by_key(|r| r.started_at);
+        Ok(runs)
     }
 
     pub fn list_runs_for_session(&self, session_id: Uuid) -> Result<Vec<Run>> {
@@ -564,6 +732,7 @@ mod tests {
             mode: RunMode::Free,
             autonomy: terminal_core::models::AutonomyLevel::default(),
             kind: terminal_core::models::RunKind::OneShot,
+            agent_id: None,
             state,
             prompt: "do something".into(),
             provided_files: vec![],
@@ -633,6 +802,47 @@ mod tests {
         let result = p.load_session(session.id);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PersistenceError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_list_all_runs_spans_sessions() {
+        // The runs view lists a whole project, whose history spans one session
+        // per `StartSession`. `list_runs_for_session` cannot see the rest, which
+        // is why the unfiltered read exists.
+        let dir = tempdir().unwrap();
+        let p = Persistence::new(dir.path().to_path_buf()).unwrap();
+
+        let s1 = make_session();
+        let s2 = make_session();
+        p.save_session(&s1).unwrap();
+        p.save_session(&s2).unwrap();
+
+        p.save_run(&make_run(s1.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+        p.save_run(&make_run(s1.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+        p.save_run(&make_run(s2.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+
+        assert_eq!(p.list_runs_for_session(s1.id).unwrap().len(), 2);
+        assert_eq!(p.list_all_runs().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_worktree_meta_path_tracks_merge_and_revert() {
+        // `worktree_present` in the run list is decided by whether this path
+        // exists. Merge and revert both delete the metadata and neither touches
+        // the run's own state, so the file is the only signal that a run's work
+        // is still awaiting a decision.
+        let dir = tempdir().unwrap();
+        let p = Persistence::new(dir.path().to_path_buf()).unwrap();
+        let run_id = Uuid::new_v4();
+
+        assert!(!p.worktree_meta_path(run_id).exists());
+        p.save_worktree_meta(run_id, &make_worktree_meta()).unwrap();
+        assert!(p.worktree_meta_path(run_id).exists());
+        p.delete_worktree_meta(run_id).unwrap();
+        assert!(!p.worktree_meta_path(run_id).exists());
     }
 
     #[test]

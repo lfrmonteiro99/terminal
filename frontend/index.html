@@ -3,8 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <!-- viewport-fit=cover opts into the full screen on notched phones; without
+         it env(safe-area-inset-*) resolves to 0 and the drawer would sit under
+         the status bar. user-scalable is left alone: disabling zoom is an
+         accessibility regression, and a terminal needs pinch-zoom. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0f14" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f8f8" media="(prefers-color-scheme: light)" />
+    <title>Terminal Engine</title>
   </head>
   <body>
     <div id="root"></div>

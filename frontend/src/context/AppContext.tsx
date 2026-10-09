@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
-import type { AppEvent, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, PreflightError, RepoStatus, RunMetrics, RunMode, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, NoticeLevel, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunNotice, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
+import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
 
 // --- State ---
@@ -17,6 +18,12 @@ export interface AppState {
   // Bounded output buffer — NOT the full run output
   outputLines: string[];
   error: string | null;
+  /** Failures about one run, keyed by run id.
+   *
+   *  They live here rather than in `error` on purpose: the banner at the top of
+   *  the app reads as "the app broke", and a run's worktree going missing is
+   *  not that. These render next to the run they are about. */
+  runErrors: Map<string, string>;
   runs: Map<string, RunSummary>;
   selectedRun: string | null;
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
@@ -25,11 +32,17 @@ export interface AppState {
   stashes: StashEntry[];
   stashFiles: Map<number, FileChange[]>;
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
-  dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode } | null;
+  dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string } | null;
   stashDrawerOpen: boolean;
-  // Sidebar layout
-  activeSidebarView: 'explorer' | 'changes' | 'git';
+  // Sidebar layout. There is no `activeSidebarView` here: which destination is
+  // on screen is derived from the pane layout (`navViewOf`), never stored.
   sidebarCollapsed: boolean;
+  /** Agent registry last reported by the daemon. Consumed by AgentsView. */
+  agents: Map<string, AgentSummary>;
+  /** Role catalogue (seeded + operator-created). Agents reference it by id. */
+  roles: Map<string, Role>;
+  /** Personality catalogue (seeded + operator-created). */
+  personalities: Map<string, Personality>;
   // Phase 3: Sidebar state
   changesContext: { mode: 'working' | 'run'; runId?: string };
   changedFiles: { context: { mode: 'working' | 'run'; runId?: string }; files: FileChange[] } | null;
@@ -45,6 +58,20 @@ export interface AppState {
   runMetrics: RunMetrics | null;
   /** Preflight error surfaced when the Claude binary is missing/unauthenticated. */
   preflightError: PreflightError | null;
+  /**
+   * Token deltas not yet committed to `outputLines`. The next committed line
+   * clears it, so the panel streams live without printing the answer twice.
+   */
+  runLiveText: string;
+  /** Phase tag from `RunProgress` ('worktree' | 'preflight' | 'streaming' | …). */
+  runPhase: string | null;
+  runPhaseDetail: string | null;
+  /** Wall-clock start, so the panel counts up while nothing is arriving. */
+  runStartedAt: number | null;
+  /** Prompt of the in-flight run, kept so a failed run can be listed with it. */
+  runPromptPreview: string | null;
+  /** Chrome for the active run: rate limits, compaction, unparsed events. */
+  runNotices: RunNotice[];
 
   // Direct-to-state slices added by C3 (replacing window.dispatchEvent workarounds)
   /** Branch list last reported by the daemon. Consumed by CommandPalette. */
@@ -84,6 +111,7 @@ const initialState: AppState = {
   runState: null,
   outputLines: [],
   error: null,
+  runErrors: new Map(),
   runs: new Map(),
   selectedRun: null,
   diffCache: new Map(),
@@ -94,8 +122,10 @@ const initialState: AppState = {
   stashDiffs: new Map(),
   dirtyWarning: null,
   stashDrawerOpen: false,
-  activeSidebarView: 'changes',
   sidebarCollapsed: false,
+  agents: new Map(),
+  roles: new Map(),
+  personalities: new Map(),
   changesContext: { mode: 'working' },
   changedFiles: null,
   repoStatus: null,
@@ -111,6 +141,12 @@ const initialState: AppState = {
   runToolCalls: new Map(),
   runMetrics: null,
   preflightError: null,
+  runLiveText: '',
+  runPhase: null,
+  runPhaseDetail: null,
+  runStartedAt: null,
+  runPromptPreview: null,
+  runNotices: [],
   branches: [],
   fileViewer: null,
   searchResult: null,
@@ -126,11 +162,11 @@ type Action =
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string }
   | { type: 'SELECT_RUN'; runId: string | null }
   | { type: 'CLEAR_ERROR' }
+  | { type: 'DISMISS_RUN_ERROR'; runId: string }
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'DISMISS_PREFLIGHT' }
-  | { type: 'MARK_RUN_PENDING' }
-  | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
+  | { type: 'MARK_RUN_PENDING'; prompt?: string }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
   | { type: 'OPEN_DIFF'; file: string }
@@ -139,6 +175,8 @@ type Action =
   | { type: 'DISMISS_GIT_TOAST' };
 
 const MAX_OUTPUT_LINES = 2000;
+/** Notices are chrome; keep the last handful rather than an unbounded list. */
+const MAX_RUN_NOTICES = 24;
 
 /** Compile-time exhaustiveness guard for AppEvent variants.
  *  Adding a new variant without a matching `case` in HANDLE_EVENT breaks TS
@@ -149,6 +187,16 @@ function assertExhaustive(event: never): void {
   console.warn('[AppContext] unhandled AppEvent variant', e.type);
 }
 
+/** Drop a run's stored error. Used when the action that produced it succeeds
+ *  (a diff that loads, a merge that lands), and on explicit dismissal — so a
+ *  stale complaint can never outlive the thing it complained about. */
+function withoutRunError(runErrors: Map<string, string>, runId: string): Map<string, string> {
+  if (!runErrors.has(runId)) return runErrors;
+  const next = new Map(runErrors);
+  next.delete(runId);
+  return next;
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_CONNECTION_STATUS':
@@ -156,6 +204,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'CLEAR_ERROR':
       return { ...state, error: null };
+
+    case 'DISMISS_RUN_ERROR':
+      return { ...state, runErrors: withoutRunError(state.runErrors, action.runId) };
 
     case 'SET_ACTIVE_SESSION':
       return { ...state, activeSession: action.sessionId };
@@ -173,10 +224,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, preflightError: null };
 
     case 'MARK_RUN_PENDING':
-      return { ...state, pendingRunStartedAt: Date.now(), outputLines: [], runToolCalls: new Map(), runMetrics: null, preflightError: null };
-
-    case 'SET_SIDEBAR_VIEW':
-      return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
+      return { ...state, pendingRunStartedAt: Date.now(), runStartedAt: Date.now(), runPromptPreview: action.prompt ?? state.runPromptPreview, outputLines: [], runLiveText: '', runNotices: [], runPhase: null, runPhaseDetail: null, runToolCalls: new Map(), runMetrics: null, preflightError: null };
 
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
@@ -238,21 +286,29 @@ function reducer(state: AppState, action: Action): AppState {
         }
 
         case 'RunStateChanged': {
+          // The wire carries an externally-tagged enum ("Running" /
+          // {"Completed":{...}}); normalise before anything reads `.type`.
+          const nextState = normalizeRunState(event.new_state);
           // When a new run begins (or we're switching to a different run),
           // clear per-run accumulated state so the UI doesn't show stale
           // tool calls / metrics from an earlier run.
           const switchingRun = state.activeRun !== event.run_id;
           const startingFresh =
-            switchingRun && (event.new_state.type === 'Preparing' || event.new_state.type === 'Running');
+            switchingRun && (nextState.type === 'Preparing' || nextState.type === 'Running');
           return {
             ...state,
             activeRun: event.run_id,
-            runState: event.new_state,
+            runState: nextState,
             pendingRunStartedAt: null,
+            runStartedAt: switchingRun ? Date.now() : state.runStartedAt,
             runToolCalls: startingFresh ? new Map() : state.runToolCalls,
             runMetrics: startingFresh ? null : state.runMetrics,
             preflightError: startingFresh ? null : state.preflightError,
             outputLines: startingFresh ? [] : state.outputLines,
+            runLiveText: startingFresh ? '' : state.runLiveText,
+            runNotices: startingFresh ? [] : state.runNotices,
+            runPhase: startingFresh ? null : state.runPhase,
+            runPhaseDetail: startingFresh ? null : state.runPhaseDetail,
           };
         }
 
@@ -262,41 +318,155 @@ function reducer(state: AppState, action: Action): AppState {
           const trimmed = lines.length > MAX_OUTPUT_LINES
             ? lines.slice(lines.length - MAX_OUTPUT_LINES)
             : lines;
-          return { ...state, pendingRunStartedAt: null, outputLines: trimmed };
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            // The committed line now represents what the deltas were streaming,
+            // so the live buffer is dropped rather than shown alongside it.
+            runLiveText: '',
+            outputLines: trimmed,
+          };
+        }
+
+        case 'RunOutputDelta': {
+          if (event.run_id !== state.activeRun) return state;
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runLiveText: state.runLiveText + event.text,
+          };
+        }
+
+        case 'RunNotice': {
+          if (event.run_id !== state.activeRun) return state;
+          const runNotices = [
+            ...state.runNotices,
+            {
+              runId: event.run_id,
+              level: event.level as NoticeLevel,
+              message: event.message,
+              at: Date.now(),
+            },
+          ];
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runNotices: runNotices.slice(-MAX_RUN_NOTICES),
+          };
+        }
+
+        case 'RunProgress': {
+          if (event.run_id !== state.activeRun) return state;
+          return {
+            ...state,
+            pendingRunStartedAt: null,
+            runPhase: event.phase,
+            runPhaseDetail: event.detail,
+          };
         }
 
         case 'RunCompleted': {
           const runs = new Map(state.runs);
-          runs.set(event.run_id, event.summary);
+          // Without this the stored summary keeps the raw wire shape
+          // ({"Completed":{...}}), isTerminalState() reads `.type === undefined`
+          // and the post-run summary — diff, Merge, Revert — never renders.
+          const summary: RunSummary = { ...event.summary, state: normalizeRunState(event.summary.state) };
+          runs.set(event.run_id, summary);
+          const completed = summary.state.type === 'Completed' ? summary.state.exit_code : 0;
           return {
             ...state,
             activeRun: null,
-            runState: { type: 'Completed', exit_code: event.summary.state.type === 'Completed' ? event.summary.state.exit_code : 0 },
+            runState: { type: 'Completed', exit_code: completed },
             pendingRunStartedAt: null,
             runs,
           };
         }
 
-        case 'RunFailed':
+        case 'RunFailed': {
+          // A failed run has to appear in the list. Previously only
+          // RunCompleted upserted a summary, so a failure left the sidebar at
+          // zero runs and read as "nothing ever happened".
+          const failedState: RunState = {
+            type: 'Failed',
+            error: event.error,
+            phase: event.phase,
+          };
+          const runs = new Map(state.runs);
+          const existing = runs.get(event.run_id);
+          runs.set(event.run_id, {
+            id: event.run_id,
+            state: failedState,
+            prompt_preview: existing?.prompt_preview ?? state.runPromptPreview ?? '',
+            modified_file_count: existing?.modified_file_count ?? 0,
+            diff_stat: existing?.diff_stat ?? null,
+            started_at:
+              existing?.started_at ??
+              new Date(state.runStartedAt ?? Date.now()).toISOString(),
+            ended_at: new Date().toISOString(),
+            autonomy: existing?.autonomy,
+            // The daemon's RunFailed carries no summary, so this synthetic one
+            // cannot know the run's provenance. Absent beats invented.
+            session_id: existing?.session_id ?? state.activeSession ?? '',
+            branch: existing?.branch ?? '',
+            agent_id: existing?.agent_id ?? null,
+            prompt: existing?.prompt ?? state.runPromptPreview ?? '',
+            mode: existing?.mode ?? 'Free',
+            worktree_present: existing?.worktree_present ?? false,
+          });
           return {
             ...state,
             activeRun: null,
             pendingRunStartedAt: null,
-            runState: { type: 'Failed', error: event.error, phase: event.phase },
+            runState: failedState,
+            runs,
+            runLiveText: '',
+            runPhase: null,
+            runPhaseDetail: null,
           };
+        }
 
-        case 'RunCancelled':
+        case 'RunCancelled': {
+          const cancelledState: RunState = { type: 'Cancelled', reason: 'User cancelled' };
+          const runs = new Map(state.runs);
+          const existing = runs.get(event.run_id);
+          // Only list a cancellation we actually observed running; a cancel for
+          // a run this client never saw would otherwise invent a phantom entry.
+          if (existing || event.run_id === state.activeRun) {
+            runs.set(event.run_id, {
+              id: event.run_id,
+              state: cancelledState,
+              prompt_preview: existing?.prompt_preview ?? state.runPromptPreview ?? '',
+              modified_file_count: existing?.modified_file_count ?? 0,
+              diff_stat: existing?.diff_stat ?? null,
+              started_at:
+                existing?.started_at ??
+                new Date(state.runStartedAt ?? Date.now()).toISOString(),
+              ended_at: new Date().toISOString(),
+              autonomy: existing?.autonomy,
+              session_id: existing?.session_id ?? state.activeSession ?? '',
+              branch: existing?.branch ?? '',
+              agent_id: existing?.agent_id ?? null,
+              prompt: existing?.prompt ?? state.runPromptPreview ?? '',
+              mode: existing?.mode ?? 'Free',
+              worktree_present: existing?.worktree_present ?? false,
+            });
+          }
           return {
             ...state,
             activeRun: null,
             pendingRunStartedAt: null,
-            runState: { type: 'Cancelled', reason: 'User cancelled' },
+            runState: cancelledState,
+            runs,
+            runLiveText: '',
+            runPhase: null,
+            runPhaseDetail: null,
           };
+        }
 
         case 'RunList': {
           const runs = new Map(state.runs);
           for (const r of event.runs) {
-            runs.set(r.id, r);
+            runs.set(r.id, { ...r, state: normalizeRunState(r.state) });
           }
           return { ...state, runs };
         }
@@ -304,18 +474,24 @@ function reducer(state: AppState, action: Action): AppState {
         case 'RunDiff': {
           const diffCache = new Map(state.diffCache);
           diffCache.set(event.run_id, { stat: event.stat, diff: event.diff });
-          return { ...state, diffCache };
+          // The diff arrived, so a previous "no worktree" complaint is spent.
+          return { ...state, diffCache, runErrors: withoutRunError(state.runErrors, event.run_id) };
         }
 
         case 'RunReverted': {
           return {
             ...state,
             selectedRun: state.selectedRun === event.run_id ? null : state.selectedRun,
+            runErrors: withoutRunError(state.runErrors, event.run_id),
           };
         }
 
         case 'RunMerged': {
-          return { ...state, mergeConflict: null };
+          return {
+            ...state,
+            mergeConflict: null,
+            runErrors: withoutRunError(state.runErrors, event.run_id),
+          };
         }
 
         case 'RunMergeConflict': {
@@ -339,6 +515,15 @@ function reducer(state: AppState, action: Action): AppState {
 
         case 'Error':
           return { ...state, error: `${event.code}: ${event.message}` };
+
+        case 'RunError': {
+          // Scoped to a run, so it renders beside that run — never the app
+          // banner. A fresh action on the same run clears it (see MARK_RUN_PENDING
+          // and the merge/revert/diff senders).
+          const runErrors = new Map(state.runErrors);
+          runErrors.set(event.run_id, event.message);
+          return { ...state, runErrors };
+        }
 
         case 'StashList':
           return { ...state, stashes: event.stashes };
@@ -364,6 +549,8 @@ function reducer(state: AppState, action: Action): AppState {
               session_id: event.session_id,
               prompt: event.prompt,
               mode: event.mode,
+              autonomy: event.autonomy,
+              agent_id: event.agent_id,
             },
           };
 
@@ -593,6 +780,33 @@ function reducer(state: AppState, action: Action): AppState {
         case 'WorkspaceClosed':
         case 'WorkspaceActivated':
           return state;
+
+        case 'AgentList': {
+          const agents = new Map<string, AgentSummary>();
+          for (const a of event.agents) agents.set(a.id, a);
+          return { ...state, agents };
+        }
+
+        case 'AgentCreated':
+        case 'AgentUpdated': {
+          const agents = new Map(state.agents);
+          agents.set(event.agent.id, event.agent);
+          return { ...state, agents };
+        }
+
+        case 'AgentDeleted': {
+          const agents = new Map(state.agents);
+          agents.delete(event.agent_id);
+          return { ...state, agents };
+        }
+
+        case 'CatalogUpdated': {
+          const roles = new Map<string, Role>();
+          for (const r of event.roles) roles.set(r.id, r);
+          const personalities = new Map<string, Personality>();
+          for (const p of event.personalities) personalities.set(p.id, p);
+          return { ...state, roles, personalities };
+        }
 
         default:
           assertExhaustive(event);

@@ -39,6 +39,12 @@ const runSummary = (id: string): RunSummary => ({
   started_at: 'now',
   ended_at: null,
   diff_stat: null,
+  session_id: 's1',
+  branch: 'llm/test',
+  agent_id: null,
+  prompt: 'p',
+  mode: 'Free',
+  worktree_present: false,
 });
 
 const termSession = (id: string): TerminalSessionSummary => ({
@@ -218,13 +224,6 @@ describe('workspaceReducer', () => {
     expect(once.stashDrawerOpen).toBe(true);
     const twice = workspaceReducer(once, { type: 'TOGGLE_STASH_DRAWER' });
     expect(twice.stashDrawerOpen).toBe(false);
-  });
-
-  it('SET_SIDEBAR_VIEW expands collapsed sidebar', () => {
-    const collapsed: WorkspaceStore = { ...base(), sidebarCollapsed: true };
-    const next = run(collapsed, { type: 'SET_SIDEBAR_VIEW', view: 'git' });
-    expect(next.activeSidebarView).toBe('git');
-    expect(next.sidebarCollapsed).toBe(false);
   });
 
   it('TOGGLE_SIDEBAR', () => {
@@ -427,7 +426,6 @@ describe('workspaceReducer', () => {
       'DISMISS_DIRTY_WARNING',
       'SET_DIRTY_STATE',
       'TOGGLE_STASH_DRAWER',
-      'SET_SIDEBAR_VIEW',
       'TOGGLE_SIDEBAR',
       'SET_CHANGES_CONTEXT',
       'SET_CHANGED_FILES',

@@ -1,9 +1,10 @@
 #[allow(unused_imports)]
 use crate::models::{
-    AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
-    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, RepoStatusSnapshot,
-    RestorableTerminalSession, RunKind, RunMode, RunState, RunSummary, SearchMatch, SessionSummary,
-    SshConfig, StashEntry, TerminalSessionSummary, WorkspaceMode, WorkspaceSummary,
+    AgentSummary, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyFile, DirtyStatus, FailPhase,
+    FileChange, FileStatus, FileTreeEntry, MergeConflictFile, MergeResult, NoticeLevel, Personality,
+    RepoStatusSnapshot, RestorableTerminalSession, Role, RunKind, RunMode, RunState, RunSummary,
+    Runner, SearchMatch, SessionSummary, SshConfig, StashEntry, TerminalSessionSummary,
+    WorkspaceMode, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -31,13 +32,19 @@ pub enum AppCommand {
         mode: RunMode,
         #[serde(default)]
         skip_dirty_check: bool,
-        /// Autonomy level for this run (defaults to `Autonomous` if the
-        /// client omits the field — keeps legacy requests working).
+        /// Autonomy level for this run. `None` (client omitted the field) lets
+        /// the daemon fall back to the driving agent's `default_autonomy`, and
+        /// only then to `Autonomous`. Making it an `Option` is what lets an
+        /// agent's policy actually apply to runs it drives.
         #[serde(default)]
-        autonomy: AutonomyLevel,
+        autonomy: Option<AutonomyLevel>,
         /// OneShot (default) or Chat.
         #[serde(default)]
         kind: RunKind,
+        /// Agent to drive this run. `None` = the implicit default agent
+        /// (daemon's configured claude binary, no extra instructions).
+        #[serde(default)]
+        agent_id: Option<Uuid>,
     },
     CancelRun {
         run_id: Uuid,
@@ -48,11 +55,90 @@ pub enum AppCommand {
     },
     ListRuns {
         session_id: Uuid,
+        /// When true, return every run belonging to the same *project* as
+        /// `session_id`, not just that session's. The daemon opens a new
+        /// session per `StartSession`, so a session-scoped list hides almost
+        /// all of a project's history.
+        #[serde(default)]
+        all_sessions: bool,
     },
     GetRunOutput {
         run_id: Uuid,
         offset: u64,
         limit: u64,
+    },
+
+    // Agents
+    ListAgents,
+    CreateAgent {
+        name: String,
+        /// Role catalogue reference. `None` / omitted = no role overlay.
+        #[serde(default)]
+        role_id: Option<String>,
+        /// Personality catalogue reference. `None` = no personality.
+        #[serde(default)]
+        personality_id: Option<String>,
+        /// Which CLI drives this agent. Defaults to `Claude`.
+        #[serde(default)]
+        runner: Runner,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        instructions: String,
+        #[serde(default)]
+        model: Option<String>,
+        /// Inference provider for the Hermes runner (`--provider`). Ignored by
+        /// the Claude runner, which has no such flag.
+        #[serde(default)]
+        provider: Option<String>,
+        /// Hermes profile for the Hermes runner (`-p <name>`). Ignored by Claude.
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        default_autonomy: AutonomyLevel,
+    },
+    UpdateAgent {
+        agent_id: Uuid,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        role_id: Option<String>,
+        #[serde(default)]
+        personality_id: Option<String>,
+        #[serde(default)]
+        runner: Option<Runner>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
+        #[serde(default)]
+        default_autonomy: Option<AutonomyLevel>,
+    },
+    DeleteAgent {
+        agent_id: Uuid,
+    },
+
+    // Role / personality catalogue. One snapshot event covers every mutation,
+    // so the client always ends up with the authoritative catalogue rather than
+    // applying a diff it has to reason about.
+    ListCatalog,
+    SaveRole {
+        role: Role,
+    },
+    DeleteRole {
+        id: String,
+    },
+    SavePersonality {
+        personality: Personality,
+    },
+    DeletePersonality {
+        id: String,
     },
 
     // Git operations (Phase 2)
@@ -75,6 +161,14 @@ pub enum AppCommand {
         prompt: String,
         mode: RunMode,
         stash_message: String,
+        /// Autonomy level for the run that follows the stash. `None` = fall
+        /// back to the driving agent's `default_autonomy`, then `Autonomous`.
+        #[serde(default)]
+        autonomy: Option<AutonomyLevel>,
+        /// Agent to drive the run that follows the stash. `None` = implicit
+        /// default agent, matching `StartRun`.
+        #[serde(default)]
+        agent_id: Option<Uuid>,
     },
 
     // Chat mode
@@ -294,6 +388,30 @@ pub enum AppEvent {
     ChatTurnEnded {
         run_id: Uuid,
     },
+    /// A token-level text delta while the model is still writing. Consumed into
+    /// an ephemeral "live" buffer that the next `RunOutput` replaces, so the
+    /// panel streams without the same sentence appearing twice.
+    RunOutputDelta {
+        run_id: Uuid,
+        text: String,
+    },
+    /// Run chrome that is not output: rate limits, compaction, unmodelled
+    /// stream events. Keeps machine JSON out of the readable log.
+    RunNotice {
+        run_id: Uuid,
+        level: NoticeLevel,
+        message: String,
+    },
+    /// What the supervisor is doing right now, before any output exists.
+    /// `Preparing` covers worktree creation and preflight, which are silent and
+    /// can take a while — this is what stops the panel looking frozen.
+    RunProgress {
+        run_id: Uuid,
+        /// Stable machine tag for the phase (`worktree`, `preflight`, `spawn`,
+        /// `streaming`, `finalising`).
+        phase: String,
+        detail: Option<String>,
+    },
     /// Plan-mode chat: Claude proposed a plan that needs approval.
     PlanProposed {
         run_id: Uuid,
@@ -341,6 +459,14 @@ pub enum AppEvent {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
+        /// Autonomy the client asked for, echoed back so the retry does not
+        /// silently fall back to a default the user did not pick.
+        #[serde(default)]
+        autonomy: Option<AutonomyLevel>,
+        /// Agent the client asked to drive the blocked run. Echoed back so the
+        /// "stash & run" / "run anyway" retries keep driving the same agent.
+        #[serde(default)]
+        agent_id: Option<Uuid>,
     },
 
     // Sidebar events (Phase 3)
@@ -388,6 +514,27 @@ pub enum AppEvent {
     RunList {
         session_id: Uuid,
         runs: Vec<RunSummary>,
+    },
+
+    // Agent events
+    AgentList {
+        agents: Vec<AgentSummary>,
+    },
+    AgentCreated {
+        agent: AgentSummary,
+    },
+    AgentUpdated {
+        agent: AgentSummary,
+    },
+    AgentDeleted {
+        agent_id: Uuid,
+    },
+
+    /// Full role + personality catalogue snapshot. Emitted for every mutation
+    /// (list, save, delete) so the client never has to reconstruct state.
+    CatalogUpdated {
+        roles: Vec<Role>,
+        personalities: Vec<Personality>,
     },
 
     // Run output (paginated response)
@@ -507,6 +654,19 @@ pub enum AppEvent {
         code: String,
         message: String,
     },
+    /// A failure about one run, rather than about the app.
+    ///
+    /// Kept separate from `Error` for a UX reason, not a technical one: the
+    /// client renders these *inside the run's own context* — its row on the
+    /// Runs page, the AI Run pane — instead of the app-level banner at the top.
+    /// A missing worktree used to arrive as `NOT_FOUND` in a full-width red bar
+    /// that read as "the app is broken", when the only fact was "this run's
+    /// worktree is gone" — something the UI already knew how to say.
+    RunError {
+        run_id: Uuid,
+        code: String,
+        message: String,
+    },
 }
 
 impl AppCommand {
@@ -616,23 +776,26 @@ mod tests {
             prompt: "do the thing".into(),
             mode: RunMode::Free,
             skip_dirty_check: false,
-            autonomy: AutonomyLevel::ReviewPlan,
+            autonomy: Some(AutonomyLevel::ReviewPlan),
             kind: RunKind::OneShot,
+            agent_id: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"autonomy\":\"ReviewPlan\""));
         let back: AppCommand = serde_json::from_str(&json).unwrap();
         match back {
             AppCommand::StartRun { autonomy, .. } => {
-                assert_eq!(autonomy, AutonomyLevel::ReviewPlan);
+                assert_eq!(autonomy, Some(AutonomyLevel::ReviewPlan));
             }
             _ => panic!("wrong variant"),
         }
     }
 
     #[test]
-    fn start_run_without_autonomy_defaults_to_autonomous() {
-        // Old client payload that predates the autonomy field.
+    fn start_run_without_autonomy_is_none() {
+        // Old client payload that predates the autonomy field: the field stays
+        // `None` so the daemon can resolve it from the driving agent (and only
+        // then fall back to `Autonomous`).
         let legacy_json = serde_json::json!({
             "type": "StartRun",
             "session_id": Uuid::new_v4(),
@@ -643,7 +806,7 @@ mod tests {
         let cmd: AppCommand = serde_json::from_str(&legacy_json).unwrap();
         match cmd {
             AppCommand::StartRun { autonomy, skip_dirty_check, .. } => {
-                assert_eq!(autonomy, AutonomyLevel::Autonomous);
+                assert_eq!(autonomy, None);
                 assert!(!skip_dirty_check);
             }
             _ => panic!("wrong variant"),
@@ -674,8 +837,9 @@ mod tests {
             prompt: "talk".into(),
             mode: RunMode::Free,
             skip_dirty_check: false,
-            autonomy: AutonomyLevel::Autonomous,
+            autonomy: Some(AutonomyLevel::Autonomous),
             kind: RunKind::Chat,
+            agent_id: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"kind\":\"Chat\""));
@@ -824,6 +988,12 @@ mod tests {
                 started_at: chrono::Utc::now(),
                 ended_at: Some(chrono::Utc::now()),
                 autonomy: AutonomyLevel::default(),
+                session_id: Uuid::new_v4(),
+                branch: "llm/test-run".into(),
+                agent_id: None,
+                prompt: "test".into(),
+                mode: RunMode::Free,
+                worktree_present: true,
             },
             diff_stat: Some(DiffStat {
                 files_changed: 2,
@@ -887,6 +1057,8 @@ mod tests {
             prompt: "fix bug".into(),
             mode: RunMode::Free,
             stash_message: "pre-run stash".into(),
+            autonomy: Some(AutonomyLevel::default()),
+            agent_id: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: AppCommand = serde_json::from_str(&json).unwrap();
@@ -985,14 +1157,17 @@ mod tests {
             session_id: Uuid::new_v4(),
             prompt: "run tests".into(),
             mode: RunMode::Guided,
+            autonomy: Some(AutonomyLevel::ReviewPlan),
+            agent_id: None,
         };
         let json = serde_json::to_string(&evt).unwrap();
         let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
         match deserialized {
-            AppEvent::DirtyWarning { status, prompt, mode, .. } => {
+            AppEvent::DirtyWarning { status, prompt, mode, autonomy, .. } => {
                 assert_eq!(status.unstaged.len(), 1);
                 assert_eq!(prompt, "run tests");
                 assert_eq!(mode, RunMode::Guided);
+                assert_eq!(autonomy, Some(AutonomyLevel::ReviewPlan));
             }
             _ => panic!("wrong variant"),
         }
@@ -1171,6 +1346,28 @@ mod tests {
         json
     }
 
+    fn sample_role() -> Role {
+        Role {
+            id: "planner".into(),
+            name: "Planner".into(),
+            instructions: "Plan the work before touching code.".into(),
+            builtin: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn sample_personality() -> Personality {
+        Personality {
+            id: "terse".into(),
+            name: "Terse".into(),
+            prompt: "Answer in as few words as the task allows.".into(),
+            builtin: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
     #[test]
     fn every_app_command_variant_roundtrips() {
         let uuid = || Uuid::new_v4();
@@ -1185,12 +1382,13 @@ mod tests {
                 prompt: "p".into(),
                 mode: RunMode::Free,
                 skip_dirty_check: false,
-                autonomy: AutonomyLevel::default(),
+                autonomy: Some(AutonomyLevel::default()),
                 kind: RunKind::OneShot,
+                agent_id: None,
             },
             AppCommand::CancelRun { run_id: uuid(), reason: "user".into() },
             AppCommand::GetRunStatus { run_id: uuid() },
-            AppCommand::ListRuns { session_id: uuid() },
+            AppCommand::ListRuns { session_id: uuid(), all_sessions: false },
             AppCommand::GetRunOutput { run_id: uuid(), offset: 0, limit: 100 },
             AppCommand::GetDiff { run_id: uuid() },
             AppCommand::RevertRun { run_id: uuid() },
@@ -1204,6 +1402,8 @@ mod tests {
                 prompt: "p".into(),
                 mode: RunMode::Free,
                 stash_message: "m".into(),
+                autonomy: Some(AutonomyLevel::default()),
+                agent_id: None,
             },
             AppCommand::SendChatMessage { run_id: uuid(), prompt: "next".into() },
             AppCommand::EndChat { run_id: uuid() },
@@ -1271,6 +1471,40 @@ mod tests {
             AppCommand::PopStash { index: 0 },
             AppCommand::ApplyStash { index: 0 },
             AppCommand::DropStash { index: 0 },
+            AppCommand::ListAgents,
+            AppCommand::CreateAgent {
+                name: "a".into(),
+                role_id: None,
+                personality_id: None,
+                runner: Runner::default(),
+                description: String::new(),
+                instructions: String::new(),
+                model: None,
+                provider: None,
+                profile: None,
+                default_autonomy: AutonomyLevel::default(),
+            },
+            AppCommand::UpdateAgent {
+                agent_id: uuid(),
+                name: None,
+                role_id: None,
+                personality_id: None,
+                runner: None,
+                description: None,
+                instructions: None,
+                model: None,
+                provider: None,
+                profile: None,
+                default_autonomy: None,
+            },
+            AppCommand::DeleteAgent { agent_id: uuid() },
+            AppCommand::ListCatalog,
+            AppCommand::SaveRole { role: sample_role() },
+            AppCommand::DeleteRole { id: "planner".into() },
+            AppCommand::SavePersonality {
+                personality: sample_personality(),
+            },
+            AppCommand::DeletePersonality { id: "terse".into() },
         ];
 
         // Exhaustive match — future variants MUST appear here or compilation
@@ -1332,6 +1566,15 @@ mod tests {
                 AppCommand::PopStash { .. } => "PopStash",
                 AppCommand::ApplyStash { .. } => "ApplyStash",
                 AppCommand::DropStash { .. } => "DropStash",
+                AppCommand::ListAgents => "ListAgents",
+                AppCommand::CreateAgent { .. } => "CreateAgent",
+                AppCommand::UpdateAgent { .. } => "UpdateAgent",
+                AppCommand::DeleteAgent { .. } => "DeleteAgent",
+                AppCommand::ListCatalog => "ListCatalog",
+                AppCommand::SaveRole { .. } => "SaveRole",
+                AppCommand::DeleteRole { .. } => "DeleteRole",
+                AppCommand::SavePersonality { .. } => "SavePersonality",
+                AppCommand::DeletePersonality { .. } => "DeletePersonality",
             }
         }
 
@@ -1387,6 +1630,12 @@ mod tests {
                     started_at: chrono::Utc::now(),
                     ended_at: None,
                     autonomy: AutonomyLevel::default(),
+                    session_id: uuid(),
+                    branch: String::new(),
+                    agent_id: None,
+                    prompt: "p".into(),
+                    mode: RunMode::Free,
+                    worktree_present: false,
                 },
                 diff_stat: None,
             },
@@ -1420,6 +1669,20 @@ mod tests {
                 reason: "r".into(),
                 suggestion: "s".into(),
             },
+            AppEvent::RunOutputDelta {
+                run_id: uuid(),
+                text: "partial".into(),
+            },
+            AppEvent::RunNotice {
+                run_id: uuid(),
+                level: NoticeLevel::Warning,
+                message: "rate limited".into(),
+            },
+            AppEvent::RunProgress {
+                run_id: uuid(),
+                phase: "worktree".into(),
+                detail: Some("creating".into()),
+            },
             AppEvent::ChatTurnEnded { run_id: uuid() },
             AppEvent::PlanProposed { run_id: uuid(), plan: "plan".into() },
             AppEvent::RunDiff {
@@ -1451,6 +1714,8 @@ mod tests {
                 session_id: uuid(),
                 prompt: "p".into(),
                 mode: RunMode::Free,
+                autonomy: None,
+                agent_id: None,
             },
             AppEvent::DirectoryListing { path: path(), entries: vec![] },
             AppEvent::ChangedFilesList {
@@ -1571,6 +1836,44 @@ mod tests {
             AppEvent::Error { code: "c".into(), message: "m".into() },
             AppEvent::StashApplied { index: 0, had_conflicts: false },
             AppEvent::StashDropped { index: 0 },
+            AppEvent::AgentList { agents: vec![] },
+            AppEvent::AgentCreated {
+                agent: AgentSummary {
+                    id: uuid(),
+                    name: "a".into(),
+                    role_id: Some("planner".into()),
+                    personality_id: None,
+                    runner: Runner::Claude,
+                    description: String::new(),
+                    model: None,
+                    provider: None,
+                    profile: None,
+                    default_autonomy: AutonomyLevel::default(),
+                    instructions: String::new(),
+                    updated_at: chrono::Utc::now(),
+                },
+            },
+            AppEvent::AgentUpdated {
+                agent: AgentSummary {
+                    id: uuid(),
+                    name: "a".into(),
+                    role_id: None,
+                    personality_id: Some("terse".into()),
+                    runner: Runner::Hermes,
+                    description: String::new(),
+                    model: None,
+                    provider: Some("openrouter".into()),
+                    profile: Some("fast".into()),
+                    default_autonomy: AutonomyLevel::default(),
+                    instructions: "be terse".into(),
+                    updated_at: chrono::Utc::now(),
+                },
+            },
+            AppEvent::AgentDeleted { agent_id: uuid() },
+            AppEvent::CatalogUpdated {
+                roles: vec![sample_role()],
+                personalities: vec![sample_personality()],
+            },
         ];
 
         fn ensure_exhaustive(e: &AppEvent) -> &'static str {
@@ -1586,6 +1889,9 @@ mod tests {
                 AppEvent::RunToolResult { .. } => "RunToolResult",
                 AppEvent::RunMetrics { .. } => "RunMetrics",
                 AppEvent::RunPreflightFailed { .. } => "RunPreflightFailed",
+                AppEvent::RunOutputDelta { .. } => "RunOutputDelta",
+                AppEvent::RunNotice { .. } => "RunNotice",
+                AppEvent::RunProgress { .. } => "RunProgress",
                 AppEvent::ChatTurnEnded { .. } => "ChatTurnEnded",
                 AppEvent::PlanProposed { .. } => "PlanProposed",
                 AppEvent::RunDiff { .. } => "RunDiff",
@@ -1633,8 +1939,14 @@ mod tests {
                 AppEvent::StatusUpdate { .. } => "StatusUpdate",
                 AppEvent::Pong => "Pong",
                 AppEvent::Error { .. } => "Error",
+                AppEvent::RunError { .. } => "RunError",
                 AppEvent::StashApplied { .. } => "StashApplied",
                 AppEvent::StashDropped { .. } => "StashDropped",
+                AppEvent::AgentList { .. } => "AgentList",
+                AppEvent::AgentCreated { .. } => "AgentCreated",
+                AppEvent::AgentUpdated { .. } => "AgentUpdated",
+                AppEvent::AgentDeleted { .. } => "AgentDeleted",
+                AppEvent::CatalogUpdated { .. } => "CatalogUpdated",
             }
         }
 

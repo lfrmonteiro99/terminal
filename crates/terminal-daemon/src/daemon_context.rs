@@ -54,6 +54,12 @@ pub struct DaemonContext {
     pub active_workspaces: Arc<Mutex<HashMap<Uuid, Uuid>>>,
     /// Workspace-scoped broadcast channels (M1-05)
     pub workspace_channels: Arc<Mutex<HashMap<Uuid, broadcast::Sender<String>>>>,
+    /// Agents registry — named, reusable workers.
+    pub agents: Arc<Mutex<HashMap<Uuid, terminal_core::models::Agent>>>,
+    /// Role catalogue — id -> Role. Seeded with built-ins, operator-extensible.
+    pub roles: Arc<Mutex<HashMap<String, terminal_core::models::Role>>>,
+    /// Personality catalogue — id -> Personality.
+    pub personalities: Arc<Mutex<HashMap<String, terminal_core::models::Personality>>>,
 }
 
 impl DaemonContext {
@@ -74,6 +80,9 @@ impl DaemonContext {
             workspaces: Arc::new(Mutex::new(HashMap::new())),
             active_workspaces: Arc::new(Mutex::new(HashMap::new())),
             workspace_channels: Arc::new(Mutex::new(HashMap::new())),
+            agents: Arc::new(Mutex::new(HashMap::new())),
+            roles: Arc::new(Mutex::new(HashMap::new())),
+            personalities: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -94,11 +103,11 @@ impl DaemonContext {
                     let channels = self.workspace_channels.lock().await;
                     channels.get(&workspace_id).cloned()
                 };
-                if let Some(tx) = tx {
+                if let Some(tx) = tx.filter(|tx| tx.receiver_count() > 0) {
                     let _ = tx.send(json);
                 } else {
                     tracing::warn!(
-                        "broadcast_workspace: no channel for workspace {}, \
+                        "broadcast_workspace: no subscriber for workspace {}, \
                          falling back to global (likely a close/create race)",
                         workspace_id,
                     );
@@ -127,12 +136,12 @@ impl DaemonContext {
                         let channels = self.workspace_channels.lock().await;
                         channels.get(&workspace_id).cloned()
                     };
-                    if let Some(tx) = tx {
+                    if let Some(tx) = tx.filter(|tx| tx.receiver_count() > 0) {
                         let _ = tx.send(json);
                         return;
                     }
                     tracing::warn!(
-                        "send_run_event: no channel for workspace {}, falling back to originating client",
+                        "send_run_event: no subscriber for workspace {}, falling back to originating client",
                         workspace_id,
                     );
                 }

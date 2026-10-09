@@ -29,7 +29,18 @@ describe('EmptyPane', () => {
         focused={false}
       />,
     );
-    // Terminal, SSH, AI Run, Browser, Git Status, Git History
-    expect(screen.getAllByRole('button')).toHaveLength(6);
+    // Terminal, SSH, AI Run, Browser, Changes, Git Status, Git History
+    expect(screen.getAllByRole('button')).toHaveLength(7);
+  });
+
+  it('offers the Changes pane (the one the "Terminal + changes" preset needs)', () => {
+    render(
+      <EmptyPane
+        pane={{ id: 'p1', kind: 'Empty', resource_id: null }}
+        workspaceId="w1"
+        focused={false}
+      />,
+    );
+    expect(screen.getByText('Changes')).toBeTruthy();
   });
 });

@@ -103,7 +103,7 @@ export function BrowserPane({ pane: _pane }: PaneProps) {
           onClick={() => navigate(input)}
           style={{
             backgroundColor: 'var(--accent-primary)',
-            color: 'var(--bg-base)',
+            color: 'var(--accent-fg)',
             border: 'none',
             borderRadius: 5,
             padding: '5px 14px',

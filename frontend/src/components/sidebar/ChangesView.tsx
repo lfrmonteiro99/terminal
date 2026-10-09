@@ -69,8 +69,8 @@ function isRunActive(state: { type: string }): boolean {
 
 const contextBannerStyle: React.CSSProperties = {
   padding: '6px 12px',
-  backgroundColor: 'rgba(78, 205, 196, 0.08)',
-  borderBottom: '1px solid rgba(78, 205, 196, 0.2)',
+  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.08)',
+  borderBottom: '1px solid rgba(var(--accent-primary-rgb), 0.2)',
   fontSize: 11,
   fontFamily: 'monospace',
   color: 'var(--accent-primary)',
@@ -132,7 +132,7 @@ const stageBtnBase: React.CSSProperties = {
 
 const stageAddBtnStyle: React.CSSProperties = {
   ...stageBtnBase,
-  backgroundColor: 'rgba(78,205,196,0.12)',
+  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
   color: 'var(--accent-primary)',
 };
 
@@ -162,11 +162,18 @@ function FileRow({
   const style: React.CSSProperties = {
     ...fileRowBaseStyle,
     ...(selected
-      ? { backgroundColor: 'rgba(78, 205, 196, 0.12)', borderLeft: '2px solid #4ecdc4' }
+      ? { backgroundColor: 'var(--accent-soft)', borderLeft: '2px solid var(--accent-primary)' }
       : hover
-        ? { backgroundColor: 'rgba(255, 255, 255, 0.05)' }
+        ? { backgroundColor: 'var(--tint-hover)' }
         : {}),
   };
+
+  // Split the path so the basename never truncates. A single ellipsised string
+  // turns `crates/terminal-daemon/src/dispatcher.rs` into
+  // `crates/terminal-daemon/src/d…`, which hides the only part you scan for.
+  const slash = file.path.lastIndexOf('/');
+  const dir = slash >= 0 ? file.path.slice(0, slash) : '';
+  const base = slash >= 0 ? file.path.slice(slash + 1) : file.path;
 
   return (
     <div
@@ -174,6 +181,7 @@ function FileRow({
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      title={file.path}
     >
       <span
         style={{
@@ -183,8 +191,15 @@ function FileRow({
       >
         {getStatusChar(file.status)}
       </span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }}>
-        {file.path}
+      <span style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>
+          {base}
+        </span>
+        {dir && (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--font-size-micro)', color: 'var(--text-muted)' }}>
+            {dir}
+          </span>
+        )}
       </span>
       {showStageButton && onStageAction && (
         <button
@@ -204,7 +219,7 @@ function FileRow({
 
 // --- Main Component ---
 
-export function ChangesView() {
+export function ChangesView({ inlineDiff = true }: { inlineDiff?: boolean } = {}) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
@@ -370,8 +385,10 @@ export function ChangesView() {
         )}
       </div>
 
-      {/* Inline DiffPanel */}
-      {diffPanel.mode === 'inline' && diffPanel.open && (
+      {/* Inline DiffPanel. Suppressed when this view is hosted inside a Changes
+          pane, which renders its own diff beside the list — two copies of the
+          same diff in one screen is worse than none. */}
+      {inlineDiff && diffPanel.mode === 'inline' && diffPanel.open && (
         <DiffPanel displayMode="inline" />
       )}
     </div>

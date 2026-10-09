@@ -23,13 +23,15 @@ There is no `layout` scope. The previous design doc mentioned one, but it was co
 
 `installGlobalKeybindings()` installs a single `window.keydown` listener (`keybindings.ts:39-58`). On each event:
 
-1. Detect whether the event target is inside a terminal pane — it walks up the DOM looking for `[data-pane-kind="terminal"]`.
+1. Detect whether the event target is inside a terminal pane — it walks up the DOM looking for `[data-pane-kind="Terminal"]`, the attribute `PaneRenderer` stamps on the pane wrapper (see [panes.md](panes.md#dom-identity)).
 2. Skip `'pane'`-scoped bindings when the target is not inside a terminal.
 3. Skip `'app'`-scoped bindings when the target **is** inside a terminal (so shell input passes through).
 4. Match `ctrl / shift / alt + key` literally against each registered binding's `keys` field. First match wins.
 5. If a binding matches, `preventDefault()` and fire `binding.action()`.
 
 There is no stacking order beyond registration order. In practice, only `app` and `pane` bindings exist today and they are disjoint.
+
+> **Not installed today.** `installGlobalKeybindings()` and `registerBinding()` have no call sites: the shipped app handles `Ctrl+K`, `Ctrl+B`, `Ctrl+/` and the destination shortcuts in its own `window.keydown` listener in `frontend/src/App.tsx:603-709`, and this module is tree-shaken out of the bundle. Treat it as the design for the layer, not as the running one — wiring it up is a pending task, and the selector below is written for that day.
 
 ## Shortcut map
 
@@ -86,12 +88,12 @@ Reserved combos that **must not** be bound for anything else:
 
 ## How terminal panes capture input
 
-`TerminalPane` (`frontend/src/panes/terminal/TerminalPane.tsx`) mounts xterm.js and does **not** register any bindings. Its root element sets `data-pane-kind="terminal"`. That attribute is the signal `installGlobalKeybindings` uses to forward events to xterm.
+`TerminalPane` (`frontend/src/panes/terminal/TerminalPane.tsx`) mounts xterm.js, does **not** register any bindings, and stamps no pane attribute of its own. The signal is the pane wrapper: `PaneRenderer` stamps `data-pane-kind` with the pane's `PaneKind` from the layout, capitalised (`Terminal`, `GitStatus`, …). One pane carries exactly one such attribute.
 
 When a user focuses a terminal and types `Ctrl+C`:
 
 1. DOM event lands on the xterm container.
-2. Global listener sees `data-pane-kind="terminal"` on the target chain.
+2. Global listener walks up from the target and reaches the pane wrapper: `[data-pane-kind="Terminal"]`.
 3. Any registered `'app'`-scope binding is skipped.
 4. Default xterm handling runs, sends `\x03` to the PTY.
 
@@ -104,5 +106,5 @@ If a shortcut needs to be moved from `'app'` to `'pane'` (or vice versa), you mu
 ## Related
 
 - [ux-conventions.md](ux-conventions.md) — focus model, which informs scope resolution
-- [panes.md](panes.md) — the `data-pane-kind` attribute that gates terminal forwarding
+- [panes.md](panes.md) — pane DOM identity: the `data-pane-kind` attribute that gates terminal forwarding
 - [modes.md](modes.md) — mode-activation shortcuts (`Ctrl+1`..`Ctrl+4`)

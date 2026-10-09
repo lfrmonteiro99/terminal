@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { debug } from './util/log';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useAppState, useAppDispatch } from './context/AppContext.tsx';
 import { SendProvider } from './context/SendContext.tsx';
 import { useWebSocket } from './hooks/useWebSocket.ts';
-import { ActivityBar } from './components/ActivityBar.tsx';
 import { SidebarContainer } from './components/sidebar/SidebarContainer.tsx';
 import { DirtyWarningModal } from './components/DirtyWarningModal.tsx';
+import { ConfirmModal } from './components/ConfirmModal.tsx';
 import { StashDrawer } from './components/StashDrawer.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { AppChrome } from './components/AppChrome';
@@ -14,15 +14,24 @@ import { DiffPanel } from './components/DiffPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { ShortcutCheatsheet } from './components/ShortcutCheatsheet';
 import { PaneRenderer } from './panes/PaneRenderer';
+import { PANE_LABELS } from './panes/labels';
+import { MobilePaneSwitcher } from './components/MobilePaneSwitcher';
+import { useIsMobile } from './hooks/useMediaQuery';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
-import { splitPane, closePane, collectPanes, nextPaneId } from './domain/pane/types';
-import { LAYOUT_PRESETS } from './core/layoutPresets';
+import { splitPane, closePane, collectPanes, nextPaneId, replacePaneKind } from './domain/pane/types';
+import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER, matchPreset } from './core/layoutPresets';
+import { loadCustomPresets, addCustomPreset, removeCustomPreset, type CustomPreset } from './state/customPresets';
+import { newId } from './core/id';
+import { openNavPane, OPEN_NAV_PANE } from './core/openNavPane';
+import { NAV_PANE_KIND, NAV_KINDS, navViewOf } from './core/navViews';
 import type { AppEvent } from './types/protocol.ts';
+import type { SidebarView } from './types/sidebar';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
 import { saveSession, getSession } from './state/sessionStore';
 import { getCurrentThemeId, applyTheme } from './styles/themes';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ToastContainer } from './components/ToastContainer';
+import { ErrorBanner } from './components/ErrorBanner';
 import { SshConnectDialog } from './components/SshConnectDialog';
 import type { SshConnectConfig } from './components/SshConnectDialog';
 import { resolveDaemonWsUrl } from './core/daemon/resolveDaemonWsUrl';
@@ -33,10 +42,12 @@ import './panes/ai-run/AiRunPane';
 import './panes/git/GitStatusPane';
 import './panes/git/GitHistoryPane';
 import './panes/git/MergeConflictPane';
+import './panes/changes/ChangesPane';
 import './panes/browser/BrowserPane';
 import './panes/empty/EmptyPane';
 import './panes/file-viewer/FileViewerPane';
 import './panes/search/SearchPane';
+import './panes/nav/navPanes';
 import './modes/definitions';
 
 /** Patch resource_id onto a specific pane id in a layout tree */
@@ -69,6 +80,26 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
+/**
+ * Panes whose contents cannot be recreated by reopening them: a shell's
+ * scrollback, a running agent, a file you are part-way through.
+ *
+ * A navigation click must never take one of these over. `paneSessionMap` in
+ * TerminalPane is keyed by pane id, so swapping a Terminal's id orphans a live
+ * PTY session inside the daemon — the shell keeps running, invisible, with no
+ * way back to it. These get a split instead; the rest of the surface can be
+ * reused freely.
+ */
+const WORK_KINDS: ReadonlySet<PaneKind> = new Set<PaneKind>([
+  'Terminal',
+  'AiRun',
+  'Browser',
+  'FileViewer',
+  'Search',
+  'Diff',
+]);
+
+
 function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
@@ -76,6 +107,28 @@ function AppContent() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('terminal:authToken') || '');
   const [projectRoot, setProjectRoot] = useState(() => localStorage.getItem('terminal:projectRoot') || '');
   const [tauriMode, setTauriMode] = useState<boolean | null>(null); // null = unknown yet
+
+  // --- Mobile shell state ---
+  // A phone cannot show a 280px rail next to the work, so navigation moves to
+  // an off-canvas drawer and the working surface shows one pane at a time.
+  const isMobile = useIsMobile();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Choosing a destination in the drawer closes it: the destination itself is
+  // already the pane that the tap opened, so there is nothing left to reveal.
+  // The phone used to swap the whole surface for a full-width view overlay
+  // instead; that was a second mechanism for the same seven destinations, and
+  // it is gone — a phone now switches between panes with MobilePaneSwitcher,
+  // exactly like the desktop.
+  const handleMobileNavigate = useCallback(() => {
+    setDrawerOpen(false);
+  }, []);
+
+  // Rotating a phone back to a desktop width must not leave a stale drawer
+  // open behind the fixed rail.
+  useEffect(() => {
+    if (!isMobile && drawerOpen) setDrawerOpen(false);
+  }, [isMobile, drawerOpen]);
 
   // Persist connection settings across page refreshes
   useEffect(() => { if (daemonUrl) localStorage.setItem('terminal:daemonUrl', daemonUrl); }, [daemonUrl]);
@@ -88,6 +141,20 @@ function AppContent() {
   }));
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>('terminal-0');
   const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
+
+  // Flat pane list — drives the phone's pane switcher and the chrome title.
+  const paneList = useMemo(() => collectPanes(layout), [layout]);
+
+  // The destination on screen, derived from the layout rather than stored. The
+  // layout is the surface, so it is the only honest answer to "which view am I
+  // in" — and it makes the restored-session case (a saved destination next to a
+  // layout that no longer contains it) impossible rather than merely unlikely.
+  // null means "no destination is open": a bare Terminal, or the user closed
+  // the last one.
+  const activeNavView = useMemo(
+    () => navViewOf(layout, focusedPaneId),
+    [layout, focusedPaneId],
+  );
 
   // Persist layout on every change — debounced because pane-resize drag emits
   // a layout update per mousemove (potentially 60 Hz), and each
@@ -122,7 +189,6 @@ function AppContent() {
         setLayout(sessionSaved.layout);
         setFocusedPaneId(collectPanes(sessionSaved.layout)[0]?.id ?? null);
         applyTheme(sessionSaved.theme);
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: sessionSaved.sidebarView });
         if (sessionSaved.sidebarCollapsed) dispatch({ type: 'TOGGLE_SIDEBAR' });
       } else if (workspaceSaved) {
         setLayout(workspaceSaved.layout);
@@ -145,11 +211,10 @@ function AppContent() {
         lastUsed: new Date().toISOString(),
         layout,
         theme: getCurrentThemeId(),
-        sidebarView: state.activeSidebarView,
         sidebarCollapsed: state.sidebarCollapsed,
       });
     }
-  }, [state.activeSession, layout, projectRoot, state.activeSidebarView, state.sidebarCollapsed]);
+  }, [state.activeSession, layout, projectRoot, state.sidebarCollapsed]);
 
   // Layout mutation handlers
   const handleSplitPane = useCallback((direction: SplitDirection, kind: PaneKind = 'Terminal') => {
@@ -178,6 +243,52 @@ function AppContent() {
       setFocusedPaneId(emptyLayout.Single.id);
     }
   }, [layout, focusedPaneId]);
+
+  // Layout presets replace the whole pane tree, so the guard lives here rather
+  // than in the menu: the Ctrl+Alt+N shortcut and the menu both come through
+  // `requestPreset`, and neither gets to skip the question. A preset is only
+  // applied silently when the current layout *is* a preset — switching between
+  // presets costs nothing, but overwriting hand-built panes does.
+  const [pendingPreset, setPendingPreset] = useState<string | null>(null);
+
+  // The user's own saved arrangements. The built-ins are five fixed trees;
+  // this is the library that makes the system composable — build "Terminal +
+  // changes + Git" by hand once, keep it, return to it after any preset switch.
+  const [customPresets, setCustomPresets] = useState<CustomPreset[]>(loadCustomPresets);
+
+  const findPreset = useCallback(
+    (id: string): { label: string; layout: PaneLayout } | null => {
+      const builtin = LAYOUT_PRESETS[id];
+      if (builtin) return { label: builtin.label, layout: builtin.layout };
+      const custom = customPresets.find((p) => p.id === id);
+      return custom ? { label: custom.label, layout: custom.layout } : null;
+    },
+    [customPresets],
+  );
+
+  const applyPreset = useCallback((preset: string) => {
+    const p = findPreset(preset);
+    if (!p) return;
+    setLayout(p.layout);
+    setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
+  }, [findPreset]);
+
+  const requestPreset = useCallback((preset: string) => {
+    // A saved layout you are currently sitting in is not "custom" — switching
+    // away from it costs nothing, the same as switching between built-ins.
+    const isHandBuilt =
+      matchPreset(layout, customPresets) === null && collectPanes(layout).length > 1;
+    if (isHandBuilt) setPendingPreset(preset);
+    else applyPreset(preset);
+  }, [layout, customPresets, applyPreset]);
+
+  const saveCurrentLayout = useCallback((label: string) => {
+    setCustomPresets(addCustomPreset(label, layout, newId()));
+  }, [layout]);
+
+  const deletePreset = useCallback((id: string) => {
+    setCustomPresets(removeCustomPreset(id));
+  }, []);
 
   // Listen for set-pane-type events from EmptyPane
   useEffect(() => {
@@ -260,6 +371,60 @@ function AppContent() {
     window.addEventListener('open-file-viewer', handler);
     return () => window.removeEventListener('open-file-viewer', handler);
   }, [focusedPaneId]);
+
+  // Rail → pane. This is the only place that knows the policy, so every entry
+  // point (rail, breadcrumb, status bar, palette, Overview's cards, the
+  // Ctrl+Shift+O/E/G/H shortcuts) behaves identically.
+  //
+  //   1. Already open → focus it. Clicking the same destination twice never
+  //      makes a second copy of it.
+  //   2. Otherwise pick a slot to take over: the focused pane if it is not real
+  //      work, else whichever navigation pane is already open, so the surface
+  //      holds at most one destination however the clicks are ordered.
+  //   3. Only when there is no such slot (a lone Terminal) does it split — a
+  //      navigation click must never be able to destroy a running shell.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const view = (e as CustomEvent<{ view?: SidebarView }>).detail?.view;
+      const kind = view ? NAV_PANE_KIND[view] : undefined;
+      if (!view || !kind) return;
+
+      // Nothing to record here: the rail highlight, the chrome title and the
+      // chrome Refresh action all read `activeNavView`, which is derived from
+      // the layout. Creating the pane below *is* the navigation.
+
+      const panes = collectPanes(layout);
+      const existing = panes.find(p => p.kind === kind);
+      if (existing) {
+        setFocusedPaneId(existing.id);
+        setZoomedPaneId(null);
+        return;
+      }
+
+      const focused = panes.find(p => p.id === focusedPaneId) ?? panes[0];
+      const slot =
+        focused && !WORK_KINDS.has(focused.kind)
+          ? focused
+          : panes.find(p => NAV_KINDS.has(p.kind));
+
+      if (slot) {
+        const replaced = replacePaneKind(layout, slot.id, kind);
+        if (!replaced) return;
+        setLayout(replaced.layout);
+        setFocusedPaneId(replaced.newPaneId);
+      } else if (focused) {
+        const result = splitPane(layout, focused.id, 'Horizontal', kind);
+        if (!result) return;
+        setLayout(result.layout);
+        setFocusedPaneId(result.newPaneId);
+      }
+      // Opening a destination over a zoomed pane would put it on screen behind
+      // the zoom, which reads as "nothing happened".
+      setZoomedPaneId(null);
+    };
+    window.addEventListener(OPEN_NAV_PANE, handler);
+    return () => window.removeEventListener(OPEN_NAV_PANE, handler);
+  }, [layout, focusedPaneId, dispatch]);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -407,11 +572,20 @@ function AppContent() {
   const prevSessionRef = useRef<string | null>(null);
   useEffect(() => {
     if (state.activeSession && prevSessionRef.current !== state.activeSession) {
-      send({ type: 'ListRuns', session_id: state.activeSession });
+      send({ type: 'ListRuns', session_id: state.activeSession, all_sessions: true });
       send({ type: 'ListStashes' });
     }
     prevSessionRef.current = state.activeSession;
   }, [state.activeSession, send]);
+
+  // On (re)connect, ask for the daemon's inventory. Nothing ever requested
+  // sessions, so `state.sessions` stayed empty and there was no way back to a
+  // previous session after a reload — even with the daemon holding them.
+  useEffect(() => {
+    if (status !== 'connected') return;
+    send({ type: 'ListSessions' });
+    send({ type: 'ListAgents' });
+  }, [status, send]);
 
   // Listen for git-auto-refresh events dispatched by TerminalPane when a git command completes.
   // The TerminalPane already debounces by 500ms before dispatching, so we just fire immediately.
@@ -442,17 +616,21 @@ function AppContent() {
         e.preventDefault();
         dispatch({ type: 'TOGGLE_SIDEBAR' });
       }
+      if (e.ctrlKey && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        openNavPane('overview');
+      }
       if (e.ctrlKey && e.shiftKey && e.key === 'E') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' });
+        openNavPane('explorer');
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'G') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' });
+        openNavPane('changes');
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'H') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
+        openNavPane('git');
       }
       if (e.key === 'Escape') {
         if (cheatsheetOpen) { setCheatsheetOpen(false); return; }
@@ -486,16 +664,12 @@ function AppContent() {
         if (idx < panes.length) setFocusedPaneId(panes[idx].id);
         return;
       }
-      // Ctrl+Alt+1..4: layout presets
-      if (e.ctrlKey && e.altKey && e.key >= '1' && e.key <= '4') {
+      // Ctrl+Alt+1..N: layout presets, bound by their position in
+      // LAYOUT_PRESET_ORDER (append-only, so existing bindings never move).
+      if (e.ctrlKey && e.altKey && e.key >= '1' && e.key <= '9') {
         e.preventDefault();
-        const presetKeys = Object.keys(LAYOUT_PRESETS);
         const idx = parseInt(e.key) - 1;
-        if (idx < presetKeys.length) {
-          const newLayout = LAYOUT_PRESETS[presetKeys[idx]].layout;
-          setLayout(newLayout);
-          setFocusedPaneId(collectPanes(newLayout)[0]?.id ?? null);
-        }
+        if (idx < LAYOUT_PRESET_ORDER.length) requestPreset(LAYOUT_PRESET_ORDER[idx]);
         return;
       }
       // Ctrl+Shift+R: refresh git
@@ -522,24 +696,42 @@ function AppContent() {
         handleSplitPane('Vertical');
         return;
       }
+      // Ctrl+Shift+X: close the focused pane
+      if (e.ctrlKey && e.shiftKey && (e.key === 'X' || e.key === 'x')) {
+        e.preventDefault();
+        const target = focusedPaneId ?? collectPanes(layout)[0]?.id;
+        if (target) handleClosePane(target);
+        return;
+      }
     };
     // Use capture phase to intercept shortcuts before xterm.js consumes them
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
     // `send` is stable via ref but not literally in deps — exhaustive-deps noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatch, commandPaletteOpen, cheatsheetOpen, layout, focusedPaneId, handleSplitPane]);
+  }, [dispatch, commandPaletteOpen, cheatsheetOpen, layout, focusedPaneId, handleSplitPane, handleClosePane, requestPreset]);
 
   return (
     <SendProvider value={send}>
       <div
+        className="app-root"
         style={{
           display: 'flex',
           flexDirection: 'column',
-          height: '100vh',
           background: 'var(--bg-base)',
         }}
       >
+        {/* Daemon-level errors. Rendered here, above everything and outside the
+            activeSession branch, because the errors that matter most —
+            PROJECT_ROOT_MISSING from StartSession, a failed auth — happen when
+            there is no session yet. */}
+        {state.error && (
+          <ErrorBanner
+            message={state.error}
+            onDismiss={() => dispatch({ type: 'CLEAR_ERROR' })}
+          />
+        )}
+
         {/* Connection setup (show when disconnected, browser mode only) */}
         {!tauriMode && status === 'disconnected' && (
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 500 }}>
@@ -569,6 +761,7 @@ function AppContent() {
         {status === 'connected' && !state.activeSession && (
           <WelcomeScreen
             tauriMode={tauriMode ?? false}
+            daemonSessions={Array.from(state.sessions.values())}
             onBrowse={tauriMode ? async () => {
               const { open } = await import('@tauri-apps/plugin-dialog');
               const selected = await open({ directory: true, title: 'Select project root' });
@@ -588,25 +781,54 @@ function AppContent() {
         {/* Main layout (when session is active) */}
         {state.activeSession && (
           <>
-            {/* AppChrome header */}
-            <AppChrome />
+            {/* AppChrome header — command bar. On a phone it collapses to a
+                hamburger + title; navigation and the workspace live in the
+                drawer, so the bar keeps only what a thumb needs. */}
+            <AppChrome
+              mobile={isMobile}
+              view={activeNavView}
+              onOpenDrawer={() => setDrawerOpen(true)}
+              titleOverride={
+                isMobile
+                  ? (PANE_LABELS[paneList.find(p => p.id === focusedPaneId)?.kind ?? ''] ?? 'Panes')
+                  : undefined
+              }
+              onLayoutPreset={requestPreset}
+              activePreset={matchPreset(layout, customPresets)}
+              customPresets={customPresets}
+              onSaveLayout={saveCurrentLayout}
+              onDeletePreset={deletePreset}
+            />
 
-            {/* Main content: activity bar + sidebar + pane area */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <ActivityBar onLayoutPreset={(preset) => {
-                const p = LAYOUT_PRESETS[preset];
-                if (p) {
-                  setLayout(p.layout);
-                  setFocusedPaneId(collectPanes(p.layout)[0]?.id ?? null);
-                }
-              }} />
-              <SidebarContainer />
-              <div style={{ flex: 1, overflow: 'hidden', display: 'flex', background: 'var(--bg-surface)' }}>
+            {/* Main content: sidebar + pane area */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+              <SidebarContainer
+                mobile={isMobile}
+                activeView={activeNavView}
+                mobileOpen={drawerOpen}
+                onMobileClose={handleMobileNavigate}
+              />
+              <div style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
+                display: 'flex',
+                // A phone stacks the pane surface over the bottom switcher;
+                // desktop lays them out side by side (switcher absent).
+                flexDirection: isMobile ? 'column' : 'row',
+                background: 'var(--bg-surface)',
+                position: 'relative',
+              }}>
+                {/* Nothing is ever layered over the pane surface: every
+                    destination — Overview and Settings included — is a pane, so
+                    a click always reaches the work. */}
+
                 <PaneRenderer
                   layout={layout}
                   workspaceId={state.activeSession ?? ''}
                   focusedPaneId={focusedPaneId}
                   zoomedPaneId={zoomedPaneId}
+                  mobile={isMobile}
                   onFocusPane={setFocusedPaneId}
                   onLayoutChange={setLayout}
                   onSplitPane={(paneId, direction) => {
@@ -618,15 +840,29 @@ function AppContent() {
                   }}
                   onClosePane={handleClosePane}
                 />
+
+                {/* Phone: one pane is visible at a time, so this is the only
+                    way to move between them. Nothing to switch with one pane. */}
+                {isMobile && paneList.length > 1 && (
+                  <MobilePaneSwitcher
+                    panes={paneList}
+                    focusedPaneId={focusedPaneId}
+                    onSelect={setFocusedPaneId}
+                  />
+                )}
               </div>
             </div>
 
-            <StatusBar />
+            <StatusBar compact={isMobile} />
           </>
         )}
 
-        {/* DiffPanel overlay — outside activeSession block so it isn't unmounted on re-renders */}
-        {state.diffPanel.open && state.diffPanel.mode !== 'inline' && (
+        {/* DiffPanel overlay — outside activeSession block so it isn't unmounted
+            on re-renders. Suppressed while a Changes pane is on screen: that
+            pane owns the diff, and rendering the same patch in two places at
+            once is the redundancy this whole panel was meant to avoid. */}
+        {state.diffPanel.open && state.diffPanel.mode !== 'inline' &&
+          !paneList.some(p => p.kind === 'Changes') && (
           <DiffPanel />
         )}
 
@@ -642,6 +878,8 @@ function AppContent() {
                 prompt: dw.prompt,
                 mode: dw.mode,
                 stash_message: 'auto-stash before AI run',
+                autonomy: dw.autonomy,
+                agent_id: dw.agent_id,
               });
               dispatch({ type: 'DISMISS_DIRTY_WARNING' });
             }}
@@ -653,6 +891,8 @@ function AppContent() {
                 prompt: dw.prompt,
                 mode: dw.mode,
                 skip_dirty_check: true,
+                autonomy: dw.autonomy,
+                agent_id: dw.agent_id,
               });
               dispatch({ type: 'DISMISS_DIRTY_WARNING' });
             }}
@@ -675,13 +915,14 @@ function AppContent() {
       <CommandPalette
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
-        onLayoutChange={(newLayout) => {
-          setLayout(newLayout);
-          setFocusedPaneId(collectPanes(newLayout)[0]?.id ?? null);
-          setCommandPaletteOpen(false);
-        }}
+        onLayoutPreset={(preset) => { requestPreset(preset); setCommandPaletteOpen(false); }}
         onSplitH={() => { handleSplitPane('Horizontal'); setCommandPaletteOpen(false); }}
         onSplitV={() => { handleSplitPane('Vertical'); setCommandPaletteOpen(false); }}
+        onClosePane={() => {
+          const target = focusedPaneId ?? collectPanes(layout)[0]?.id;
+          if (target) handleClosePane(target);
+          setCommandPaletteOpen(false);
+        }}
         onAddPane={(kind, direction) => { handleSplitPane(direction, kind as PaneKind); setCommandPaletteOpen(false); }}
         zoomedPaneId={zoomedPaneId}
         onZoomPane={() => { setZoomedPaneId(prev => prev ? null : focusedPaneId); setCommandPaletteOpen(false); }}
@@ -701,6 +942,23 @@ function AppContent() {
         open={cheatsheetOpen}
         onClose={() => setCheatsheetOpen(false)}
       />
+
+      {pendingPreset && (
+        <ConfirmModal
+          title="Replace your layout?"
+          body={
+            <>
+              Your panes are not one of the presets, so applying{' '}
+              <b>{findPreset(pendingPreset)?.label}</b> will replace all{' '}
+              {collectPanes(layout).length} of them. The terminals keep their
+              scrollback, but the arrangement is gone.
+            </>
+          }
+          confirmLabel="Replace layout"
+          onConfirm={() => { applyPreset(pendingPreset); setPendingPreset(null); }}
+          onCancel={() => setPendingPreset(null)}
+        />
+      )}
     </SendProvider>
   );
 }

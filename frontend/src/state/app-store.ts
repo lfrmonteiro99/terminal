@@ -1,7 +1,7 @@
 // App-level state — global, shared across all workspaces (M1-02)
 
 import type { WorkspaceSummary } from '../domain/workspace/types';
-import type { SessionSummary } from '../types/protocol';
+import type { AgentSummary, Personality, Role, SessionSummary } from '../types/protocol';
 
 export interface ConnectionState {
   status: 'connecting' | 'connected' | 'disconnected' | 'authenticating';
@@ -14,6 +14,12 @@ export interface AppStore {
   sessions: Map<string, SessionSummary>;
   /** All known workspaces. */
   workspaces: Map<string, WorkspaceSummary>;
+  /** All known agents (named workers). */
+  agents: Map<string, AgentSummary>;
+  /** Role catalogue (seeded + operator-created). */
+  roles: Map<string, Role>;
+  /** Personality catalogue (seeded + operator-created). */
+  personalities: Map<string, Personality>;
   /** Currently active workspace id. */
   activeWorkspaceId: string | null;
   /** App-level error message. */
@@ -26,6 +32,9 @@ export const initialAppStore: AppStore = {
   connection: { status: 'disconnected', lastPong: 0 },
   sessions: new Map(),
   workspaces: new Map(),
+  agents: new Map(),
+  roles: new Map(),
+  personalities: new Map(),
   activeWorkspaceId: null,
   error: null,
   commandPaletteOpen: false,
@@ -41,6 +50,10 @@ export type AppStoreAction =
   | { type: 'ADD_WORKSPACE'; workspace: WorkspaceSummary }
   | { type: 'REMOVE_WORKSPACE'; workspaceId: string }
   | { type: 'SET_ACTIVE_WORKSPACE'; workspaceId: string | null }
+  | { type: 'SET_AGENTS'; agents: AgentSummary[] }
+  | { type: 'ADD_AGENT'; agent: AgentSummary }
+  | { type: 'REMOVE_AGENT'; agentId: string }
+  | { type: 'SET_CATALOG'; roles: Role[]; personalities: Personality[] }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'CLEAR_ERROR' }
   | { type: 'TOGGLE_COMMAND_PALETTE' }
@@ -98,6 +111,32 @@ export function appStoreReducer(state: AppStore, action: AppStoreAction): AppSto
 
     case 'SET_ACTIVE_WORKSPACE':
       return { ...state, activeWorkspaceId: action.workspaceId };
+
+    case 'SET_AGENTS': {
+      const agents = new Map<string, AgentSummary>();
+      for (const a of action.agents) agents.set(a.id, a);
+      return { ...state, agents };
+    }
+
+    case 'ADD_AGENT': {
+      const agents = new Map(state.agents);
+      agents.set(action.agent.id, action.agent);
+      return { ...state, agents };
+    }
+
+    case 'REMOVE_AGENT': {
+      const agents = new Map(state.agents);
+      agents.delete(action.agentId);
+      return { ...state, agents };
+    }
+
+    case 'SET_CATALOG': {
+      const roles = new Map<string, Role>();
+      for (const r of action.roles) roles.set(r.id, r);
+      const personalities = new Map<string, Personality>();
+      for (const p of action.personalities) personalities.set(p.id, p);
+      return { ...state, roles, personalities };
+    }
 
     case 'SET_ERROR':
       return { ...state, error: action.error };

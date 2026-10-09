@@ -18,7 +18,7 @@ function getStatusChar(status: FileStatus): string {
 
 function getStatusColor(status: FileStatus): string {
   if (status === 'Modified') return 'var(--accent-warn)';
-  if (status === 'Added') return '#4caf50';
+  if (status === 'Added') return 'var(--state-success)';
   if (status === 'Deleted') return 'var(--accent-error)';
   if (typeof status === 'object' && 'Renamed' in status) return 'var(--accent-warn)';
   return 'var(--text-muted)';
@@ -30,7 +30,12 @@ const overlayStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  // Token, not a literal: a dark scrim over an already-dark app dims almost
+  // nothing on its own — the blur is what separates the dialog from the
+  // surface behind it. ConfirmModal does the same; keep them in step.
+  backgroundColor: 'var(--scrim)',
+  backdropFilter: 'blur(3px)',
+  WebkitBackdropFilter: 'blur(3px)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -131,7 +136,7 @@ const buttonRowStyle: React.CSSProperties = {
 
 const primaryButtonStyle: React.CSSProperties = {
   backgroundColor: 'var(--accent-primary)',
-  color: 'var(--bg-base)',
+  color: 'var(--accent-fg)',
   fontWeight: 'bold',
   padding: '10px 20px',
   borderRadius: 4,
@@ -144,7 +149,10 @@ const primaryButtonStyle: React.CSSProperties = {
 const secondaryButtonStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
   color: 'var(--text-primary)',
-  border: '1px solid var(--text-muted)',
+  // Longhands: borderColor is mutated on hover below.
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--text-muted)',
   padding: '10px 20px',
   borderRadius: 4,
   cursor: 'pointer',

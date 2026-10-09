@@ -179,8 +179,20 @@ pub enum FailPhase {
     Cleanup,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Severity of a run notice — chrome the UI shows next to the run, never part
+/// of the human-readable output log itself. Rate limits, compaction boundaries
+/// and stream shapes we deliberately don't model land here instead of being
+/// dumped as raw JSON.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum RunMode {
+    #[default]
     Free,
     Guided,
     Strict,
@@ -242,6 +254,12 @@ pub struct Run {
     /// Run driving strategy. Defaults to OneShot for old persisted runs.
     #[serde(default)]
     pub kind: RunKind,
+    /// Agent that drove this run. `None` = the implicit default agent (the
+    /// daemon's configured `claude` binary with no extra instructions), which
+    /// is how every run behaved before agents existed — keeps old persisted
+    /// runs and agentless clients working.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
     pub state: RunState,
     pub prompt: String,
     pub provided_files: Vec<PathBuf>,
@@ -292,6 +310,32 @@ pub struct RunSummary {
     /// to show the "Approve & execute" follow-up after a plan run.
     #[serde(default)]
     pub autonomy: AutonomyLevel,
+    /// Session that owns the run. A whole project's history spans sessions —
+    /// the daemon starts a new one per `StartSession` — so a row has to be
+    /// able to say where it came from.
+    #[serde(default)]
+    pub session_id: Uuid,
+    /// Branch the run's worktree lives on. Empty for a run that never reached
+    /// the worktree stage (a preflight failure).
+    #[serde(default)]
+    pub branch: String,
+    /// Agent that drove the run. `None` = the implicit default agent.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
+    /// The full prompt, not the preview. Re-running has to resubmit what the
+    /// user actually asked for: `prompt_preview` is capped at 100 chars, so
+    /// using it would silently rewrite the request.
+    #[serde(default)]
+    pub prompt: String,
+    /// Run mode, so a re-run reproduces the original rather than guessing.
+    #[serde(default)]
+    pub mode: RunMode,
+    /// Whether the run's worktree metadata still exists, i.e. whether its work
+    /// is still awaiting a decision (merge or revert). This is the only honest
+    /// way to tell a reviewed run from an unreviewed one: merge and revert
+    /// delete the metadata but deliberately leave the run's own state alone.
+    #[serde(default)]
+    pub worktree_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +345,183 @@ pub struct SessionSummary {
     pub active_run: Option<Uuid>,
     pub run_count: usize,
     pub started_at: DateTime<Utc>,
+}
+
+// --- Agents ---
+
+/// Which CLI drives a run. Selected per agent; `Claude` is the historical
+/// default. Both runners are spawned behind the same `RunnerEvent` channel, so
+/// the supervisor is agnostic to which one produced the stream.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum Runner {
+    #[default]
+    Claude,
+    Hermes,
+}
+
+/// A reusable *role*: the base mission an agent inherits. Roles are a catalogue
+/// (seeded with built-ins, editable and extensible by the operator) rather than
+/// a closed enum, so a team can grow its own stages without a schema change.
+///
+/// `id` is a stable slug for built-ins and a UUID string for user-created ones.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Role {
+    pub id: String,
+    pub name: String,
+    /// Base instructions injected for every agent in this role. An agent adds
+    /// its own `instructions` on top; this is the shared part.
+    #[serde(default)]
+    pub instructions: String,
+    /// Seeded default (true) vs operator-created (false). Informational: it
+    /// marks provenance in the UI, it does not restrict editing.
+    #[serde(default)]
+    pub builtin: bool,
+    /// Timestamps are informational — the daemon overwrites them on save — so a
+    /// client may omit them rather than having to synthesise a valid one.
+    #[serde(default = "chrono::Utc::now")]
+    pub created_at: DateTime<Utc>,
+    #[serde(default = "chrono::Utc::now")]
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A reusable *personality*: how an agent communicates, layered on top of its
+/// role. Same catalogue shape as `Role`, kept separate because a personality is
+/// orthogonal to the phase — any implementer can be terse or thorough.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Personality {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub builtin: bool,
+    /// Informational; the daemon overwrites these on save (see `Role`).
+    #[serde(default = "chrono::Utc::now")]
+    pub created_at: DateTime<Utc>,
+    #[serde(default = "chrono::Utc::now")]
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A named, reusable worker: an invocation with a role, an optional
+/// personality, additional instructions of its own, and a runner choice.
+///
+/// The role supplies the base mission, the personality supplies the tone, and
+/// `instructions` holds what is specific to *this* agent — that is the part
+/// saved on the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Agent {
+    pub id: Uuid,
+    pub name: String,
+    /// Reference into the role catalogue. `None` = no role overlay.
+    #[serde(default)]
+    pub role_id: Option<String>,
+    /// Reference into the personality catalogue. `None` = no personality.
+    #[serde(default)]
+    pub personality_id: Option<String>,
+    /// Which CLI drives this agent's runs.
+    #[serde(default)]
+    pub runner: Runner,
+    /// Legacy `AgentRole` value from before roles became a catalogue. Only read
+    /// on load to migrate old files into `role_id`; never written back. The
+    /// `rename` is what lets old `{"role": "Planner"}` files deserialize here.
+    #[serde(default, rename = "role", skip_serializing)]
+    pub legacy_role: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    /// Additional instructions appended after the role's base mission. This is
+    /// the agent-specific part (the AGENTS.md equivalent).
+    #[serde(default)]
+    pub instructions: String,
+    /// Optional model pin forwarded as `--model`. `None` = the CLI default.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional inference provider, forwarded as `--provider` to the Hermes
+    /// runner. Hermes-only: Claude Code has no provider flag, so it is ignored
+    /// (and hidden in the UI) when `runner` is `Claude`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Optional Hermes profile — a named, isolated Hermes home with its own
+    /// config, model set, skills and memory — forwarded as `-p <name>`.
+    /// Hermes-only, same as `provider`.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Autonomy applied to runs when the client does not specify one.
+    #[serde(default)]
+    pub default_autonomy: AutonomyLevel,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Agent {
+    /// Fold an agent's role base, its own additions and its personality into the
+    /// single system prompt handed to the runner. Order matters: role (what to
+    /// do) → agent additions (how, specifically) → personality (tone).
+    pub fn compose_prompt(
+        &self,
+        role: Option<&Role>,
+        personality: Option<&Personality>,
+    ) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if let Some(r) = role {
+            push_trimmed(&mut parts, &r.instructions);
+        }
+        push_trimmed(&mut parts, &self.instructions);
+        if let Some(p) = personality {
+            push_trimmed(&mut parts, &p.prompt);
+        }
+        parts.join("\n\n")
+    }
+}
+
+fn push_trimmed<'a>(parts: &mut Vec<&'a str>, s: &'a str) {
+    let t = s.trim();
+    if !t.is_empty() {
+        parts.push(t);
+    }
+}
+
+/// Wire-safe summary of an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub role_id: Option<String>,
+    pub personality_id: Option<String>,
+    pub runner: Runner,
+    pub description: String,
+    pub model: Option<String>,
+    /// Provider pin (Hermes runner only); carried so the edit form can show it.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Hermes profile pin; carried so the edit form can show it.
+    #[serde(default)]
+    pub profile: Option<String>,
+    pub default_autonomy: AutonomyLevel,
+    /// The agent-specific instructions. Carried in the summary so the edit form
+    /// can show what is actually saved — without it an operator editing an
+    /// agent is blind to the one field that makes the agent differ.
+    #[serde(default)]
+    pub instructions: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&Agent> for AgentSummary {
+    fn from(a: &Agent) -> Self {
+        AgentSummary {
+            id: a.id,
+            name: a.name.clone(),
+            role_id: a.role_id.clone(),
+            personality_id: a.personality_id.clone(),
+            runner: a.runner,
+            description: a.description.clone(),
+            model: a.model.clone(),
+            provider: a.provider.clone(),
+            profile: a.profile.clone(),
+            default_autonomy: a.default_autonomy,
+            instructions: a.instructions.clone(),
+            updated_at: a.updated_at,
+        }
+    }
 }
 
 // --- Git Types ---
@@ -617,6 +838,102 @@ mod tests {
         let mode = RunMode::Guided;
         let json = serde_json::to_string(&mode).unwrap();
         assert_eq!(json, "\"Guided\"");
+    }
+
+    fn agent_with(instructions: &str) -> Agent {
+        let now = chrono::Utc::now();
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            name: "a".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::default(),
+            legacy_role: None,
+            description: String::new(),
+            instructions: instructions.into(),
+            model: None,
+            provider: None,
+            profile: None,
+            default_autonomy: AutonomyLevel::default(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn role_with(instructions: &str) -> Role {
+        let now = chrono::Utc::now();
+        Role {
+            id: "planner".into(),
+            name: "Planner".into(),
+            instructions: instructions.into(),
+            builtin: true,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn personality_with(prompt: &str) -> Personality {
+        let now = chrono::Utc::now();
+        Personality {
+            id: "terse".into(),
+            name: "Terse".into(),
+            prompt: prompt.into(),
+            builtin: true,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn compose_prompt_orders_role_then_agent_then_personality() {
+        let agent = agent_with("Add extra detail.");
+        let role = role_with("Plan the work.");
+        let personality = personality_with("Be terse.");
+        let composed = agent.compose_prompt(Some(&role), Some(&personality));
+        assert_eq!(
+            composed,
+            "Plan the work.\n\nAdd extra detail.\n\nBe terse."
+        );
+    }
+
+    #[test]
+    fn compose_prompt_skips_blank_parts() {
+        // Role present, agent's own additions blank, no personality: only the
+        // role contributes, and no stray separators survive.
+        let agent = agent_with("   ");
+        let role = role_with("Plan the work.");
+        assert_eq!(agent.compose_prompt(Some(&role), None), "Plan the work.");
+        // Nothing at all → empty, so the runner adds no system prompt.
+        let bare = agent_with("");
+        assert_eq!(bare.compose_prompt(None, None), "");
+    }
+
+    #[test]
+    fn runner_defaults_to_claude_and_roundtrips() {
+        assert_eq!(Runner::default(), Runner::Claude);
+        assert_eq!(serde_json::to_string(&Runner::Hermes).unwrap(), "\"Hermes\"");
+    }
+
+    #[test]
+    fn legacy_role_field_is_read_but_never_written() {
+        // Old agent files carry `role`; it must deserialize into `legacy_role`
+        // so `recover` can migrate it, and must not be re-serialized.
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "old",
+            "role": "Planner",
+            "description": "",
+            "instructions": "",
+            "model": null,
+            "default_autonomy": "Autonomous",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let agent: Agent = serde_json::from_str(json).unwrap();
+        assert_eq!(agent.legacy_role.as_deref(), Some("Planner"));
+        assert_eq!(agent.role_id, None, "no catalogue id in the old file");
+        let back = serde_json::to_string(&agent).unwrap();
+        assert!(!back.contains("\"role\""), "legacy field must not be written: {back}");
     }
 
     #[test]

@@ -76,16 +76,35 @@ interface XTermHandle {
   options?: { theme?: unknown };
 }
 
+// The 16 ANSI slots are read from our own tokens rather than left to xterm's
+// defaults: those are tuned for a pure-black background, clash with the
+// graphite surface, and are unreadable in light appearance. Keeping them a
+// palette (not the accent) preserves what `ls --color`, git and TUIs mean.
 function getTermTheme() {
   const s = getComputedStyle(document.documentElement);
-  const v = (name: string) => s.getPropertyValue(name).trim() || undefined;
+  const v = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
   return {
-    background: v('--bg-base') || '#0d1117',
-    foreground: v('--text-primary') || '#e0e0e0',
-    cursor: v('--accent-primary') || '#4ecdc4',
-    cursorAccent: v('--bg-base') || '#0d1117',
-    selectionBackground: v('--bg-overlay') || '#232738',
-    selectionForeground: v('--text-primary') || '#e2e4e9',
+    background: v('--bg-base', '#0d1117'),
+    foreground: v('--text-primary', '#e0e0e0'),
+    cursor: v('--accent-primary', '#4f46e5'),
+    cursorAccent: v('--accent-fg', '#ffffff'),
+    selectionBackground: v('--term-selection', 'rgba(79, 70, 229, 0.28)'),
+    black: v('--term-black', '#5a635e'),
+    red: v('--term-red', '#f0707a'),
+    green: v('--term-green', '#3fb987'),
+    yellow: v('--term-yellow', '#e0a83c'),
+    blue: v('--term-blue', '#7ba3f7'),
+    magenta: v('--term-magenta', '#d09bf0'),
+    cyan: v('--term-cyan', '#5ec9c9'),
+    white: v('--term-white', '#d5dbd8'),
+    brightBlack: v('--term-bright-black', '#7f8a84'),
+    brightRed: v('--term-bright-red', '#ff8f8f'),
+    brightGreen: v('--term-bright-green', '#62d9a6'),
+    brightYellow: v('--term-bright-yellow', '#f0c063'),
+    brightBlue: v('--term-bright-blue', '#a3c0ff'),
+    brightMagenta: v('--term-bright-magenta', '#e2b8ff'),
+    brightCyan: v('--term-bright-cyan', '#86dede'),
+    brightWhite: v('--term-bright-white', '#f2f5f3'),
   };
 }
 
@@ -175,7 +194,18 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             if (disposed) return;
             if (sessionIdRef.current) {
               const dims = fitAddon.proposeDimensions();
-              if (dims) {
+              // A hidden pane measures 0×0, and xterm then proposes a size that
+              // computes to NaN. NaN serialises to `null`, so the daemon answers
+              // INVALID_COMMAND ("invalid type: null, expected u16") and the UI
+              // shows an error banner for a resize nobody asked for. Hidden
+              // panes are normal — a phone shows one pane at a time, so
+              // switching panes zeroes the others — so stay quiet instead of
+              // reporting a size the terminal does not have.
+              if (
+                dims &&
+                Number.isFinite(dims.cols) && dims.cols > 0 &&
+                Number.isFinite(dims.rows) && dims.rows > 0
+              ) {
                 sendRef.current({
                   type: 'ResizeTerminal',
                   session_id: sessionIdRef.current,
@@ -202,7 +232,13 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
     };
   }, []);
 
-  // Update xterm theme when CSS variables change (theme switch)
+  // Update xterm theme when the scheme changes.
+  //
+  // All three attributes matter: accent changes arrive as inline `style`
+  // (appearance.ts sets --accent-* there), while light/dark arrives as
+  // `data-appearance` and a theme swap as `data-theme`. Watching only `style`
+  // left the terminal painted with the previous appearance's ANSI palette
+  // until something else forced a repaint.
   useEffect(() => {
     const observer = new MutationObserver(() => {
       const term = xtermRef.current;
@@ -210,7 +246,10 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
         term.options.theme = getTermTheme();
       }
     });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'data-appearance', 'data-theme'],
+    });
     return () => observer.disconnect();
   }, []);
 
@@ -451,7 +490,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   };
 
   return (
-    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
       {sessionState.tag === 'restore-prompt' && (
         <div
           style={{
@@ -542,7 +581,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
           <button
             onClick={handleReconnect}
             aria-label="Retry terminal connection"
-            style={{ padding: '8px 18px', backgroundColor: 'var(--accent-primary)', color: 'var(--bg-base)', border: 'none', borderRadius: 5, cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12 }}
+            style={{ padding: '8px 18px', backgroundColor: 'var(--accent-primary)', color: 'var(--accent-fg)', border: 'none', borderRadius: 5, cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12 }}
           >
             Retry
           </button>
@@ -578,7 +617,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             style={{
               padding: '8px 18px',
               backgroundColor: 'var(--accent-primary)',
-              color: 'var(--bg-base)',
+              color: 'var(--accent-fg)',
               border: 'none',
               borderRadius: 5,
               cursor: 'pointer',

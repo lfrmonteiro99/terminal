@@ -184,7 +184,11 @@ export function GitStatusPane({ pane: _pane }: PaneProps) {
             alignItems: 'center',
             gap: 4,
             background: 'transparent',
-            border: '1px solid var(--border-default)',
+            // Longhands: borderColor is mutated on hover below, and mixing the
+            // `border` shorthand with it makes React drop the colour.
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: 'var(--border-default)',
             color: refreshing ? 'var(--accent-primary)' : 'var(--text-muted)',
             borderRadius: 5,
             padding: '3px 9px',

@@ -3,7 +3,7 @@ use crate::daemon_context::{ActiveRun, ClientId, DaemonContext};
 use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use terminal_core::config::DaemonConfig;
@@ -72,6 +72,61 @@ impl Dispatcher {
             workspaces.insert(id, ws);
         }
         info!("Recovered {} persisted workspace(s)", workspaces.len());
+    }
+
+    /// Load persisted sessions into the in-memory registry. Called once at
+    /// startup, alongside `recover_workspaces`.
+    ///
+    /// Without this, `ListSessions` reads an empty map — the handler serves the
+    /// in-memory clone and nothing ever put the disk's sessions there. The
+    /// visible symptom was a client that could not see or reopen a single
+    /// previous session after a daemon restart, even with the files sitting in
+    /// `sessions/`, and `ListRuns` (which *does* read from disk) unreachable for
+    /// want of a session id to ask about.
+    pub async fn recover_sessions(&self) {
+        let persisted = match self.context.persistence.list_sessions() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("recover_sessions: list failed: {}", e);
+                return;
+            }
+        };
+        if persisted.is_empty() {
+            return;
+        }
+        let mut sessions = self.context.sessions.lock().await;
+        let mut recovered = 0usize;
+        for session in persisted {
+            // An ended session is history, not state: rehydrating it would
+            // re-open a session the user deliberately closed.
+            if session.ended_at.is_some() {
+                continue;
+            }
+            if sessions.insert(session.id, session).is_none() {
+                recovered += 1;
+            }
+        }
+        info!(
+            "Recovered {} persisted session(s) ({} in memory)",
+            recovered,
+            sessions.len()
+        );
+    }
+
+    /// Load persisted agents into the in-memory registry. Called once at
+    /// startup, mirroring `recover_workspaces`.
+    pub async fn recover_agents(&self) {
+        let dispatcher =
+            crate::dispatchers::agent_dispatcher::AgentDispatcher::new(self.context.clone());
+        dispatcher.recover().await;
+    }
+
+    /// Seed + load the role/personality catalogue. Called once at startup,
+    /// before `recover_agents` (agents reference catalogue ids).
+    pub async fn recover_catalog(&self) {
+        let dispatcher =
+            crate::dispatchers::catalog_dispatcher::CatalogDispatcher::new(self.context.clone());
+        dispatcher.recover().await;
     }
 
     /// Borrow the shared daemon context (used by `server.rs` to reach
@@ -274,6 +329,24 @@ impl Dispatcher {
             AppCommand::StartSession { project_root } => {
                 let session_id = Uuid::new_v4();
 
+                // Refuse a root that isn't there. A session pinned to a missing
+                // directory is a trap: it persists, shows up in "recent", and
+                // every run started from it dies at spawn with a message that
+                // blames the runner binary. Better to say no here, where the
+                // client can still show the real path in the error.
+                if !project_root.is_dir() {
+                    let _ = reply_tx
+                        .send(AppEvent::Error {
+                            code: "PROJECT_ROOT_MISSING".into(),
+                            message: format!(
+                                "Project directory does not exist: {}",
+                                project_root.display()
+                            ),
+                        })
+                        .await;
+                    return;
+                }
+
                 // Read initial_head from git if applicable
                 let initial_head = if crate::git_engine::is_git_repo(&project_root).await {
                     match crate::git_engine::head_oid(&project_root).await {
@@ -363,80 +436,19 @@ impl Dispatcher {
                     .await;
             }
 
-            AppCommand::ListRuns { session_id } => {
-                let sessions = self.context.sessions.lock().await;
-                match sessions.get(&session_id) {
-                    Some(_session) => {
-                        // Load persisted runs
-                        let persisted_runs = self
-                            .context
-                            .persistence
-                            .list_runs_for_session(session_id)
-                            .unwrap_or_else(|e| {
-                                warn!(
-                                    "Failed to load persisted runs for session {}: {}",
-                                    session_id, e
-                                );
-                                vec![]
-                            });
-
-                        // Get active runs (these have more current state)
-                        let active_runs = self.context.active_runs.lock().await;
-
-                        // Build summaries: active runs override persisted ones
-                        let mut summaries_map: HashMap<Uuid, RunSummary> = HashMap::new();
-
-                        // First, add persisted runs
-                        for run in &persisted_runs {
-                            summaries_map.insert(
-                                run.id,
-                                RunSummary {
-                                    id: run.id,
-                                    state: run.state.clone(),
-                                    prompt_preview: run.prompt.chars().take(100).collect(),
-                                    modified_file_count: run.modified_files.len(),
-                                    diff_stat: None,
-                                    started_at: run.started_at,
-                                    ended_at: run.ended_at,
-                                    autonomy: run.autonomy,
-                                },
-                            );
-                        }
-
-                        // Then, override with active runs (more current state)
-                        for active in active_runs.values() {
-                            if active.run.session_id == session_id {
-                                summaries_map.insert(
-                                    active.run.id,
-                                    RunSummary {
-                                        id: active.run.id,
-                                        state: active.run.state.clone(),
-                                        prompt_preview: active
-                                            .run
-                                            .prompt
-                                            .chars()
-                                            .take(100)
-                                            .collect(),
-                                        modified_file_count: active.run.modified_files.len(),
-                                        diff_stat: None,
-                                        started_at: active.run.started_at,
-                                        ended_at: active.run.ended_at,
-                                        autonomy: active.run.autonomy,
-                                    },
-                                );
-                            }
-                        }
-
-                        let mut summaries: Vec<RunSummary> = summaries_map.into_values().collect();
-                        summaries.sort_by_key(|r| r.started_at);
-
-                        let _ = reply_tx
-                            .send(AppEvent::RunList {
-                                session_id,
-                                runs: summaries,
-                            })
-                            .await;
-                    }
+            AppCommand::ListRuns {
+                session_id,
+                all_sessions,
+            } => {
+                // Resolve the project first: an all-sessions list means "this
+                // project's runs", and the project is the only key that spans
+                // the sessions the daemon opens.
+                let known_project = {
+                    let sessions = self.context.sessions.lock().await;
+                    sessions.get(&session_id).map(|s| s.project_root.clone())
+                };
+                let project_root = match known_project {
+                    Some(root) => root,
                     None => {
                         let _ = reply_tx
                             .send(AppEvent::Error {
@@ -444,8 +456,110 @@ impl Dispatcher {
                                 message: format!("Session {} not found", session_id),
                             })
                             .await;
+                        return;
+                    }
+                };
+
+                // Every session that belongs to this project: in memory plus on
+                // disk. An ended session leaves the map, but its runs are still
+                // part of the project's history.
+                let project_sessions: HashSet<Uuid> = {
+                    let mut ids: HashSet<Uuid> = HashSet::new();
+                    {
+                        let sessions = self.context.sessions.lock().await;
+                        for s in sessions.values() {
+                            if s.project_root == project_root {
+                                ids.insert(s.id);
+                            }
+                        }
+                    }
+                    if let Ok(persisted) = self.context.persistence.list_sessions() {
+                        for s in persisted {
+                            if s.project_root == project_root {
+                                ids.insert(s.id);
+                            }
+                        }
+                    }
+                    ids
+                };
+
+                // Load persisted runs
+                let persisted_runs = if all_sessions {
+                    self.context
+                        .persistence
+                        .list_all_runs()
+                        .unwrap_or_else(|e| {
+                            warn!("Failed to load persisted runs: {}", e);
+                            vec![]
+                        })
+                        .into_iter()
+                        .filter(|r| project_sessions.contains(&r.session_id))
+                        .collect::<Vec<_>>()
+                } else {
+                    self.context
+                        .persistence
+                        .list_runs_for_session(session_id)
+                        .unwrap_or_else(|e| {
+                            warn!(
+                                "Failed to load persisted runs for session {}: {}",
+                                session_id, e
+                            );
+                            vec![]
+                        })
+                };
+
+                // Get active runs (these have more current state)
+                let active_runs = self.context.active_runs.lock().await;
+
+                // Build summaries: active runs override persisted ones
+                let mut summaries_map: HashMap<Uuid, RunSummary> = HashMap::new();
+
+                // One summary shape for both sources. `worktree_present` is a
+                // stat on the metadata file: merge and revert delete it while
+                // leaving the run's own state untouched, so this is the only
+                // honest way to say "this work still needs a decision".
+                let summary_of = |run: &Run| RunSummary {
+                    id: run.id,
+                    state: run.state.clone(),
+                    prompt_preview: run.prompt.chars().take(100).collect(),
+                    modified_file_count: run.modified_files.len(),
+                    diff_stat: None,
+                    started_at: run.started_at,
+                    ended_at: run.ended_at,
+                    autonomy: run.autonomy,
+                    session_id: run.session_id,
+                    branch: run.branch.clone(),
+                    agent_id: run.agent_id,
+                    prompt: run.prompt.clone(),
+                    mode: run.mode,
+                    worktree_present: self
+                        .context
+                        .persistence
+                        .worktree_meta_path(run.id)
+                        .exists(),
+                };
+
+                // First, add persisted runs
+                for run in &persisted_runs {
+                    summaries_map.insert(run.id, summary_of(run));
+                }
+
+                // Then, override with active runs (more current state)
+                for active in active_runs.values() {
+                    if project_sessions.contains(&active.run.session_id) {
+                        summaries_map.insert(active.run.id, summary_of(&active.run));
                     }
                 }
+
+                let mut summaries: Vec<RunSummary> = summaries_map.into_values().collect();
+                summaries.sort_by_key(|r| r.started_at);
+
+                let _ = reply_tx
+                    .send(AppEvent::RunList {
+                        session_id,
+                        runs: summaries,
+                    })
+                    .await;
             }
 
             AppCommand::GetRunStatus { run_id } => {
@@ -458,6 +572,13 @@ impl Dispatcher {
                     .await
                     .get(&run_id)
                     .map(|a| a.run.state.clone());
+                // A run that is no longer active is still a valid subject for
+                // "what happened?" — fall back to the persisted record instead
+                // of answering RUN_NOT_FOUND for every finished run.
+                let state = match state {
+                    Some(s) => Some(s),
+                    None => self.context.persistence.load_run(run_id).ok().map(|r| r.state),
+                };
                 match state {
                     Some(new_state) => {
                         let _ = reply_tx
@@ -466,9 +587,10 @@ impl Dispatcher {
                     }
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
+                            .send(AppEvent::RunError {
+                                run_id,
                                 code: "RUN_NOT_FOUND".into(),
-                                message: format!("No active run {}", run_id),
+                                message: "That run no longer exists.".into(),
                             })
                             .await;
                     }
@@ -482,6 +604,7 @@ impl Dispatcher {
                 skip_dirty_check,
                 autonomy,
                 kind: _,
+                agent_id,
             } => {
                 self.do_start_run(
                     client_id,
@@ -490,6 +613,7 @@ impl Dispatcher {
                     mode,
                     autonomy,
                     skip_dirty_check,
+                    agent_id,
                     reply_tx,
                 )
                 .await;
@@ -527,9 +651,11 @@ impl Dispatcher {
                     }
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "RUN_NOT_FOUND".into(),
-                                message: format!("No active run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_NOT_RUNNING".into(),
+                                message: "That run is no longer running, so there is nothing to stop."
+                                    .into(),
                             })
                             .await;
                     }
@@ -585,10 +711,12 @@ impl Dispatcher {
                         let wt_head = match crate::git_engine::head_oid(&meta.worktree_path).await {
                             Ok(oid) => oid,
                             Err(e) => {
+                                warn!("GetDiff: could not read worktree HEAD for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to read worktree HEAD: {}", e),
+                                        message: "This run's worktree could not be read, so there is no diff to show.".into(),
                                     })
                                     .await;
                                 return;
@@ -604,10 +732,12 @@ impl Dispatcher {
                         {
                             Ok(s) => s,
                             Err(e) => {
+                                warn!("GetDiff: could not compute diff stat for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to compute diff stat: {}", e),
+                                        message: "This run's changes could not be read, so there is no diff to show.".into(),
                                     })
                                     .await;
                                 return;
@@ -623,10 +753,12 @@ impl Dispatcher {
                         {
                             Ok(d) => d,
                             Err(e) => {
+                                warn!("GetDiff: could not compute the diff for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to compute full diff: {}", e),
+                                        message: "This run's diff could not be computed.".into(),
                                     })
                                     .await;
                                 return;
@@ -638,10 +770,16 @@ impl Dispatcher {
                             .await;
                     }
                     Err(e) => {
+                        // The internal reason goes to the log; the wire carries a
+                        // sentence. "Not found: WorktreeMeta for run <uuid>" is
+                        // exactly the jargon that made this look like a crash.
+                        warn!("GetDiff: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is gone, so there is no diff to show."
+                                    .into(),
                             })
                             .await;
                     }
@@ -653,10 +791,13 @@ impl Dispatcher {
                 let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
+                        warn!("RevertRun: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is already gone — nothing to revert."
+                                    .into(),
                             })
                             .await;
                         return;
@@ -669,9 +810,10 @@ impl Dispatcher {
                     Some(pr) => pr,
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("Cannot find project root for run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_PROJECT_MISSING".into(),
+                                message: "Cannot find the project this run belongs to.".into(),
                             })
                             .await;
                         return;
@@ -715,10 +857,13 @@ impl Dispatcher {
                 let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
+                        warn!("MergeRun: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is already gone — nothing to merge."
+                                    .into(),
                             })
                             .await;
                         return;
@@ -731,17 +876,29 @@ impl Dispatcher {
                     Some(pr) => pr,
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("Cannot find project root for run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_PROJECT_MISSING".into(),
+                                message: "Cannot find the project this run belongs to.".into(),
                             })
                             .await;
                         return;
                     }
                 };
 
-                // Remove worktree before merging (can't merge into a checked-out branch)
+                // Remove worktree before merging (can't merge into a checked-out branch).
+                // Commit whatever is still uncommitted first: the merge takes the
+                // branch as it stands, and removing the worktree destroys the rest.
                 if meta.worktree_path.exists() {
+                    if let Err(e) = crate::git_engine::checkpoint_commit(
+                        &meta.worktree_path,
+                        &format!("auto-checkpoint: run {} merged", run_id),
+                    ).await {
+                        warn!(
+                            "checkpoint commit before merge failed for run {}: {}",
+                            run_id, e
+                        );
+                    }
                     if let Err(e) =
                         crate::git_engine::worktree_remove(&project_root, &meta.worktree_path).await
                     {
@@ -802,9 +959,10 @@ impl Dispatcher {
                     }
                     Err(e) => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
+                            .send(AppEvent::RunError {
+                                run_id,
                                 code: "GIT_ERROR".into(),
-                                message: format!("Merge failed for run {}: {}", run_id, e),
+                                message: format!("Merge failed: {}", e),
                             })
                             .await;
                     }
@@ -817,6 +975,8 @@ impl Dispatcher {
                 prompt,
                 mode,
                 stash_message,
+                autonomy,
+                agent_id,
             } => {
                 // Look up project_root from session
                 let project_root = {
@@ -847,14 +1007,16 @@ impl Dispatcher {
                 }
 
                 // Stash succeeded -- proceed with start run, skipping dirty check.
-                // Stash-and-run flows default to Autonomous (legacy behaviour).
+                // The client's autonomy and agent choice ride along, so a
+                // stashed run behaves exactly like a clean-tree run.
                 self.do_start_run(
                     client_id,
                     session_id,
                     prompt,
                     mode,
-                    AutonomyLevel::default(),
+                    autonomy,
                     true,
+                    agent_id,
                     reply_tx,
                 )
                 .await;
@@ -1061,7 +1223,18 @@ impl Dispatcher {
                 } else if let Some(rid) = run_id {
                     match self.context.persistence.load_worktree_meta(rid) {
                         Ok(meta) => {
-                            crate::git_engine::changed_files(&root, &meta.base_head, "HEAD")
+                            // The run's work sits on its own branch in its own
+                            // worktree. Diffing *this* repo's HEAD against the base
+                            // only shows something once the run has been merged, so
+                            // an unmerged run always looked like it changed nothing.
+                            let target = if meta.worktree_path.exists() {
+                                meta.worktree_path.clone()
+                            } else {
+                                // Worktree gone (merged or reverted) — the branch is
+                                // what is left of the run.
+                                root.clone()
+                            };
+                            crate::git_engine::changed_files(&target, &meta.base_head, "HEAD")
                                 .await
                                 .map_err(|e| e.to_string())
                         }
@@ -1106,9 +1279,27 @@ impl Dispatcher {
                         .map_err(|e| e.to_string())
                 } else if let Some(rid) = run_id {
                     match self.context.persistence.load_worktree_meta(rid) {
-                        Ok(meta) => crate::git_engine::diff_full(&root, &meta.base_head, "HEAD")
+                        Ok(meta) => {
+                            // Same reasoning as GetChangedFiles, plus the caller
+                            // asked for one file — the old code returned the whole
+                            // repo's diff from the wrong ref.
+                            let target = if meta.worktree_path.exists() {
+                                meta.worktree_path.clone()
+                            } else {
+                                root.clone()
+                            };
+                            let head = crate::git_engine::head_oid(&target)
+                                .await
+                                .unwrap_or_else(|_| "HEAD".to_string());
+                            crate::git_engine::diff_full_file(
+                                &target,
+                                &meta.base_head,
+                                &head,
+                                &file_path,
+                            )
                             .await
-                            .map_err(|e| e.to_string()),
+                            .map_err(|e| e.to_string())
+                        }
                         Err(e) => Err(format!("worktree meta: {}", e)),
                     }
                 } else {
@@ -1284,6 +1475,29 @@ impl Dispatcher {
                             .await;
                     }
                 }
+            }
+
+            // --- Agent commands ---
+            AppCommand::ListAgents
+            | AppCommand::CreateAgent { .. }
+            | AppCommand::UpdateAgent { .. }
+            | AppCommand::DeleteAgent { .. } => {
+                let dispatcher = crate::dispatchers::agent_dispatcher::AgentDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
+            }
+
+            // --- Role / personality catalogue ---
+            AppCommand::ListCatalog
+            | AppCommand::SaveRole { .. }
+            | AppCommand::DeleteRole { .. }
+            | AppCommand::SavePersonality { .. }
+            | AppCommand::DeletePersonality { .. } => {
+                let dispatcher = crate::dispatchers::catalog_dispatcher::CatalogDispatcher::new(
+                    self.context.clone(),
+                );
+                dispatcher.handle(cmd, reply_tx).await;
             }
 
             // --- Workspace commands (M1-01, M1-04) ---
@@ -1554,10 +1768,53 @@ impl Dispatcher {
         session_id: Uuid,
         prompt: String,
         mode: RunMode,
-        autonomy: AutonomyLevel,
+        autonomy: Option<AutonomyLevel>,
         skip_dirty_check: bool,
+        agent_id: Option<Uuid>,
         reply_tx: mpsc::Sender<AppEvent>,
     ) {
+        // Resolve the driving agent (if any) before touching the filesystem.
+        // A named agent contributes a model pin and an appended system prompt;
+        // `None` reproduces the historical behaviour exactly.
+        let agent = match agent_id {
+            Some(id) => {
+                let found = self.context.agents.lock().await.get(&id).cloned();
+                match found {
+                    Some(a) => Some(a),
+                    None => {
+                        let _ = reply_tx
+                            .send(AppEvent::Error {
+                                code: "AGENT_NOT_FOUND".into(),
+                                message: format!("No agent {id}"),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // Fold role + personality + the agent's own instructions into the single
+        // system prompt the runner sees. Done here rather than in the runner so
+        // the runner stays a pure arg-builder with no catalogue dependency.
+        let agent = match agent {
+            Some(mut a) => {
+                a.instructions = self.resolve_agent_prompt(&a).await;
+                Some(a)
+            }
+            None => None,
+        };
+
+        // Effective autonomy — the one place `agent.default_autonomy` is read on
+        // the run path. An explicit client choice wins; otherwise the driving
+        // agent's policy applies; otherwise `Autonomous` (the historical
+        // default for agentless runs). `requested_autonomy` is kept untouched
+        // so the DirtyWarning retry echoes back exactly what the client asked
+        // for instead of a value it never chose.
+        let requested_autonomy = autonomy;
+        let autonomy = resolve_autonomy(autonomy, agent.as_ref());
+
         // Resolve the workspace this run belongs to (SEC-02 event routing).
         let workspace_id: Option<Uuid> = self
             .context
@@ -1592,6 +1849,25 @@ impl Dispatcher {
                 .send(AppEvent::Error {
                     code: "RUN_ALREADY_ACTIVE".into(),
                     message: "Session already has an active run".into(),
+                })
+                .await;
+            return;
+        }
+
+        // The project directory has to exist before anything else runs. Without
+        // this check a missing root (a renamed project, a session restored from
+        // a stale "recent" entry) only surfaced at `Command::spawn`, whose
+        // `current_dir()` failure is reported as "failed to spawn `hermes`: No
+        // such file or directory" — i.e. it blamed the binary, never the path,
+        // and the user could not tell what was actually missing.
+        if !project_root.is_dir() {
+            let _ = reply_tx
+                .send(AppEvent::Error {
+                    code: "PROJECT_ROOT_MISSING".into(),
+                    message: format!(
+                        "Project directory does not exist: {}. It may have been renamed or moved — start a new session pointing at the current path.",
+                        project_root.display()
+                    ),
                 })
                 .await;
             return;
@@ -1653,7 +1929,9 @@ impl Dispatcher {
                             status: dirty,
                             session_id,
                             prompt: prompt.clone(),
-                            mode: mode.clone(),
+                            mode,
+                            autonomy: requested_autonomy,
+                            agent_id,
                         })
                         .await;
                     return;
@@ -1763,9 +2041,10 @@ impl Dispatcher {
             id: run_id,
             session_id,
             branch: branch_name.clone(),
-            mode: mode.clone(),
+            mode,
             autonomy,
             kind: RunKind::OneShot,
+            agent_id,
             state: RunState::Preparing,
             prompt: prompt.clone(),
             provided_files: vec![],
@@ -1800,6 +2079,14 @@ impl Dispatcher {
                     let _ =
                         crate::git_engine::branch_delete(&project_root, &branch_name, true).await;
                 }
+                // The run is already persisted as `Preparing`; leaving it
+                // there would strand it as active forever (see
+                // `persist_run_failure`).
+                self.persist_run_failure(
+                    &run,
+                    format!("Session {} disappeared during setup", session_id),
+                    FailPhase::Preparation,
+                );
                 let _ = reply_tx
                     .send(AppEvent::Error {
                         code: "SESSION_NOT_FOUND".into(),
@@ -1822,23 +2109,76 @@ impl Dispatcher {
             )
             .await;
 
+        // `Preparing` is otherwise silent: the worktree is created, preflight
+        // runs, the CLI starts — all before a single byte of output. With no
+        // signal the panel looked hung, which is the whole reason these phase
+        // events exist. The UI renders them as "what is happening now".
+        self.context
+            .send_run_event(
+                workspace_id,
+                &reply_tx,
+                AppEvent::RunProgress {
+                    run_id,
+                    phase: if worktree_path.is_some() { "worktree" } else { "preparing" }.into(),
+                    detail: Some(
+                        worktree_path
+                            .as_ref()
+                            .unwrap_or(&project_root)
+                            .display()
+                            .to_string(),
+                    ),
+                },
+            )
+            .await;
+
         // Pre-flight check (delegated to helper)
+        self.context
+            .send_run_event(
+                workspace_id,
+                &reply_tx,
+                AppEvent::RunProgress {
+                    run_id,
+                    phase: "preflight".into(),
+                    detail: Some(
+                        agent
+                            .as_ref()
+                            .map(|a| format!("{:?} runner", a.runner))
+                            .unwrap_or_else(|| "default runner".into()),
+                    ),
+                },
+            )
+            .await;
         if self
-            .run_preflight(run_id, &run, workspace_id, &reply_tx)
+            .run_preflight(
+                run_id,
+                &run,
+                agent.as_ref().map(|a| a.runner).unwrap_or_default(),
+                workspace_id,
+                &reply_tx,
+            )
             .await
             .is_err()
         {
+            // `session.active_run` was set before this check, and only the
+            // supervisor clears it — and the supervisor never runs on this
+            // path. Left set, the session is permanently "already has an active
+            // run" and every later StartRun is rejected with
+            // RUN_ALREADY_ACTIVE, i.e. one bad preflight bricks the session.
+            self.release_session_run(session_id, run_id).await;
             return;
         }
 
         // Spawn claude process in actual_working_dir (worktree if git).
         // Ownership of the concurrency entry transfers to the supervisor task
         // on success; `forget()` prevents the guard from clearing it on drop.
-        match self
-            .context
-            .runner
-            .spawn(run_id, &prompt, &mode, autonomy, &actual_working_dir)
-        {
+        match self.context.runner.spawn(
+            run_id,
+            &prompt,
+            &mode,
+            autonomy,
+            agent.as_ref(),
+            &actual_working_dir,
+        ) {
             Ok((mut event_rx, mut child)) => {
                 if let Some(g) = concurrency_guard.take() {
                     g.forget();
@@ -1863,6 +2203,20 @@ impl Dispatcher {
                         AppEvent::RunStateChanged {
                             run_id,
                             new_state: RunState::Running,
+                        },
+                    )
+                    .await;
+                // The process is up; from here on output drives the panel. Say so
+                // once, so a model that thinks for 30s before its first token
+                // still shows a reason to wait.
+                self.context
+                    .send_run_event(
+                        workspace_id,
+                        &reply_tx,
+                        AppEvent::RunProgress {
+                            run_id,
+                            phase: "streaming".into(),
+                            detail: None,
                         },
                     )
                     .await;
@@ -1903,6 +2257,11 @@ impl Dispatcher {
 
                     let mut line_number: usize = 0;
                     let mut result_event_seen = false;
+                    // Set from an error-level `RunNotice` (rate limit, failed
+                    // `result` envelope). When the stream then dies, this is the
+                    // reason worth reporting — "stream ended without result
+                    // event" tells the user nothing about why.
+                    let mut failure_reason: Option<String> = None;
                     let mut output_file = match tokio::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -1979,6 +2338,30 @@ impl Dispatcher {
                                         };
                                         broadcast_ws(&evt);
                                     }
+                                    Some(RunnerEvent::AssistantDelta(text)) => {
+                                        // Live-only: no disk write and no line
+                                        // number. The committed text for this
+                                        // block replaces the buffer in the UI, so
+                                        // the answer is streamed and then shown
+                                        // once — never twice.
+                                        let evt = AppEvent::RunOutputDelta { run_id, text };
+                                        broadcast_ws(&evt);
+                                    }
+                                    Some(RunnerEvent::Notice { level, message }) => {
+                                        // Chrome, not output: never written to the
+                                        // run log and never given a line number, so
+                                        // a notice cannot be mistaken for something
+                                        // the model said.
+                                        if level == NoticeLevel::Error {
+                                            failure_reason = Some(message.clone());
+                                        }
+                                        let evt = AppEvent::RunNotice {
+                                            run_id,
+                                            level,
+                                            message,
+                                        };
+                                        broadcast_ws(&evt);
+                                    }
                                     Some(RunnerEvent::ToolUse { id, name, input_preview }) => {
                                         line_number += 1;
                                         let log_line = format!("▸ tool: {name} {input_preview}");
@@ -2033,11 +2416,15 @@ impl Dispatcher {
                                     }
                                     Some(RunnerEvent::SessionInit { model, session_id }) => {
                                         line_number += 1;
-                                        let log_line = format!(
-                                            "session init: model={} session_id={}",
-                                            model.as_deref().unwrap_or("?"),
-                                            session_id.as_deref().unwrap_or("?"),
-                                        );
+                                        // The session id is run metadata, not something a
+                                        // human reads; "session init:" is jargon. Keep the
+                                        // model — the one fact worth having in the log — and
+                                        // drop the rest.
+                                        let _ = session_id;
+                                        let log_line = match model.as_deref() {
+                                            Some(m) => format!("model: {m}"),
+                                            None => "model: (unknown)".to_string(),
+                                        };
                                         if let Some(ref mut f) = output_file {
                                             let _ = tokio::io::AsyncWriteExt::write_all(
                                                 f,
@@ -2090,12 +2477,16 @@ impl Dispatcher {
                                         // If stream ended without a result event, the run failed
                                         // mid-stream (AI-BUG-01: #113).
                                         if !result_event_seen {
+                                            // A rate limit or a failed `result`
+                                            // envelope already told us why — use
+                                            // that instead of the opaque
+                                            // "stream ended" default.
+                                            let error = failure_reason.clone().unwrap_or_else(|| {
+                                                format!("the run ended without a result (exit code {exit_code})")
+                                            });
                                             let evt = AppEvent::RunFailed {
                                                 run_id,
-                                                error: format!(
-                                                    "stream ended without result event (exit_code={})",
-                                                    exit_code
-                                                ),
+                                                error,
                                                 phase: FailPhase::Execution,
                                             };
                                             broadcast_ws(&evt);
@@ -2108,6 +2499,21 @@ impl Dispatcher {
 
                                         if is_git_run {
                                             if let Some(ref wt_path) = worktree_path_clone {
+                                                // The AI leaves its edits uncommitted, so the
+                                                // branch still points at the base commit. Measure
+                                                // first and the diff is empty, the UI shows
+                                                // nothing, and MergeRun later merges an unchanged
+                                                // branch while deleting the worktree — silent data
+                                                // loss. Commit the work before measuring.
+                                                if let Err(e) = crate::git_engine::checkpoint_commit(
+                                                    wt_path,
+                                                    &format!("auto-checkpoint: run {} completed", run_id),
+                                                ).await {
+                                                    warn!(
+                                                        "checkpoint commit failed for run {}: {}",
+                                                        run_id, e
+                                                    );
+                                                }
                                                 match crate::git_engine::head_oid(wt_path).await {
                                                     Ok(wt_head) => {
                                                         if let Ok(changes) = crate::git_engine::changed_files(
@@ -2134,12 +2540,24 @@ impl Dispatcher {
                                         let summary = RunSummary {
                                             id: run_id,
                                             state: RunState::Completed { exit_code },
-                                            prompt_preview: String::new(),
+                                            prompt_preview: prompt.chars().take(100).collect(),
                                             modified_file_count: modified_files_list.len(),
                                             diff_stat: run_diff_stat.clone(),
                                             started_at: run_started_at,
                                             autonomy: autonomy_clone,
                                             ended_at: Some(chrono::Utc::now()),
+                                            session_id,
+                                            branch: branch_name_clone.clone(),
+                                            agent_id,
+                                            prompt: prompt.clone(),
+                                            mode,
+                                            // The worktree is deliberately kept for
+                                            // review when a run completes, so its
+                                            // work is still awaiting a decision.
+                                            worktree_present: worktree_path_clone
+                                                .as_ref()
+                                                .map(|p| p.exists())
+                                                .unwrap_or(false),
                                         };
                                         let evt = AppEvent::RunCompleted {
                                             run_id,
@@ -2156,6 +2574,7 @@ impl Dispatcher {
                                             mode,
                                             autonomy: autonomy_clone,
                                             kind: RunKind::OneShot,
+                                            agent_id,
                                             state: RunState::Completed { exit_code },
                                             prompt,
                                             provided_files: vec![],
@@ -2240,9 +2659,11 @@ impl Dispatcher {
             }
             Err(e) => {
                 // Cleanup session
-                let mut sessions = self.context.sessions.lock().await;
-                if let Some(session) = sessions.get_mut(&session_id) {
-                    session.active_run = None;
+                {
+                    let mut sessions = self.context.sessions.lock().await;
+                    if let Some(session) = sessions.get_mut(&session_id) {
+                        session.active_run = None;
+                    }
                 }
                 // Concurrency entry is released automatically when
                 // `concurrency_guard` drops at end of scope.
@@ -2261,6 +2682,7 @@ impl Dispatcher {
                         }
                     }
                 }
+                self.persist_run_failure(&run, e.clone(), FailPhase::Preparation);
                 let _ = reply_tx
                     .send(AppEvent::RunFailed {
                         run_id,
@@ -2332,17 +2754,66 @@ impl Dispatcher {
         }
     }
 
-    /// Run the Claude binary preflight check and emit structured events on failure.
+    /// Clear a session's `active_run` iff it is still the run we set. Early
+    /// return paths that never reach the supervisor must call this, otherwise
+    /// the flag leaks and the session can never start another run.
+    async fn release_session_run(&self, session_id: Uuid, run_id: Uuid) {
+        let mut sessions = self.context.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if session.active_run == Some(run_id) {
+                session.active_run = None;
+            }
+        }
+    }
+
+    /// Persist a run that died between `save_run(Preparing)` and the supervisor
+    /// taking ownership.
+    ///
+    /// Every early return in that window must call this. `Preparing` is
+    /// `is_active()`, so a run left in it reads as still-running forever: the
+    /// panel shows a phase that never resolves, and the next daemon start
+    /// "recovers" it as `Daemon crashed during run` — a wrong diagnosis for a
+    /// run that failed cleanly and told the client why.
+    fn persist_run_failure(&self, run: &Run, error: String, phase: FailPhase) {
+        let failed = Run {
+            state: RunState::Failed { error, phase },
+            ended_at: Some(chrono::Utc::now()),
+            last_modified: chrono::Utc::now(),
+            ..run.clone()
+        };
+        if let Err(e) = self.context.persistence.save_run(&failed) {
+            warn!("failed to persist failed run {}: {}", run.id, e);
+        }
+    }
+
+    /// Compose the effective system prompt for an agent: the role's base
+    /// mission, then the agent's own additions, then the personality. Missing
+    /// catalogue entries degrade to "no overlay" rather than failing the run.
+    async fn resolve_agent_prompt(&self, agent: &Agent) -> String {
+        let role = match &agent.role_id {
+            Some(id) => self.context.roles.lock().await.get(id).cloned(),
+            None => None,
+        };
+        let personality = match &agent.personality_id {
+            Some(id) => self.context.personalities.lock().await.get(id).cloned(),
+            None => None,
+        };
+        agent.compose_prompt(role.as_ref(), personality.as_ref())
+    }
+
+    /// Run the binary preflight check for `runner` and emit structured events
+    /// on failure.
     ///
     /// Returns `Ok(())` when preflight passes, `Err(())` when it fails (events already broadcast).
     async fn run_preflight(
         &self,
         run_id: Uuid,
         run: &Run,
+        runner: terminal_core::models::Runner,
         workspace_id: Option<Uuid>,
         reply_tx: &mpsc::Sender<AppEvent>,
     ) -> Result<(), ()> {
-        if let Err(pf) = self.context.runner.preflight().await {
+        if let Err(pf) = self.context.runner.preflight_for(runner).await {
             self.context
                 .send_run_event(
                     workspace_id,
@@ -2383,6 +2854,23 @@ impl Dispatcher {
     }
 }
 
+/// Resolve the autonomy a run actually executes at.
+///
+/// Precedence: the client's explicit choice → the driving agent's
+/// `default_autonomy` → `Autonomous` (the historical default). This is the only
+/// reader of `Agent::default_autonomy` on the run path; before it existed the
+/// field was written, displayed and persisted but never consulted, so an agent
+/// could declare `ReviewPlan` and still edit files when driven from a
+/// non-UI client.
+fn resolve_autonomy(
+    requested: Option<AutonomyLevel>,
+    agent: Option<&terminal_core::models::Agent>,
+) -> AutonomyLevel {
+    requested
+        .or(agent.map(|a| a.default_autonomy))
+        .unwrap_or_default()
+}
+
 /// Detect a display language name from a file path's extension.
 fn detect_language(path: &std::path::Path) -> String {
     path.extension()
@@ -2408,8 +2896,52 @@ fn detect_language(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::concurrency_key_for_run;
+    use super::resolve_autonomy;
     use crate::safety::validate_path;
     use std::path::PathBuf;
+    use terminal_core::models::{Agent, AutonomyLevel, Runner};
+
+    fn agent_with_default(default_autonomy: AutonomyLevel) -> Agent {
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            name: "a".into(),
+            role_id: None,
+            personality_id: None,
+            runner: Runner::Claude,
+            legacy_role: None,
+            description: String::new(),
+            instructions: String::new(),
+            model: None,
+            provider: None,
+            profile: None,
+            default_autonomy,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn explicit_autonomy_beats_agent_default() {
+        let agent = agent_with_default(AutonomyLevel::ReviewPlan);
+        assert_eq!(
+            resolve_autonomy(Some(AutonomyLevel::Autonomous), Some(&agent)),
+            AutonomyLevel::Autonomous
+        );
+    }
+
+    #[test]
+    fn agent_default_applies_when_client_omits_autonomy() {
+        let agent = agent_with_default(AutonomyLevel::ReviewPlan);
+        assert_eq!(
+            resolve_autonomy(None, Some(&agent)),
+            AutonomyLevel::ReviewPlan
+        );
+    }
+
+    #[test]
+    fn agentless_run_without_autonomy_is_autonomous() {
+        assert_eq!(resolve_autonomy(None, None), AutonomyLevel::Autonomous);
+    }
 
     #[test]
     fn readfile_path_traversal_blocked() {
@@ -2466,7 +2998,27 @@ mod tests {
         assert!(production_source.contains("Some(RunnerEvent::ResultSeen)"));
         assert!(production_source.contains("if !result_event_seen"));
         assert!(production_source.contains("AppEvent::RunFailed"));
-        assert!(production_source.contains("stream ended without result event"));
+        // The message is no longer the opaque default: an error-level notice
+        // (rate limit, failed `result` envelope) is preferred when we have one.
+        assert!(production_source.contains("failure_reason"));
+        assert!(production_source.contains("the run ended without a result"));
         assert!(production_source.contains("phase: FailPhase::Execution"));
+    }
+
+    #[test]
+    fn supervisor_broadcasts_deltas_notices_and_progress() {
+        let source = include_str!("dispatcher.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap();
+
+        // Deltas stream to the UI without being persisted or numbered.
+        assert!(production_source.contains("AppEvent::RunOutputDelta"));
+        // Notices are chrome: a separate event, never a RunOutput line.
+        assert!(production_source.contains("Some(RunnerEvent::Notice { level, message })"));
+        assert!(production_source.contains("AppEvent::RunNotice"));
+        // Phase progress covers the silent stretch before the first byte.
+        assert!(production_source.contains("AppEvent::RunProgress"));
+        assert!(production_source.contains("\"worktree\""));
+        assert!(production_source.contains("\"preflight\""));
+        assert!(production_source.contains("\"streaming\""));
     }
 }

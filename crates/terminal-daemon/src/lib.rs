@@ -142,6 +142,13 @@ pub async fn start_server(
 
     // Startup recovery: re-hydrate persisted workspaces (C5b, issue #98).
     dispatcher.recover_workspaces().await;
+    dispatcher.recover_catalog().await;
+    dispatcher.recover_agents().await;
+    // Sessions were the one thing never restored, which left `ListSessions`
+    // permanently empty and made every previous session unreachable after a
+    // restart. Ordered after workspaces so a recovered session can be attached
+    // to one.
+    dispatcher.recover_sessions().await;
     tokio::spawn(async move {
         while let Some((client_id, cmd, reply_tx)) = command_rx.recv().await {
             dispatcher.handle(client_id, cmd, reply_tx).await;
@@ -283,7 +290,7 @@ mod tests {
         assert_eq!(mode(tmp.path()), 0o700);
         assert_eq!(mode(&tmp.path().join("auth_token")), 0o600);
         assert_eq!(mode(&tmp.path().join("port")), 0o600);
-        for subdir in ["sessions", "runs", "worktrees", "terminals", "workspaces"] {
+        for subdir in ["sessions", "runs", "worktrees", "terminals", "workspaces", "agents"] {
             assert_eq!(mode(&tmp.path().join(subdir)), 0o700, "{subdir}");
         }
 

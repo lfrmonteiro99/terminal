@@ -1,6 +1,6 @@
 // EmptyPane — placeholder pane that lets users pick what to create here
 
-import { TerminalSquare, Bot, Globe, GitBranch, History, Server } from 'lucide-react';
+import { TerminalSquare, Bot, Globe, GitBranch, History, Server, FileDiff } from 'lucide-react';
 import { registerPane } from '../registry';
 import type { PaneProps } from '../registry';
 
@@ -9,6 +9,7 @@ const PANE_OPTIONS = [
   { kind: 'SSH', label: 'SSH', Icon: Server, description: 'Remote SSH session' },
   { kind: 'AiRun', label: 'AI Run', Icon: Bot, description: 'AI prompt & output' },
   { kind: 'Browser', label: 'Browser', Icon: Globe, description: 'Embedded browser' },
+  { kind: 'Changes', label: 'Changes', Icon: FileDiff, description: 'Changed files & diff' },
   { kind: 'GitStatus', label: 'Git Status', Icon: GitBranch, description: 'Staging & commits' },
   { kind: 'GitHistory', label: 'Git History', Icon: History, description: 'Commit log' },
 ];
@@ -46,7 +47,8 @@ export function EmptyPane({ pane }: PaneProps) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
               padding: '16px 12px', backgroundColor: 'var(--bg-raised)',
-              border: '1px solid var(--border-default)', borderRadius: 8,
+              // Longhands: borderColor is mutated on hover below.
+              borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-default)', borderRadius: 8,
               cursor: 'pointer', color: 'var(--text-primary)',
               fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-chrome)',
               transition: 'border-color 120ms, background-color 120ms',
