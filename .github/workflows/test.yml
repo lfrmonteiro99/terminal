@@ -42,11 +42,15 @@ jobs:
   # It gets its own job because `--workspace` includes the Tauri shell, which
   # needs GTK/WebKit present or the build dies in gio-sys' pkg-config probe
   # rather than on a lint. The rust-tests job installs nothing but git, so the
-  # system libraries come along here, mirroring the release job that has always
-  # built this workspace.
+  # system libraries come along here.
   rust-clippy:
     name: Rust clippy
-    runs-on: ubuntu-22.04
+    # Same image as rust-tests on purpose. The cargo cache below is keyed on
+    # `runner.os`, which is `Linux` for both ubuntu-latest and ubuntu-22.04, so
+    # a job on the older image restores a `target/` whose build scripts were
+    # linked against the newer glibc and dies with "version `GLIBC_2.39' not
+    # found" before reaching a single lint.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -76,7 +80,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Restores the tests job's entry through restore-keys (same image, so
+          # the artifacts are compatible) but saves under its own key, so two
+          # jobs never race to write the same cache entry.
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       # Same invocation as release.yml, so the merge gate and the release gate
