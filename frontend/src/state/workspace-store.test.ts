@@ -39,6 +39,12 @@ const runSummary = (id: string): RunSummary => ({
   started_at: 'now',
   ended_at: null,
   diff_stat: null,
+  session_id: 's1',
+  branch: 'llm/test',
+  agent_id: null,
+  prompt: 'p',
+  mode: 'Free',
+  worktree_present: false,
 });
 
 const termSession = (id: string): TerminalSessionSummary => ({

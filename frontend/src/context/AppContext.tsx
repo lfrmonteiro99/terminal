@@ -389,6 +389,14 @@ function reducer(state: AppState, action: Action): AppState {
               new Date(state.runStartedAt ?? Date.now()).toISOString(),
             ended_at: new Date().toISOString(),
             autonomy: existing?.autonomy,
+            // The daemon's RunFailed carries no summary, so this synthetic one
+            // cannot know the run's provenance. Absent beats invented.
+            session_id: existing?.session_id ?? state.activeSession ?? '',
+            branch: existing?.branch ?? '',
+            agent_id: existing?.agent_id ?? null,
+            prompt: existing?.prompt ?? state.runPromptPreview ?? '',
+            mode: existing?.mode ?? 'Free',
+            worktree_present: existing?.worktree_present ?? false,
           });
           return {
             ...state,
@@ -420,6 +428,12 @@ function reducer(state: AppState, action: Action): AppState {
                 new Date(state.runStartedAt ?? Date.now()).toISOString(),
               ended_at: new Date().toISOString(),
               autonomy: existing?.autonomy,
+              session_id: existing?.session_id ?? state.activeSession ?? '',
+              branch: existing?.branch ?? '',
+              agent_id: existing?.agent_id ?? null,
+              prompt: existing?.prompt ?? state.runPromptPreview ?? '',
+              mode: existing?.mode ?? 'Free',
+              worktree_present: existing?.worktree_present ?? false,
             });
           }
           return {

@@ -3,7 +3,7 @@ use crate::daemon_context::{ActiveRun, ClientId, DaemonContext};
 use crate::guards::ConcurrencyGuard;
 use crate::persistence::Persistence;
 use crate::pty::PtyManager;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use terminal_core::config::DaemonConfig;
@@ -436,80 +436,19 @@ impl Dispatcher {
                     .await;
             }
 
-            AppCommand::ListRuns { session_id } => {
-                let sessions = self.context.sessions.lock().await;
-                match sessions.get(&session_id) {
-                    Some(_session) => {
-                        // Load persisted runs
-                        let persisted_runs = self
-                            .context
-                            .persistence
-                            .list_runs_for_session(session_id)
-                            .unwrap_or_else(|e| {
-                                warn!(
-                                    "Failed to load persisted runs for session {}: {}",
-                                    session_id, e
-                                );
-                                vec![]
-                            });
-
-                        // Get active runs (these have more current state)
-                        let active_runs = self.context.active_runs.lock().await;
-
-                        // Build summaries: active runs override persisted ones
-                        let mut summaries_map: HashMap<Uuid, RunSummary> = HashMap::new();
-
-                        // First, add persisted runs
-                        for run in &persisted_runs {
-                            summaries_map.insert(
-                                run.id,
-                                RunSummary {
-                                    id: run.id,
-                                    state: run.state.clone(),
-                                    prompt_preview: run.prompt.chars().take(100).collect(),
-                                    modified_file_count: run.modified_files.len(),
-                                    diff_stat: None,
-                                    started_at: run.started_at,
-                                    ended_at: run.ended_at,
-                                    autonomy: run.autonomy,
-                                },
-                            );
-                        }
-
-                        // Then, override with active runs (more current state)
-                        for active in active_runs.values() {
-                            if active.run.session_id == session_id {
-                                summaries_map.insert(
-                                    active.run.id,
-                                    RunSummary {
-                                        id: active.run.id,
-                                        state: active.run.state.clone(),
-                                        prompt_preview: active
-                                            .run
-                                            .prompt
-                                            .chars()
-                                            .take(100)
-                                            .collect(),
-                                        modified_file_count: active.run.modified_files.len(),
-                                        diff_stat: None,
-                                        started_at: active.run.started_at,
-                                        ended_at: active.run.ended_at,
-                                        autonomy: active.run.autonomy,
-                                    },
-                                );
-                            }
-                        }
-
-                        let mut summaries: Vec<RunSummary> = summaries_map.into_values().collect();
-                        summaries.sort_by_key(|r| r.started_at);
-
-                        let _ = reply_tx
-                            .send(AppEvent::RunList {
-                                session_id,
-                                runs: summaries,
-                            })
-                            .await;
-                    }
+            AppCommand::ListRuns {
+                session_id,
+                all_sessions,
+            } => {
+                // Resolve the project first: an all-sessions list means "this
+                // project's runs", and the project is the only key that spans
+                // the sessions the daemon opens.
+                let known_project = {
+                    let sessions = self.context.sessions.lock().await;
+                    sessions.get(&session_id).map(|s| s.project_root.clone())
+                };
+                let project_root = match known_project {
+                    Some(root) => root,
                     None => {
                         let _ = reply_tx
                             .send(AppEvent::Error {
@@ -517,8 +456,110 @@ impl Dispatcher {
                                 message: format!("Session {} not found", session_id),
                             })
                             .await;
+                        return;
+                    }
+                };
+
+                // Every session that belongs to this project: in memory plus on
+                // disk. An ended session leaves the map, but its runs are still
+                // part of the project's history.
+                let project_sessions: HashSet<Uuid> = {
+                    let mut ids: HashSet<Uuid> = HashSet::new();
+                    {
+                        let sessions = self.context.sessions.lock().await;
+                        for s in sessions.values() {
+                            if s.project_root == project_root {
+                                ids.insert(s.id);
+                            }
+                        }
+                    }
+                    if let Ok(persisted) = self.context.persistence.list_sessions() {
+                        for s in persisted {
+                            if s.project_root == project_root {
+                                ids.insert(s.id);
+                            }
+                        }
+                    }
+                    ids
+                };
+
+                // Load persisted runs
+                let persisted_runs = if all_sessions {
+                    self.context
+                        .persistence
+                        .list_all_runs()
+                        .unwrap_or_else(|e| {
+                            warn!("Failed to load persisted runs: {}", e);
+                            vec![]
+                        })
+                        .into_iter()
+                        .filter(|r| project_sessions.contains(&r.session_id))
+                        .collect::<Vec<_>>()
+                } else {
+                    self.context
+                        .persistence
+                        .list_runs_for_session(session_id)
+                        .unwrap_or_else(|e| {
+                            warn!(
+                                "Failed to load persisted runs for session {}: {}",
+                                session_id, e
+                            );
+                            vec![]
+                        })
+                };
+
+                // Get active runs (these have more current state)
+                let active_runs = self.context.active_runs.lock().await;
+
+                // Build summaries: active runs override persisted ones
+                let mut summaries_map: HashMap<Uuid, RunSummary> = HashMap::new();
+
+                // One summary shape for both sources. `worktree_present` is a
+                // stat on the metadata file: merge and revert delete it while
+                // leaving the run's own state untouched, so this is the only
+                // honest way to say "this work still needs a decision".
+                let summary_of = |run: &Run| RunSummary {
+                    id: run.id,
+                    state: run.state.clone(),
+                    prompt_preview: run.prompt.chars().take(100).collect(),
+                    modified_file_count: run.modified_files.len(),
+                    diff_stat: None,
+                    started_at: run.started_at,
+                    ended_at: run.ended_at,
+                    autonomy: run.autonomy,
+                    session_id: run.session_id,
+                    branch: run.branch.clone(),
+                    agent_id: run.agent_id,
+                    prompt: run.prompt.clone(),
+                    mode: run.mode,
+                    worktree_present: self
+                        .context
+                        .persistence
+                        .worktree_meta_path(run.id)
+                        .exists(),
+                };
+
+                // First, add persisted runs
+                for run in &persisted_runs {
+                    summaries_map.insert(run.id, summary_of(run));
+                }
+
+                // Then, override with active runs (more current state)
+                for active in active_runs.values() {
+                    if project_sessions.contains(&active.run.session_id) {
+                        summaries_map.insert(active.run.id, summary_of(&active.run));
                     }
                 }
+
+                let mut summaries: Vec<RunSummary> = summaries_map.into_values().collect();
+                summaries.sort_by_key(|r| r.started_at);
+
+                let _ = reply_tx
+                    .send(AppEvent::RunList {
+                        session_id,
+                        runs: summaries,
+                    })
+                    .await;
             }
 
             AppCommand::GetRunStatus { run_id } => {
@@ -2481,6 +2522,18 @@ impl Dispatcher {
                                             started_at: run_started_at,
                                             autonomy: autonomy_clone,
                                             ended_at: Some(chrono::Utc::now()),
+                                            session_id,
+                                            branch: branch_name_clone.clone(),
+                                            agent_id,
+                                            prompt: prompt.clone(),
+                                            mode,
+                                            // The worktree is deliberately kept for
+                                            // review when a run completes, so its
+                                            // work is still awaiting a decision.
+                                            worktree_present: worktree_path_clone
+                                                .as_ref()
+                                                .map(|p| p.exists())
+                                                .unwrap_or(false),
                                         };
                                         let evt = AppEvent::RunCompleted {
                                             run_id,

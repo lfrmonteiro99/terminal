@@ -8,6 +8,7 @@
 
 export type SidebarView =
   | 'overview'
+  | 'runs'
   | 'explorer'
   | 'changes'
   | 'git'
@@ -16,6 +17,7 @@ export type SidebarView =
 
 export const SIDEBAR_VIEWS: readonly SidebarView[] = [
   'overview',
+  'runs',
   'explorer',
   'changes',
   'git',

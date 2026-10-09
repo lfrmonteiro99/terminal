@@ -486,7 +486,7 @@ function AppContent() {
   const prevSessionRef = useRef<string | null>(null);
   useEffect(() => {
     if (state.activeSession && prevSessionRef.current !== state.activeSession) {
-      send({ type: 'ListRuns', session_id: state.activeSession });
+      send({ type: 'ListRuns', session_id: state.activeSession, all_sessions: true });
       send({ type: 'ListStashes' });
     }
     prevSessionRef.current = state.activeSession;

@@ -190,8 +190,9 @@ pub enum NoticeLevel {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum RunMode {
+    #[default]
     Free,
     Guided,
     Strict,
@@ -309,6 +310,32 @@ pub struct RunSummary {
     /// to show the "Approve & execute" follow-up after a plan run.
     #[serde(default)]
     pub autonomy: AutonomyLevel,
+    /// Session that owns the run. A whole project's history spans sessions —
+    /// the daemon starts a new one per `StartSession` — so a row has to be
+    /// able to say where it came from.
+    #[serde(default)]
+    pub session_id: Uuid,
+    /// Branch the run's worktree lives on. Empty for a run that never reached
+    /// the worktree stage (a preflight failure).
+    #[serde(default)]
+    pub branch: String,
+    /// Agent that drove the run. `None` = the implicit default agent.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
+    /// The full prompt, not the preview. Re-running has to resubmit what the
+    /// user actually asked for: `prompt_preview` is capped at 100 chars, so
+    /// using it would silently rewrite the request.
+    #[serde(default)]
+    pub prompt: String,
+    /// Run mode, so a re-run reproduces the original rather than guessing.
+    #[serde(default)]
+    pub mode: RunMode,
+    /// Whether the run's worktree metadata still exists, i.e. whether its work
+    /// is still awaiting a decision (merge or revert). This is the only honest
+    /// way to tell a reviewed run from an unreviewed one: merge and revert
+    /// delete the metadata but deliberately leave the run's own state alone.
+    #[serde(default)]
+    pub worktree_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

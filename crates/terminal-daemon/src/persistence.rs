@@ -344,6 +344,34 @@ impl Persistence {
         Ok(run)
     }
 
+    /// Every persisted run, oldest first. `list_runs_for_session` is this same
+    /// scan with a filter: a project's history spans one session per
+    /// `StartSession`, so an unfiltered read is what the runs view needs.
+    pub fn list_all_runs(&self) -> Result<Vec<Run>> {
+        let dir = self.base_dir.join("runs");
+        let mut runs = Vec::new();
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            match fs::read_to_string(&path).and_then(|data| {
+                serde_json::from_str::<Run>(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }) {
+                Ok(run) => runs.push(run),
+                Err(e) => {
+                    warn!("Failed to parse run file {:?}: {}", path, e);
+                }
+            }
+        }
+
+        runs.sort_by_key(|r| r.started_at);
+        Ok(runs)
+    }
+
     pub fn list_runs_for_session(&self, session_id: Uuid) -> Result<Vec<Run>> {
         let dir = self.base_dir.join("runs");
         let mut runs = Vec::new();
@@ -774,6 +802,47 @@ mod tests {
         let result = p.load_session(session.id);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PersistenceError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_list_all_runs_spans_sessions() {
+        // The runs view lists a whole project, whose history spans one session
+        // per `StartSession`. `list_runs_for_session` cannot see the rest, which
+        // is why the unfiltered read exists.
+        let dir = tempdir().unwrap();
+        let p = Persistence::new(dir.path().to_path_buf()).unwrap();
+
+        let s1 = make_session();
+        let s2 = make_session();
+        p.save_session(&s1).unwrap();
+        p.save_session(&s2).unwrap();
+
+        p.save_run(&make_run(s1.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+        p.save_run(&make_run(s1.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+        p.save_run(&make_run(s2.id, RunState::Completed { exit_code: 0 }))
+            .unwrap();
+
+        assert_eq!(p.list_runs_for_session(s1.id).unwrap().len(), 2);
+        assert_eq!(p.list_all_runs().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_worktree_meta_path_tracks_merge_and_revert() {
+        // `worktree_present` in the run list is decided by whether this path
+        // exists. Merge and revert both delete the metadata and neither touches
+        // the run's own state, so the file is the only signal that a run's work
+        // is still awaiting a decision.
+        let dir = tempdir().unwrap();
+        let p = Persistence::new(dir.path().to_path_buf()).unwrap();
+        let run_id = Uuid::new_v4();
+
+        assert!(!p.worktree_meta_path(run_id).exists());
+        p.save_worktree_meta(run_id, &make_worktree_meta()).unwrap();
+        assert!(p.worktree_meta_path(run_id).exists());
+        p.delete_worktree_meta(run_id).unwrap();
+        assert!(!p.worktree_meta_path(run_id).exists());
     }
 
     #[test]

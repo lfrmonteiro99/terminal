@@ -111,6 +111,29 @@ export interface RunSummary {
   ended_at: string | null;
   diff_stat: DiffStat | null;
   autonomy?: AutonomyLevel;
+  /**
+   * Session that owns the run. A project's history spans one session per
+   * `StartSession`, so a run has to be able to say where it came from.
+   */
+  session_id: string;
+  /** Branch the run's worktree lives on. Empty when the run never got that far. */
+  branch: string;
+  /** Agent that drove the run; `null` = the implicit default (Claude CLI). */
+  agent_id: string | null;
+  /**
+   * The full prompt, not `prompt_preview`. Re-running must resubmit what the
+   * user actually asked for; the preview is capped at 100 chars and would
+   * silently rewrite the request.
+   */
+  prompt: string;
+  mode: RunMode;
+  /**
+   * Whether the run's worktree still exists on disk — i.e. whether its work is
+   * still awaiting a merge or a revert. Merge and revert delete the metadata
+   * but leave the run's own state untouched, so this is the only honest way to
+   * tell reviewed work from unreviewed work.
+   */
+  worktree_present: boolean;
 }
 
 export interface RunMetrics {
@@ -278,7 +301,7 @@ export type AppCommand =
   | { type: 'StartRun'; session_id: string; prompt: string; mode: RunMode; skip_dirty_check?: boolean; autonomy?: AutonomyLevel; agent_id?: string }
   | { type: 'CancelRun'; run_id: string; reason: string }
   | { type: 'GetRunStatus'; run_id: string }
-  | { type: 'ListRuns'; session_id: string }
+  | { type: 'ListRuns'; session_id: string; all_sessions?: boolean }
   | { type: 'GetRunOutput'; run_id: string; offset: number; limit: number }
   | { type: 'ListAgents' }
   | {

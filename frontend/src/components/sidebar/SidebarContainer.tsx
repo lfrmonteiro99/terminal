@@ -17,6 +17,7 @@ import { useAppState } from '../../context/AppContext';
 import { NavRail } from '../nav/NavRail';
 import { SessionStrip } from './SessionStrip';
 import { OverviewView } from './OverviewView';
+import { RunsView } from './RunsView';
 import { SettingsView } from '../SettingsView';
 import { ExplorerView } from './ExplorerView';
 import { ChangesView } from './ChangesView';
@@ -100,6 +101,7 @@ export function SidebarContainer({ mobile = false, mobileOpen = false, onMobileC
     switch (state.activeSidebarView) {
       case 'overview': return OverviewView;
       case 'settings': return SettingsView;
+      case 'runs': return RunsView;
       case 'explorer': return ExplorerView;
       case 'changes': return ChangesView;
       case 'git': return GitView;
@@ -123,7 +125,10 @@ export function SidebarContainer({ mobile = false, mobileOpen = false, onMobileC
           fontFamily: 'var(--font-display)',
           fontSize: 'var(--font-size-small)',
         }}>
-          <SessionStrip />
+          {/* The Runs destination is the full run menu; the strip is a compact
+              "where am I" list for the other views. Showing both stacked the
+              same runs twice and read as one broken list. */}
+          {state.activeSidebarView !== 'runs' && <SessionStrip />}
           <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
             <ActiveView />
           </div>

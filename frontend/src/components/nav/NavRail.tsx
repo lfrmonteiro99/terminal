@@ -7,7 +7,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, FolderTree, FileDiff, GitBranch, Users,
-  ChevronDown, ChevronLeft, ChevronsRight, Plus, X, Check, Settings,
+  ChevronDown, ChevronLeft, ChevronsRight, Plus, X, Check, Settings, History,
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../../context/AppContext';
 import { useSend } from '../../context/SendContext';
@@ -37,6 +37,7 @@ const GROUPS: { title: string | null; items: NavItem[] }[] = [
     title: null,
     items: [
       { view: 'overview', label: 'Overview', hint: 'Workspace dashboard', Icon: LayoutDashboard },
+      { view: 'runs', label: 'Runs', hint: 'Past and current AI runs', Icon: History },
       { view: 'explorer', label: 'Files', hint: 'Browse the project tree', Icon: FolderTree },
       { view: 'changes', label: 'Changes', hint: 'Uncommitted work', Icon: FileDiff },
       { view: 'git', label: 'Git', hint: 'Branches and history', Icon: GitBranch },
@@ -93,12 +94,21 @@ export function NavRail({ onNavigate, showCollapse = true, forceExpanded = false
 
   const changeCount = (state.repoStatus?.staged_count ?? 0) + (state.repoStatus?.unstaged_count ?? 0);
   const agentCount = state.agents.size;
-  const runCount = state.runs.size;
+  // "Needs attention" = still running, or finished but its worktree is still
+  // waiting on a merge/revert. A plain total would be a wall of history and
+  // would tell you nothing.
+  const runsNeedingAttention = Array.from(state.runs.values()).filter(
+    r =>
+      r.state.type === 'Running' ||
+      r.state.type === 'Preparing' ||
+      (r.worktree_present &&
+        (r.state.type === 'Completed' || r.state.type === 'Failed' || r.state.type === 'Cancelled')),
+  ).length;
 
   const badgeFor = (view: View): number | null => {
     if (view === 'changes') return changeCount > 0 ? changeCount : null;
     if (view === 'agents') return agentCount > 0 ? agentCount : null;
-    if (view === 'git') return runCount > 0 ? null : null;
+    if (view === 'runs') return runsNeedingAttention > 0 ? runsNeedingAttention : null;
     return null;
   };
 

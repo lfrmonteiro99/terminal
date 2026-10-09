@@ -8,7 +8,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, FolderTree, FileDiff, GitBranch, Users, GitFork,
   ChevronDown, ChevronRight, TerminalSquare, Bot, Globe, RefreshCw,
-  SlidersHorizontal, Menu, Check, Bookmark, Plus, X,
+  SlidersHorizontal, Menu, Check, Bookmark, Plus, X, History,
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
@@ -22,6 +22,7 @@ type ChromeIcon = React.ComponentType<{ size?: number; strokeWidth?: number; sty
 
 const VIEW_META: Record<View, { label: string; Icon: ChromeIcon }> = {
   overview: { label: 'Overview', Icon: LayoutDashboard },
+  runs: { label: 'Runs', Icon: History },
   explorer: { label: 'Files', Icon: FolderTree },
   changes: { label: 'Changes', Icon: FileDiff },
   git: { label: 'Git', Icon: GitBranch },
@@ -131,11 +132,20 @@ export function AppChrome({
         send({ type: 'ListAgents' });
         send({ type: 'ListCatalog' });
         break;
+      case 'runs':
+        if (state.activeSession) {
+          // Every run the project has, not just this session's: a project
+          // accumulates a session per StartSession, so the session-scoped list
+          // hides most of the history.
+          send({ type: 'ListRuns', session_id: state.activeSession, all_sessions: true });
+        }
+        send({ type: 'ListAgents' });
+        break;
       default:
         send({ type: 'GetRepoStatus' });
         send({ type: 'GetChangedFiles', mode: 'working' });
         send({ type: 'GetCommitHistory', limit: 20 });
-        if (state.activeSession) send({ type: 'ListRuns', session_id: state.activeSession });
+        if (state.activeSession) send({ type: 'ListRuns', session_id: state.activeSession, all_sessions: true });
     }
   };
 

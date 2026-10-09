@@ -55,6 +55,12 @@ pub enum AppCommand {
     },
     ListRuns {
         session_id: Uuid,
+        /// When true, return every run belonging to the same *project* as
+        /// `session_id`, not just that session's. The daemon opens a new
+        /// session per `StartSession`, so a session-scoped list hides almost
+        /// all of a project's history.
+        #[serde(default)]
+        all_sessions: bool,
     },
     GetRunOutput {
         run_id: Uuid,
@@ -969,6 +975,12 @@ mod tests {
                 started_at: chrono::Utc::now(),
                 ended_at: Some(chrono::Utc::now()),
                 autonomy: AutonomyLevel::default(),
+                session_id: Uuid::new_v4(),
+                branch: "llm/test-run".into(),
+                agent_id: None,
+                prompt: "test".into(),
+                mode: RunMode::Free,
+                worktree_present: true,
             },
             diff_stat: Some(DiffStat {
                 files_changed: 2,
@@ -1363,7 +1375,7 @@ mod tests {
             },
             AppCommand::CancelRun { run_id: uuid(), reason: "user".into() },
             AppCommand::GetRunStatus { run_id: uuid() },
-            AppCommand::ListRuns { session_id: uuid() },
+            AppCommand::ListRuns { session_id: uuid(), all_sessions: false },
             AppCommand::GetRunOutput { run_id: uuid(), offset: 0, limit: 100 },
             AppCommand::GetDiff { run_id: uuid() },
             AppCommand::RevertRun { run_id: uuid() },
@@ -1605,6 +1617,12 @@ mod tests {
                     started_at: chrono::Utc::now(),
                     ended_at: None,
                     autonomy: AutonomyLevel::default(),
+                    session_id: uuid(),
+                    branch: String::new(),
+                    agent_id: None,
+                    prompt: "p".into(),
+                    mode: RunMode::Free,
+                    worktree_present: false,
                 },
                 diff_stat: None,
             },

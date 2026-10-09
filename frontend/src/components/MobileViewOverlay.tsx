@@ -8,11 +8,12 @@
 
 import {
   ArrowLeft, LayoutDashboard, FolderTree, FileDiff, GitBranch, Users,
-  SlidersHorizontal,
+  SlidersHorizontal, History,
 } from 'lucide-react';
 import type { SidebarView } from '../types/sidebar';
 import { OverviewView } from './sidebar/OverviewView';
 import { SettingsView } from './SettingsView';
+import { RunsView } from './sidebar/RunsView';
 import { ExplorerView } from './sidebar/ExplorerView';
 import { ChangesView } from './sidebar/ChangesView';
 import { GitView } from './sidebar/GitView';
@@ -22,6 +23,7 @@ type IconCmp = React.ComponentType<{ size?: number; strokeWidth?: number }>;
 
 const META: Record<SidebarView, { label: string; Icon: IconCmp }> = {
   overview: { label: 'Overview', Icon: LayoutDashboard },
+  runs: { label: 'Runs', Icon: History },
   explorer: { label: 'Files', Icon: FolderTree },
   changes: { label: 'Changes', Icon: FileDiff },
   git: { label: 'Git', Icon: GitBranch },
@@ -33,6 +35,7 @@ function ViewBody({ view }: { view: SidebarView }) {
   switch (view) {
     case 'overview': return <OverviewView />;
     case 'settings': return <SettingsView />;
+    case 'runs': return <RunsView />;
     case 'changes': return <ChangesView />;
     case 'git': return <GitView />;
     case 'agents': return <AgentsView />;
