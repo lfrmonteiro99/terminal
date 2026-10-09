@@ -1301,7 +1301,7 @@ mod tests {
                 Err(_) => panic!("timed out waiting for the stub to finish"),
             }
         }
-        let _ = child.wait();
+        let _ = child.wait().await;
         let argv = lines.join(" ");
         assert!(argv.contains("-p fast"), "profile missing from argv: {argv}");
         assert!(

@@ -1929,7 +1929,7 @@ impl Dispatcher {
                             status: dirty,
                             session_id,
                             prompt: prompt.clone(),
-                            mode: mode.clone(),
+                            mode,
                             autonomy: requested_autonomy,
                             agent_id,
                         })
@@ -2041,7 +2041,7 @@ impl Dispatcher {
             id: run_id,
             session_id,
             branch: branch_name.clone(),
-            mode: mode.clone(),
+            mode,
             autonomy,
             kind: RunKind::OneShot,
             agent_id,
