@@ -8,6 +8,7 @@ import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 import { getShortcut, resetShortcuts } from '../core/shortcutMap';
 import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER } from '../core/layoutPresets';
 import { openNavPane } from '../core/openNavPane';
+import { rankCommands } from '../core/paletteSearch';
 import {
   getQuickCommands,
   saveQuickCommand,
@@ -256,11 +257,9 @@ export function CommandPalette({ open, onClose, onLayoutPreset, onSplitH, onSpli
 
   const filteredCommands = useMemo(() => {
     if (effectiveMode !== 'commands') return [];
-    if (!query.trim()) return allCommands;
-    const q = query.toLowerCase();
-    return allCommands.filter(
-      (c) => c.label.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q),
-    );
+    // Ranked by how well each command answers the query, not by where it sits
+    // in the table: the table groups commands, and grouping is not relevance.
+    return rankCommands(allCommands, query);
   }, [allCommands, query, effectiveMode]);
 
   const filteredQuickCmds = useMemo(() => {
