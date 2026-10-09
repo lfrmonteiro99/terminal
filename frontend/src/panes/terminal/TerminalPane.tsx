@@ -194,7 +194,18 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
             if (disposed) return;
             if (sessionIdRef.current) {
               const dims = fitAddon.proposeDimensions();
-              if (dims) {
+              // A hidden pane measures 0×0, and xterm then proposes a size that
+              // computes to NaN. NaN serialises to `null`, so the daemon answers
+              // INVALID_COMMAND ("invalid type: null, expected u16") and the UI
+              // shows an error banner for a resize nobody asked for. Hidden
+              // panes are normal — a phone shows one pane at a time, so
+              // switching panes zeroes the others — so stay quiet instead of
+              // reporting a size the terminal does not have.
+              if (
+                dims &&
+                Number.isFinite(dims.cols) && dims.cols > 0 &&
+                Number.isFinite(dims.rows) && dims.rows > 0
+              ) {
                 sendRef.current({
                   type: 'ResizeTerminal',
                   session_id: sessionIdRef.current,
