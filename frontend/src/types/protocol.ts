@@ -438,6 +438,7 @@ export type AppEvent =
   | { type: 'StatusUpdate'; active_runs: number; session_count: number }
   | { type: 'Pong' }
   | { type: 'Error'; code: string; message: string }
+  | { type: 'RunError'; run_id: string; code: string; message: string }
   | { type: 'StashList'; stashes: StashEntry[] }
   | { type: 'StashFiles'; stash_index: number; files: FileChange[] }
   | { type: 'StashDiff'; stash_index: number; diff: string; stat: DiffStat | null }

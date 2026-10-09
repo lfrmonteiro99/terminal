@@ -19,6 +19,12 @@ export interface AppState {
   // Bounded output buffer — NOT the full run output
   outputLines: string[];
   error: string | null;
+  /** Failures about one run, keyed by run id.
+   *
+   *  They live here rather than in `error` on purpose: the banner at the top of
+   *  the app reads as "the app broke", and a run's worktree going missing is
+   *  not that. These render next to the run they are about. */
+  runErrors: Map<string, string>;
   runs: Map<string, RunSummary>;
   selectedRun: string | null;
   diffCache: Map<string, { stat: DiffStat; diff: string }>;
@@ -106,6 +112,7 @@ const initialState: AppState = {
   runState: null,
   outputLines: [],
   error: null,
+  runErrors: new Map(),
   runs: new Map(),
   selectedRun: null,
   diffCache: new Map(),
@@ -157,6 +164,7 @@ type Action =
   | { type: 'SET_ACTIVE_SESSION'; sessionId: string }
   | { type: 'SELECT_RUN'; runId: string | null }
   | { type: 'CLEAR_ERROR' }
+  | { type: 'DISMISS_RUN_ERROR'; runId: string }
   | { type: 'TOGGLE_STASH_DRAWER' }
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'DISMISS_PREFLIGHT' }
@@ -182,6 +190,16 @@ function assertExhaustive(event: never): void {
   console.warn('[AppContext] unhandled AppEvent variant', e.type);
 }
 
+/** Drop a run's stored error. Used when the action that produced it succeeds
+ *  (a diff that loads, a merge that lands), and on explicit dismissal — so a
+ *  stale complaint can never outlive the thing it complained about. */
+function withoutRunError(runErrors: Map<string, string>, runId: string): Map<string, string> {
+  if (!runErrors.has(runId)) return runErrors;
+  const next = new Map(runErrors);
+  next.delete(runId);
+  return next;
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_CONNECTION_STATUS':
@@ -189,6 +207,9 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'CLEAR_ERROR':
       return { ...state, error: null };
+
+    case 'DISMISS_RUN_ERROR':
+      return { ...state, runErrors: withoutRunError(state.runErrors, action.runId) };
 
     case 'SET_ACTIVE_SESSION':
       return { ...state, activeSession: action.sessionId };
@@ -459,18 +480,24 @@ function reducer(state: AppState, action: Action): AppState {
         case 'RunDiff': {
           const diffCache = new Map(state.diffCache);
           diffCache.set(event.run_id, { stat: event.stat, diff: event.diff });
-          return { ...state, diffCache };
+          // The diff arrived, so a previous "no worktree" complaint is spent.
+          return { ...state, diffCache, runErrors: withoutRunError(state.runErrors, event.run_id) };
         }
 
         case 'RunReverted': {
           return {
             ...state,
             selectedRun: state.selectedRun === event.run_id ? null : state.selectedRun,
+            runErrors: withoutRunError(state.runErrors, event.run_id),
           };
         }
 
         case 'RunMerged': {
-          return { ...state, mergeConflict: null };
+          return {
+            ...state,
+            mergeConflict: null,
+            runErrors: withoutRunError(state.runErrors, event.run_id),
+          };
         }
 
         case 'RunMergeConflict': {
@@ -494,6 +521,15 @@ function reducer(state: AppState, action: Action): AppState {
 
         case 'Error':
           return { ...state, error: `${event.code}: ${event.message}` };
+
+        case 'RunError': {
+          // Scoped to a run, so it renders beside that run — never the app
+          // banner. A fresh action on the same run clears it (see MARK_RUN_PENDING
+          // and the merge/revert/diff senders).
+          const runErrors = new Map(state.runErrors);
+          runErrors.set(event.run_id, event.message);
+          return { ...state, runErrors };
+        }
 
         case 'StashList':
           return { ...state, stashes: event.stashes };

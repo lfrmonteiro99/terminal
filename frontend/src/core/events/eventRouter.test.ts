@@ -140,6 +140,7 @@ const SAMPLES: Record<AppEvent['type'], AppEvent> = {
   StatusUpdate: { type: 'StatusUpdate', active_runs: 0, session_count: 0 },
   Pong: { type: 'Pong' },
   Error: { type: 'Error', code: 'E', message: 'm' },
+  RunError: { type: 'RunError', run_id: 'r1', code: 'WORKTREE_GONE', message: 'gone' },
   StashList: { type: 'StashList', stashes: [] },
   StashFiles: { type: 'StashFiles', stash_index: 0, files: [] },
   StashDiff: { type: 'StashDiff', stash_index: 0, diff: '', stat: null },
@@ -245,6 +246,7 @@ describe('EventRouter — C3 completeness', () => {
         'TerminalOutput',
         'StashApplied',
         'StashDropped',
+        'RunError',
       ]);
       if (!deliberatelyIgnored.has(tag)) {
         expect(

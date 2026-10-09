@@ -140,3 +140,62 @@ describe('run lifecycle in the app reducer', () => {
     expect(h.get().runLiveText).toBe('');
   });
 });
+
+describe('run-scoped errors stay with the run', () => {
+  const stat = { files_changed: 0, insertions: 0, deletions: 0, file_stats: [] };
+
+  it('never puts a run failure in the app-level banner', () => {
+    // The banner spans the whole window and reads as "the app broke". A worktree
+    // that has already been merged is not that, and it is about ONE run — so it
+    // must not reach `state.error`, which is what the banner renders.
+    const h = startedRun('run-7');
+    h.feed({
+      type: 'RunError',
+      run_id: 'run-7',
+      code: 'WORKTREE_GONE',
+      message: "This run's worktree is gone, so there is no diff to show.",
+    });
+
+    const state = h.get();
+    expect(state.error).toBeNull();
+    expect(state.runErrors.get('run-7')).toContain('worktree is gone');
+  });
+
+  it('still sends genuinely app-level errors to the banner', () => {
+    const h = setup();
+    h.feed({ type: 'Error', code: 'PROJECT_ROOT_MISSING', message: 'gone' });
+
+    expect(h.get().error).toBe('PROJECT_ROOT_MISSING: gone');
+    expect(h.get().runErrors.size).toBe(0);
+  });
+
+  it('drops the complaint once what it was about succeeds', () => {
+    const h = startedRun('run-9');
+    h.feed({ type: 'RunError', run_id: 'run-9', code: 'WORKTREE_GONE', message: 'gone' });
+    expect(h.get().runErrors.has('run-9')).toBe(true);
+
+    h.feed({ type: 'RunDiff', run_id: 'run-9', stat, diff: '' });
+
+    expect(h.get().runErrors.has('run-9')).toBe(false);
+  });
+
+  it('is dismissible', () => {
+    const h = startedRun('run-3');
+    h.feed({ type: 'RunError', run_id: 'run-3', code: 'RUN_NOT_FOUND', message: 'gone' });
+
+    h.dispatch({ type: 'DISMISS_RUN_ERROR', runId: 'run-3' });
+
+    expect(h.get().runErrors.has('run-3')).toBe(false);
+  });
+
+  it('leaves another run’s error alone', () => {
+    const h = startedRun('run-a');
+    h.feed({ type: 'RunError', run_id: 'run-a', code: 'X', message: 'a failed' });
+    h.feed({ type: 'RunError', run_id: 'run-b', code: 'X', message: 'b failed' });
+
+    h.dispatch({ type: 'DISMISS_RUN_ERROR', runId: 'run-a' });
+
+    expect(h.get().runErrors.has('run-a')).toBe(false);
+    expect(h.get().runErrors.get('run-b')).toBe('b failed');
+  });
+});

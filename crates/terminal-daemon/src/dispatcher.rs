@@ -587,9 +587,10 @@ impl Dispatcher {
                     }
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
+                            .send(AppEvent::RunError {
+                                run_id,
                                 code: "RUN_NOT_FOUND".into(),
-                                message: format!("No run {}", run_id),
+                                message: "That run no longer exists.".into(),
                             })
                             .await;
                     }
@@ -650,9 +651,11 @@ impl Dispatcher {
                     }
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "RUN_NOT_FOUND".into(),
-                                message: format!("No active run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_NOT_RUNNING".into(),
+                                message: "That run is no longer running, so there is nothing to stop."
+                                    .into(),
                             })
                             .await;
                     }
@@ -708,10 +711,12 @@ impl Dispatcher {
                         let wt_head = match crate::git_engine::head_oid(&meta.worktree_path).await {
                             Ok(oid) => oid,
                             Err(e) => {
+                                warn!("GetDiff: could not read worktree HEAD for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to read worktree HEAD: {}", e),
+                                        message: "This run's worktree could not be read, so there is no diff to show.".into(),
                                     })
                                     .await;
                                 return;
@@ -727,10 +732,12 @@ impl Dispatcher {
                         {
                             Ok(s) => s,
                             Err(e) => {
+                                warn!("GetDiff: could not compute diff stat for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to compute diff stat: {}", e),
+                                        message: "This run's changes could not be read, so there is no diff to show.".into(),
                                     })
                                     .await;
                                 return;
@@ -746,10 +753,12 @@ impl Dispatcher {
                         {
                             Ok(d) => d,
                             Err(e) => {
+                                warn!("GetDiff: could not compute the diff for run {run_id}: {e}");
                                 let _ = reply_tx
-                                    .send(AppEvent::Error {
+                                    .send(AppEvent::RunError {
+                                        run_id,
                                         code: "GIT_ERROR".into(),
-                                        message: format!("Failed to compute full diff: {}", e),
+                                        message: "This run's diff could not be computed.".into(),
                                     })
                                     .await;
                                 return;
@@ -761,10 +770,16 @@ impl Dispatcher {
                             .await;
                     }
                     Err(e) => {
+                        // The internal reason goes to the log; the wire carries a
+                        // sentence. "Not found: WorktreeMeta for run <uuid>" is
+                        // exactly the jargon that made this look like a crash.
+                        warn!("GetDiff: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is gone, so there is no diff to show."
+                                    .into(),
                             })
                             .await;
                     }
@@ -776,10 +791,13 @@ impl Dispatcher {
                 let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
+                        warn!("RevertRun: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is already gone — nothing to revert."
+                                    .into(),
                             })
                             .await;
                         return;
@@ -792,9 +810,10 @@ impl Dispatcher {
                     Some(pr) => pr,
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("Cannot find project root for run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_PROJECT_MISSING".into(),
+                                message: "Cannot find the project this run belongs to.".into(),
                             })
                             .await;
                         return;
@@ -838,10 +857,13 @@ impl Dispatcher {
                 let meta = match self.context.persistence.load_worktree_meta(run_id) {
                     Ok(m) => m,
                     Err(e) => {
+                        warn!("MergeRun: no worktree metadata for run {run_id}: {e}");
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("No worktree metadata for run {}: {}", run_id, e),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "WORKTREE_GONE".into(),
+                                message: "This run's worktree is already gone — nothing to merge."
+                                    .into(),
                             })
                             .await;
                         return;
@@ -854,9 +876,10 @@ impl Dispatcher {
                     Some(pr) => pr,
                     None => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("Cannot find project root for run {}", run_id),
+                            .send(AppEvent::RunError {
+                                run_id,
+                                code: "RUN_PROJECT_MISSING".into(),
+                                message: "Cannot find the project this run belongs to.".into(),
                             })
                             .await;
                         return;
@@ -936,9 +959,10 @@ impl Dispatcher {
                     }
                     Err(e) => {
                         let _ = reply_tx
-                            .send(AppEvent::Error {
+                            .send(AppEvent::RunError {
+                                run_id,
                                 code: "GIT_ERROR".into(),
-                                message: format!("Merge failed for run {}: {}", run_id, e),
+                                message: format!("Merge failed: {}", e),
                             })
                             .await;
                     }

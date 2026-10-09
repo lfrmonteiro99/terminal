@@ -51,6 +51,7 @@ function withState(runs: RunSummary[], diffCache = new Map()) {
     runs: new Map(runs.map(r => [r.id, r])),
     agents: new Map(),
     diffCache,
+    runErrors: new Map(),
   };
 }
 

@@ -654,6 +654,19 @@ pub enum AppEvent {
         code: String,
         message: String,
     },
+    /// A failure about one run, rather than about the app.
+    ///
+    /// Kept separate from `Error` for a UX reason, not a technical one: the
+    /// client renders these *inside the run's own context* — its row on the
+    /// Runs page, the AI Run pane — instead of the app-level banner at the top.
+    /// A missing worktree used to arrive as `NOT_FOUND` in a full-width red bar
+    /// that read as "the app is broken", when the only fact was "this run's
+    /// worktree is gone" — something the UI already knew how to say.
+    RunError {
+        run_id: Uuid,
+        code: String,
+        message: String,
+    },
 }
 
 impl AppCommand {
@@ -1926,6 +1939,7 @@ mod tests {
                 AppEvent::StatusUpdate { .. } => "StatusUpdate",
                 AppEvent::Pong => "Pong",
                 AppEvent::Error { .. } => "Error",
+                AppEvent::RunError { .. } => "RunError",
                 AppEvent::StashApplied { .. } => "StashApplied",
                 AppEvent::StashDropped { .. } => "StashDropped",
                 AppEvent::AgentList { .. } => "AgentList",

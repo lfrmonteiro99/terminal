@@ -24,6 +24,7 @@ import { useSend } from '../../context/SendContext';
 import { ConfirmModal } from '../ConfirmModal';
 import { parseDiffLines } from '../../core/diff/parse';
 import { copyText } from '../../core/clipboard';
+import { RunErrorNotice } from '../RunErrorNotice';
 import type { RunSummary } from '../../types/protocol';
 
 type Group = 'active' | 'review' | 'resolved';
@@ -232,6 +233,8 @@ export function RunsView() {
                   onCancel={() => cancel(run)}
                   onMerge={() => setConfirm({ kind: 'merge', run })}
                   onRevert={() => setConfirm({ kind: 'revert', run })}
+                  error={state.runErrors.get(run.id)}
+                  onDismissError={() => dispatch({ type: 'DISMISS_RUN_ERROR', runId: run.id })}
                 />
               ))}
             </div>
@@ -290,6 +293,8 @@ function RunRow({
   onCancel,
   onMerge,
   onRevert,
+  error,
+  onDismissError,
 }: {
   run: RunSummary;
   open: boolean;
@@ -304,6 +309,9 @@ function RunRow({
   onCancel: () => void;
   onMerge: () => void;
   onRevert: () => void;
+  /** A failure the daemon reported about THIS run, already written for a human. */
+  error?: string;
+  onDismissError?: () => void;
 }) {
   const running = isRunning(run);
   const terminal = isTerminal(run);
@@ -383,6 +391,12 @@ function RunRow({
             <div style={styles.note}>
               The worktree is gone, so this run can no longer be merged, reverted or
               diffed — only re-run.
+            </div>
+          )}
+
+          {error && (
+            <div style={{ marginTop: 10 }}>
+              <RunErrorNotice message={error} onDismiss={onDismissError} />
             </div>
           )}
 

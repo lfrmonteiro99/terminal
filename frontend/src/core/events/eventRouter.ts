@@ -155,6 +155,12 @@ export class EventRouter {
         dispatch({ type: 'SET_ACTIVE_RUN', runId: event.run_id });
         dispatch({ type: 'SET_RUN_STATE', runState: event.new_state });
         break;
+      case 'RunError':
+        // Intentionally ignored in this router. The failure is about one run and
+        // must render beside it — never in the app-level error slot that `Error`
+        // feeds. The running app keeps these in AppContext's `runErrors` slice
+        // (see RunErrorNotice); this router is a separate, currently unwired path.
+        break;
       case 'RunOutput':
         dispatch({ type: 'APPEND_OUTPUT', line: event.line });
         break;
