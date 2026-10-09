@@ -490,7 +490,7 @@ export function TerminalPane({ pane, workspaceId, focused }: PaneProps) {
   };
 
   return (
-    <div data-pane-kind="terminal" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--bg-base)' }}>
       {sessionState.tag === 'restore-prompt' && (
         <div
           style={{

@@ -38,9 +38,15 @@ function matchesEvent(binding: KeyBinding, e: KeyboardEvent): boolean {
 /** Install the global key handler. Returns a cleanup function. */
 export function installGlobalKeybindings(): () => void {
   const handler = (e: KeyboardEvent) => {
-    // Skip if focus is inside a terminal pane (pane-scoped)
+    // Skip if focus is inside a terminal pane (pane-scoped).
+    //
+    // The pane's own wrapper carries the kind — PaneRenderer stamps
+    // `data-pane-kind` with the PaneKind from the layout, capitalised. Nothing
+    // inside a pane may stamp that attribute too: a second one lower in the tree
+    // makes `[data-pane-kind]` match twice for one pane, which is how a test
+    // hook ended up shadowing the real selector.
     const target = e.target as HTMLElement;
-    const inTerminal = target.closest?.('[data-pane-kind="terminal"]') !== null;
+    const inTerminal = target.closest?.('[data-pane-kind="Terminal"]') !== null;
 
     for (const binding of bindings.values()) {
       if (binding.scope === 'pane' && !inTerminal) continue;
