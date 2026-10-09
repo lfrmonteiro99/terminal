@@ -21,7 +21,6 @@ import type {
   TerminalSessionSummary,
   ToolCall,
 } from '../types/protocol';
-import type { SidebarView } from '../types/sidebar';
 
 export interface SearchResult {
   query: string;
@@ -84,8 +83,8 @@ export interface WorkspaceStore {
   dirtyState: DirtyStatus | null;
   stashDrawerOpen: boolean;
 
-  // Sidebar layout
-  activeSidebarView: SidebarView;
+  // Sidebar layout. Which destination is on screen is derived from the pane
+  // layout (`navViewOf`), so there is no `activeSidebarView` field here.
   sidebarCollapsed: boolean;
 
   // Content state
@@ -151,7 +150,6 @@ export function createWorkspaceStore(workspaceId: string): WorkspaceStore {
     dirtyWarning: null,
     dirtyState: null,
     stashDrawerOpen: false,
-    activeSidebarView: 'overview',
     sidebarCollapsed: false,
     changesContext: { mode: 'working' },
     changedFiles: null,
@@ -207,7 +205,6 @@ export type WorkspaceAction =
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'SET_DIRTY_STATE'; status: DirtyStatus }
   | { type: 'TOGGLE_STASH_DRAWER' }
-  | { type: 'SET_SIDEBAR_VIEW'; view: WorkspaceStore['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: WorkspaceStore['changesContext'] }
   | { type: 'SET_CHANGED_FILES'; context: WorkspaceStore['changesContext']; files: FileChange[] }
@@ -386,9 +383,6 @@ export function workspaceReducer(state: WorkspaceStore, action: WorkspaceAction)
 
     case 'TOGGLE_STASH_DRAWER':
       return { ...state, stashDrawerOpen: !state.stashDrawerOpen };
-
-    case 'SET_SIDEBAR_VIEW':
-      return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
 
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };

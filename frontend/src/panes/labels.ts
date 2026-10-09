@@ -13,8 +13,14 @@ export const PANE_LABELS: Record<string, string> = {
   Browser: 'Browser',
   Diff: 'Diff',
   Changes: 'Changes',
-  FileExplorer: 'Explorer',
+  FileExplorer: 'Files',
   FileViewer: 'File',
   Search: 'Search',
+  // Navigation destinations, one per rail item.
+  Overview: 'Overview',
+  Runs: 'Runs',
+  Git: 'Git',
+  Agents: 'Agents',
+  Settings: 'Settings',
   Empty: 'New Pane',
 };

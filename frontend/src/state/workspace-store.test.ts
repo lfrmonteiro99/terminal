@@ -226,13 +226,6 @@ describe('workspaceReducer', () => {
     expect(twice.stashDrawerOpen).toBe(false);
   });
 
-  it('SET_SIDEBAR_VIEW expands collapsed sidebar', () => {
-    const collapsed: WorkspaceStore = { ...base(), sidebarCollapsed: true };
-    const next = run(collapsed, { type: 'SET_SIDEBAR_VIEW', view: 'git' });
-    expect(next.activeSidebarView).toBe('git');
-    expect(next.sidebarCollapsed).toBe(false);
-  });
-
   it('TOGGLE_SIDEBAR', () => {
     const once = run(base(), { type: 'TOGGLE_SIDEBAR' });
     expect(once.sidebarCollapsed).toBe(true);
@@ -433,7 +426,6 @@ describe('workspaceReducer', () => {
       'DISMISS_DIRTY_WARNING',
       'SET_DIRTY_STATE',
       'TOGGLE_STASH_DRAWER',
-      'SET_SIDEBAR_VIEW',
       'TOGGLE_SIDEBAR',
       'SET_CHANGES_CONTEXT',
       'SET_CHANGED_FILES',

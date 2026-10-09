@@ -1,7 +1,6 @@
 // Persistent session store — saved sessions keyed by projectRoot in localStorage
 
 import type { PaneLayout } from '../domain/pane/types';
-import type { SidebarView } from '../types/sidebar';
 
 export interface SavedSession {
   projectRoot: string;
@@ -9,7 +8,6 @@ export interface SavedSession {
   lastUsed: string;      // ISO date
   layout: PaneLayout;
   theme: string;
-  sidebarView: SidebarView;
   sidebarCollapsed: boolean;
 }
 

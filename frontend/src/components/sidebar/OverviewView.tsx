@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../../context/AppContext';
 import { useSend } from '../../context/SendContext';
+import { openNavPane } from '../../core/openNavPane';
 import type { FileStatus, RunState } from '../../types/protocol';
 
 function relativeTime(iso: string | null): string {
@@ -90,7 +91,7 @@ export function OverviewView() {
   const dirtyTotal = (repo?.staged_count ?? 0) + (repo?.unstaged_count ?? 0);
 
   const openView = (view: 'explorer' | 'changes' | 'git' | 'agents') =>
-    dispatch({ type: 'SET_SIDEBAR_VIEW', view });
+    openNavPane(view);
 
   return (
     <div style={styles.page} data-view="overview">

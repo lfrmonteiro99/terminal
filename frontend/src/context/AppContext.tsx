@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch
 import type { AgentSummary, AppEvent, AutonomyLevel, BranchInfo, CommitEntry, DiffStat, DirtyStatus, FileChange, FileTreeEntry, MergeConflictFile, NoticeLevel, Personality, PreflightError, RepoStatus, Role, RunMetrics, RunMode, RunNotice, RunState, RunSummary, SearchMatch, SessionSummary, StashEntry, ToolCall } from '../types/protocol';
 import { normalizeRunState } from '../types/protocol';
 import { publishTerminalEvent } from '../core/events/terminalBus';
-import type { SidebarView } from '../types/sidebar';
 
 // --- State ---
 
@@ -35,8 +34,8 @@ export interface AppState {
   stashDiffs: Map<string, { diff: string; stat: DiffStat | null }>;
   dirtyWarning: { status: DirtyStatus; session_id: string; prompt: string; mode: RunMode; autonomy?: AutonomyLevel; agent_id?: string } | null;
   stashDrawerOpen: boolean;
-  // Sidebar layout
-  activeSidebarView: SidebarView;
+  // Sidebar layout. There is no `activeSidebarView` here: which destination is
+  // on screen is derived from the pane layout (`navViewOf`), never stored.
   sidebarCollapsed: boolean;
   /** Agent registry last reported by the daemon. Consumed by AgentsView. */
   agents: Map<string, AgentSummary>;
@@ -123,7 +122,6 @@ const initialState: AppState = {
   stashDiffs: new Map(),
   dirtyWarning: null,
   stashDrawerOpen: false,
-  activeSidebarView: 'overview',
   sidebarCollapsed: false,
   agents: new Map(),
   roles: new Map(),
@@ -169,7 +167,6 @@ type Action =
   | { type: 'DISMISS_DIRTY_WARNING' }
   | { type: 'DISMISS_PREFLIGHT' }
   | { type: 'MARK_RUN_PENDING'; prompt?: string }
-  | { type: 'SET_SIDEBAR_VIEW'; view: AppState['activeSidebarView'] }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'SET_CHANGES_CONTEXT'; context: AppState['changesContext'] }
   | { type: 'OPEN_DIFF'; file: string }
@@ -228,9 +225,6 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'MARK_RUN_PENDING':
       return { ...state, pendingRunStartedAt: Date.now(), runStartedAt: Date.now(), runPromptPreview: action.prompt ?? state.runPromptPreview, outputLines: [], runLiveText: '', runNotices: [], runPhase: null, runPhaseDetail: null, runToolCalls: new Map(), runMetrics: null, preflightError: null };
-
-    case 'SET_SIDEBAR_VIEW':
-      return { ...state, activeSidebarView: action.view, sidebarCollapsed: false };
 
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };

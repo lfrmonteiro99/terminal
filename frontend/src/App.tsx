@@ -15,15 +15,17 @@ import { CommandPalette } from './components/CommandPalette';
 import { ShortcutCheatsheet } from './components/ShortcutCheatsheet';
 import { PaneRenderer } from './panes/PaneRenderer';
 import { PANE_LABELS } from './panes/labels';
-import { MobileViewOverlay } from './components/MobileViewOverlay';
 import { MobilePaneSwitcher } from './components/MobilePaneSwitcher';
 import { useIsMobile } from './hooks/useMediaQuery';
 import type { PaneLayout, SplitDirection, PaneKind } from './domain/pane/types';
-import { splitPane, closePane, collectPanes, nextPaneId } from './domain/pane/types';
+import { splitPane, closePane, collectPanes, nextPaneId, replacePaneKind } from './domain/pane/types';
 import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER, matchPreset } from './core/layoutPresets';
 import { loadCustomPresets, addCustomPreset, removeCustomPreset, type CustomPreset } from './state/customPresets';
 import { newId } from './core/id';
+import { openNavPane, OPEN_NAV_PANE } from './core/openNavPane';
+import { NAV_PANE_KIND, NAV_KINDS, navViewOf } from './core/navViews';
 import type { AppEvent } from './types/protocol.ts';
+import type { SidebarView } from './types/sidebar';
 import { saveWorkspaceLayout, loadWorkspaceLayout } from './state/layout-persistence';
 import { saveSession, getSession } from './state/sessionStore';
 import { getCurrentThemeId, applyTheme } from './styles/themes';
@@ -45,6 +47,7 @@ import './panes/browser/BrowserPane';
 import './panes/empty/EmptyPane';
 import './panes/file-viewer/FileViewerPane';
 import './panes/search/SearchPane';
+import './panes/nav/navPanes';
 import './modes/definitions';
 
 /** Patch resource_id onto a specific pane id in a layout tree */
@@ -77,6 +80,26 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
+/**
+ * Panes whose contents cannot be recreated by reopening them: a shell's
+ * scrollback, a running agent, a file you are part-way through.
+ *
+ * A navigation click must never take one of these over. `paneSessionMap` in
+ * TerminalPane is keyed by pane id, so swapping a Terminal's id orphans a live
+ * PTY session inside the daemon — the shell keeps running, invisible, with no
+ * way back to it. These get a split instead; the rest of the surface can be
+ * reused freely.
+ */
+const WORK_KINDS: ReadonlySet<PaneKind> = new Set<PaneKind>([
+  'Terminal',
+  'AiRun',
+  'Browser',
+  'FileViewer',
+  'Search',
+  'Diff',
+]);
+
+
 function AppContent() {
   const state = useAppState();
   const dispatch = useAppDispatch();
@@ -90,15 +113,15 @@ function AppContent() {
   // an off-canvas drawer and the working surface shows one pane at a time.
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Which surface the phone is showing: the panes, or the sidebar view that the
-  // drawer just opened (Files/Changes/Git/Agents/Overview/Settings).
-  const [mobileShowPanes, setMobileShowPanes] = useState(true);
 
-  // Choosing a destination in the drawer closes it and reveals that view. The
-  // drawer is the phone's only navigation, so this is the single funnel.
+  // Choosing a destination in the drawer closes it: the destination itself is
+  // already the pane that the tap opened, so there is nothing left to reveal.
+  // The phone used to swap the whole surface for a full-width view overlay
+  // instead; that was a second mechanism for the same seven destinations, and
+  // it is gone — a phone now switches between panes with MobilePaneSwitcher,
+  // exactly like the desktop.
   const handleMobileNavigate = useCallback(() => {
     setDrawerOpen(false);
-    setMobileShowPanes(false);
   }, []);
 
   // Rotating a phone back to a desktop width must not leave a stale drawer
@@ -121,6 +144,17 @@ function AppContent() {
 
   // Flat pane list — drives the phone's pane switcher and the chrome title.
   const paneList = useMemo(() => collectPanes(layout), [layout]);
+
+  // The destination on screen, derived from the layout rather than stored. The
+  // layout is the surface, so it is the only honest answer to "which view am I
+  // in" — and it makes the restored-session case (a saved destination next to a
+  // layout that no longer contains it) impossible rather than merely unlikely.
+  // null means "no destination is open": a bare Terminal, or the user closed
+  // the last one.
+  const activeNavView = useMemo(
+    () => navViewOf(layout, focusedPaneId),
+    [layout, focusedPaneId],
+  );
 
   // Persist layout on every change — debounced because pane-resize drag emits
   // a layout update per mousemove (potentially 60 Hz), and each
@@ -155,7 +189,6 @@ function AppContent() {
         setLayout(sessionSaved.layout);
         setFocusedPaneId(collectPanes(sessionSaved.layout)[0]?.id ?? null);
         applyTheme(sessionSaved.theme);
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: sessionSaved.sidebarView });
         if (sessionSaved.sidebarCollapsed) dispatch({ type: 'TOGGLE_SIDEBAR' });
       } else if (workspaceSaved) {
         setLayout(workspaceSaved.layout);
@@ -178,11 +211,10 @@ function AppContent() {
         lastUsed: new Date().toISOString(),
         layout,
         theme: getCurrentThemeId(),
-        sidebarView: state.activeSidebarView,
         sidebarCollapsed: state.sidebarCollapsed,
       });
     }
-  }, [state.activeSession, layout, projectRoot, state.activeSidebarView, state.sidebarCollapsed]);
+  }, [state.activeSession, layout, projectRoot, state.sidebarCollapsed]);
 
   // Layout mutation handlers
   const handleSplitPane = useCallback((direction: SplitDirection, kind: PaneKind = 'Terminal') => {
@@ -339,6 +371,60 @@ function AppContent() {
     window.addEventListener('open-file-viewer', handler);
     return () => window.removeEventListener('open-file-viewer', handler);
   }, [focusedPaneId]);
+
+  // Rail → pane. This is the only place that knows the policy, so every entry
+  // point (rail, breadcrumb, status bar, palette, Overview's cards, the
+  // Ctrl+Shift+O/E/G/H shortcuts) behaves identically.
+  //
+  //   1. Already open → focus it. Clicking the same destination twice never
+  //      makes a second copy of it.
+  //   2. Otherwise pick a slot to take over: the focused pane if it is not real
+  //      work, else whichever navigation pane is already open, so the surface
+  //      holds at most one destination however the clicks are ordered.
+  //   3. Only when there is no such slot (a lone Terminal) does it split — a
+  //      navigation click must never be able to destroy a running shell.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const view = (e as CustomEvent<{ view?: SidebarView }>).detail?.view;
+      const kind = view ? NAV_PANE_KIND[view] : undefined;
+      if (!view || !kind) return;
+
+      // Nothing to record here: the rail highlight, the chrome title and the
+      // chrome Refresh action all read `activeNavView`, which is derived from
+      // the layout. Creating the pane below *is* the navigation.
+
+      const panes = collectPanes(layout);
+      const existing = panes.find(p => p.kind === kind);
+      if (existing) {
+        setFocusedPaneId(existing.id);
+        setZoomedPaneId(null);
+        return;
+      }
+
+      const focused = panes.find(p => p.id === focusedPaneId) ?? panes[0];
+      const slot =
+        focused && !WORK_KINDS.has(focused.kind)
+          ? focused
+          : panes.find(p => NAV_KINDS.has(p.kind));
+
+      if (slot) {
+        const replaced = replacePaneKind(layout, slot.id, kind);
+        if (!replaced) return;
+        setLayout(replaced.layout);
+        setFocusedPaneId(replaced.newPaneId);
+      } else if (focused) {
+        const result = splitPane(layout, focused.id, 'Horizontal', kind);
+        if (!result) return;
+        setLayout(result.layout);
+        setFocusedPaneId(result.newPaneId);
+      }
+      // Opening a destination over a zoomed pane would put it on screen behind
+      // the zoom, which reads as "nothing happened".
+      setZoomedPaneId(null);
+    };
+    window.addEventListener(OPEN_NAV_PANE, handler);
+    return () => window.removeEventListener(OPEN_NAV_PANE, handler);
+  }, [layout, focusedPaneId, dispatch]);
 
   // Command palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -532,19 +618,19 @@ function AppContent() {
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'O') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'overview' });
+        openNavPane('overview');
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'E') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' });
+        openNavPane('explorer');
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'G') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' });
+        openNavPane('changes');
       }
       if (e.ctrlKey && e.shiftKey && e.key === 'H') {
         e.preventDefault();
-        dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' });
+        openNavPane('git');
       }
       if (e.key === 'Escape') {
         if (cheatsheetOpen) { setCheatsheetOpen(false); return; }
@@ -700,9 +786,10 @@ function AppContent() {
                 drawer, so the bar keeps only what a thumb needs. */}
             <AppChrome
               mobile={isMobile}
+              view={activeNavView}
               onOpenDrawer={() => setDrawerOpen(true)}
               titleOverride={
-                isMobile && mobileShowPanes
+                isMobile
                   ? (PANE_LABELS[paneList.find(p => p.id === focusedPaneId)?.kind ?? ''] ?? 'Panes')
                   : undefined
               }
@@ -717,6 +804,7 @@ function AppContent() {
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
               <SidebarContainer
                 mobile={isMobile}
+                activeView={activeNavView}
                 mobileOpen={drawerOpen}
                 onMobileClose={handleMobileNavigate}
               />
@@ -731,17 +819,9 @@ function AppContent() {
                 background: 'var(--bg-surface)',
                 position: 'relative',
               }}>
-                {/* No overlay here: Overview and Settings render in the
-                    sidebar panel (SidebarContainer), so the pane surface is
-                    never covered and clicks always reach the work. A phone
-                    uses MobileViewOverlay instead — there is no panel to put
-                    them in. */}
-                {isMobile && !mobileShowPanes && (
-                  <MobileViewOverlay
-                    view={state.activeSidebarView}
-                    onBack={() => setMobileShowPanes(true)}
-                  />
-                )}
+                {/* Nothing is ever layered over the pane surface: every
+                    destination — Overview and Settings included — is a pane, so
+                    a click always reaches the work. */}
 
                 <PaneRenderer
                   layout={layout}
@@ -763,7 +843,7 @@ function AppContent() {
 
                 {/* Phone: one pane is visible at a time, so this is the only
                     way to move between them. Nothing to switch with one pane. */}
-                {isMobile && mobileShowPanes && paneList.length > 1 && (
+                {isMobile && paneList.length > 1 && (
                   <MobilePaneSwitcher
                     panes={paneList}
                     focusedPaneId={focusedPaneId}

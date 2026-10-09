@@ -11,9 +11,10 @@ import {
 } from 'lucide-react';
 import { useAppState, useAppDispatch } from '../../context/AppContext';
 import { useSend } from '../../context/SendContext';
-import type { AppState } from '../../context/AppContext';
+import { openNavPane } from '../../core/openNavPane';
+import type { SidebarView } from '../../types/sidebar';
 
-type View = AppState['activeSidebarView'];
+type View = SidebarView;
 type IconCmp = React.ComponentType<{ size?: number; strokeWidth?: number }>;
 
 interface NavItem {
@@ -30,6 +31,10 @@ interface NavRailProps {
   showCollapse?: boolean;
   /** Render expanded regardless of the persisted sidebar state (drawer). */
   forceExpanded?: boolean;
+  /** The destination currently on screen, or null when none is open. Derived
+   *  from the pane layout by App.tsx: the highlight reports where you are, it
+   *  does not remember where you clicked. */
+  activeView?: SidebarView | null;
 }
 
 const GROUPS: { title: string | null; items: NavItem[] }[] = [
@@ -61,7 +66,7 @@ function projectName(root: string): string {
   return root.split(/[/\\]/).filter(Boolean).pop() ?? root;
 }
 
-export function NavRail({ onNavigate, showCollapse = true, forceExpanded = false }: NavRailProps = {}) {
+export function NavRail({ onNavigate, showCollapse = true, forceExpanded = false, activeView = null }: NavRailProps = {}) {
   const state = useAppState();
   const dispatch = useAppDispatch();
   const send = useSend();
@@ -71,11 +76,12 @@ export function NavRail({ onNavigate, showCollapse = true, forceExpanded = false
   const [newPath, setNewPath] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Selecting a destination is a navigation event. On desktop the rail stays
-  // put; inside a phone drawer the caller uses this to close the drawer, which
-  // is why it is a prop and not a `window` event.
+  // Selecting a destination is a navigation event, and it means the same thing
+  // on both form factors: open that destination as a pane in the work surface.
+  // The rail names a place; it never holds the content. `onNavigate` is the
+  // caller's follow-up (the phone closes its drawer on it).
   const go = (view: View) => {
-    dispatch({ type: 'SET_SIDEBAR_VIEW', view });
+    openNavPane(view);
     onNavigate?.();
   };
 
@@ -235,7 +241,7 @@ export function NavRail({ onNavigate, showCollapse = true, forceExpanded = false
             {group.title && !collapsed && <div style={styles.groupLabel}>{group.title}</div>}
             {group.title && collapsed && <div style={styles.groupRule} />}
             {group.items.map(item => {
-              const isActive = state.activeSidebarView === item.view;
+              const isActive = activeView === item.view;
               const badge = badgeFor(item.view);
               return (
                 <button

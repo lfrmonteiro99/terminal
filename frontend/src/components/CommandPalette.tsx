@@ -7,6 +7,7 @@ import type { BranchInfo } from '../types/protocol';
 import { themes, applyTheme, getCurrentThemeId } from '../styles/themes';
 import { getShortcut, resetShortcuts } from '../core/shortcutMap';
 import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER } from '../core/layoutPresets';
+import { openNavPane } from '../core/openNavPane';
 import {
   getQuickCommands,
   saveQuickCommand,
@@ -115,38 +116,38 @@ export function CommandPalette({ open, onClose, onLayoutPreset, onSplitH, onSpli
       // Sidebar commands
       {
         id: 'sidebar:toggle',
-        label: 'Toggle Sidebar',
-        description: 'Collapse or expand the sidebar',
+        label: 'Toggle Navigation',
+        description: 'Collapse or expand the navigation rail',
         shortcut: getShortcut('sidebar:toggle'),
         action: () => { dispatch({ type: 'TOGGLE_SIDEBAR' }); onClose(); },
       },
       {
         id: 'sidebar:explorer',
-        label: 'Explorer',
-        description: 'Switch sidebar to explorer view',
+        label: 'Files',
+        description: 'Open Files in a pane',
         shortcut: getShortcut('sidebar:explorer'),
-        action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'explorer' }); onClose(); },
+        action: () => { openNavPane('explorer'); onClose(); },
       },
       {
         id: 'sidebar:changes',
         label: 'Changes',
-        description: 'Switch sidebar to changes view',
+        description: 'Open Changes in a pane',
         shortcut: getShortcut('sidebar:changes'),
-        action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' }); onClose(); },
+        action: () => { openNavPane('changes'); onClose(); },
       },
       {
         id: 'sidebar:git',
         label: 'Git',
-        description: 'Switch sidebar to git view',
+        description: 'Open Git in a pane',
         shortcut: getShortcut('sidebar:git'),
-        action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' }); onClose(); },
+        action: () => { openNavPane('git'); onClose(); },
       },
       {
         id: 'sidebar:agents',
         label: 'Agents',
-        description: 'Switch sidebar to agents view',
+        description: 'Open Agents in a pane',
         shortcut: getShortcut('sidebar:agents'),
-        action: () => { dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'agents' }); onClose(); },
+        action: () => { openNavPane('agents'); onClose(); },
       },
       // Git branch
       {

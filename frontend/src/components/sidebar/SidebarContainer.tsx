@@ -1,68 +1,33 @@
-// SidebarContainer — the navigation rail plus the resizable content panel.
+// SidebarContainer — the navigation rail.
 //
-// Desktop: the rail (NavRail) is always visible and the panel holds the
-// selected view. Every view lives here, Overview and Settings included — they
-// used to be full-width overlays laid over the pane surface, which put the
-// dashboard on top of the work and swallowed clicks meant for it. Navigation
-// belongs beside the work, not over it.
+// The rail names a destination; the pane surface hosts it. All seven
+// destinations (Overview and Settings included) open as panes, so nothing is
+// rendered beside the work any more. Before this, a second 220-460px panel
+// lived here holding the selected view: navigation and the work shared neither
+// a host nor a close button. Both that panel and the phone's separate
+// full-surface overlay (MobileViewOverlay) are gone — one mechanism, both form
+// factors.
 //
-// Phone: there is no room for a 280px rail next to the work, so navigation
-// moves into an off-canvas drawer that the AppChrome hamburger opens. The
-// drawer holds the rail only; the selected view's content is rendered by App
-// as a full-width overlay (MobileViewOverlay), which is the phone's equivalent
-// of this panel.
+// Phone: there is no room for a rail next to the work, so navigation moves into
+// an off-canvas drawer that the AppChrome hamburger opens. Choosing a
+// destination closes the drawer and reveals the pane it opened.
 
-import { useCallback, useState } from 'react';
-import { useAppState } from '../../context/AppContext';
+import type { SidebarView } from '../../types/sidebar';
 import { NavRail } from '../nav/NavRail';
-import { SessionStrip } from './SessionStrip';
-import { OverviewView } from './OverviewView';
-import { RunsView } from './RunsView';
-import { SettingsView } from '../SettingsView';
-import { ExplorerView } from './ExplorerView';
-import { ChangesView } from './ChangesView';
-import { GitView } from './GitView';
-import { AgentsView } from './AgentsView';
-import { ResizeHandle } from '../ResizeHandle';
-
-const MIN_WIDTH = 220;
-const MAX_WIDTH = 460;
-const DEFAULT_WIDTH = 280;
-const STORAGE_KEY = 'sidebar-width';
-
-function getStoredWidth(): number {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    const n = parseInt(stored, 10);
-    if (n >= MIN_WIDTH && n <= MAX_WIDTH) return n;
-  }
-  return DEFAULT_WIDTH;
-}
 
 interface SidebarContainerProps {
+  /** The destination on screen, derived from the layout by App.tsx — the rail
+   *  highlight reports it and never sets it. */
+  activeView?: SidebarView | null;
   /** Phone form: render as an off-canvas drawer instead of a fixed column. */
   mobile?: boolean;
   /** Drawer visibility (mobile only). */
   mobileOpen?: boolean;
-  /** Close the drawer — scrim tap, or choosing a destination. */
+  /** Close the drawer - scrim tap, or choosing a destination. */
   onMobileClose?: () => void;
 }
 
-export function SidebarContainer({ mobile = false, mobileOpen = false, onMobileClose }: SidebarContainerProps) {
-  const state = useAppState();
-  const [width, setWidth] = useState(getStoredWidth);
-
-  const handleResize = useCallback((delta: number) => {
-    setWidth((prev) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, prev + delta)));
-  }, []);
-
-  const handleResizeEnd = useCallback(() => {
-    setWidth((current) => {
-      localStorage.setItem(STORAGE_KEY, current.toString());
-      return current;
-    });
-  }, []);
-
+export function SidebarContainer({ activeView = null, mobile = false, mobileOpen = false, onMobileClose }: SidebarContainerProps) {
   if (mobile) {
     if (!mobileOpen) return null;
     return (
@@ -87,56 +52,12 @@ export function SidebarContainer({ mobile = false, mobileOpen = false, onMobileC
             animation: 'drawer-in 180ms var(--ease-out-expo, ease-out)',
           }}
         >
-          <NavRail onNavigate={onMobileClose} showCollapse={false} forceExpanded />
+          <NavRail activeView={activeView} onNavigate={onMobileClose} showCollapse={false} forceExpanded />
         </div>
       </>
     );
   }
 
-  // Every destination renders in this panel. Nothing overlays the pane surface,
-  // so the work stays visible and clickable while you read the dashboard.
-  const showPanel = !state.sidebarCollapsed;
-
-  const ActiveView = (() => {
-    switch (state.activeSidebarView) {
-      case 'overview': return OverviewView;
-      case 'settings': return SettingsView;
-      case 'runs': return RunsView;
-      case 'explorer': return ExplorerView;
-      case 'changes': return ChangesView;
-      case 'git': return GitView;
-      case 'agents': return AgentsView;
-      default: return ExplorerView;
-    }
-  })();
-
-  return (
-    <>
-      <NavRail />
-      {showPanel && (
-        <div style={{
-          width,
-          flexShrink: 0,
-          backgroundColor: 'var(--bg-surface)',
-          borderRight: '1px solid var(--tint-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          fontFamily: 'var(--font-display)',
-          fontSize: 'var(--font-size-small)',
-        }}>
-          {/* The Runs destination is the full run menu; the strip is a compact
-              "where am I" list for the other views. Showing both stacked the
-              same runs twice and read as one broken list. */}
-          {state.activeSidebarView !== 'runs' && <SessionStrip />}
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-            <ActiveView />
-          </div>
-        </div>
-      )}
-      {showPanel && (
-        <ResizeHandle direction="horizontal" onResize={handleResize} onResizeEnd={handleResizeEnd} />
-      )}
-    </>
-  );
+  // Desktop: the rail is the whole sidebar. Its destinations open as panes.
+  return <NavRail activeView={activeView} />;
 }

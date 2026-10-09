@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppState, useAppDispatch } from '../context/AppContext';
+import { openNavPane } from '../core/openNavPane';
 
 interface StatusBarItemProps {
   onClick?: () => void;
@@ -57,7 +58,7 @@ export function StatusBar({ compact = false }: { compact?: boolean } = {}) {
     >
       {repo && (
         <StatusBarItem
-          onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'git' })}
+          onClick={() => openNavPane('git')}
           title="Open Git view"
         >
           <span style={{ color: 'var(--accent-primary)' }}>&#9679;</span>
@@ -72,10 +73,7 @@ export function StatusBar({ compact = false }: { compact?: boolean } = {}) {
 
       {repo && !repo.clean && (
         <StatusBarItem
-          onClick={() => {
-            dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' });
-            if (state.sidebarCollapsed) dispatch({ type: 'TOGGLE_SIDEBAR' });
-          }}
+          onClick={() => openNavPane('changes')}
           title="Open Changes view"
         >
           {repo.staged_count + repo.unstaged_count} changed

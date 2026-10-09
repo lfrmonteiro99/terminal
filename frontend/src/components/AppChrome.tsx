@@ -10,9 +10,10 @@ import {
   ChevronDown, ChevronRight, TerminalSquare, Bot, Globe, RefreshCw,
   SlidersHorizontal, Menu, Check, Bookmark, Plus, X, History,
 } from 'lucide-react';
-import { useAppState, useAppDispatch } from '../context/AppContext';
+import { useAppState } from '../context/AppContext';
 import { useSend } from '../context/SendContext';
 import type { SidebarView } from '../types/sidebar';
+import { openNavPane } from '../core/openNavPane';
 import { LAYOUT_PRESETS, LAYOUT_PRESET_ORDER } from '../core/layoutPresets';
 import type { CustomPreset } from '../state/customPresets';
 
@@ -41,6 +42,10 @@ const PRESET_ICONS: Record<string, ChromeIcon> = {
 };
 
 interface AppChromeProps {
+  /** The navigation destination currently on screen, or null when the surface
+   *  is showing no destination (a bare Terminal). Derived from the layout by
+   *  App.tsx — the chrome never decides where it is, it reports it. */
+  view?: SidebarView | null;
   onLayoutPreset?: (preset: string) => void;
   /** Which preset the current layout matches, or null when it is hand-built.
    *  Drives the check mark and tells the user whether switching loses work. */
@@ -64,6 +69,7 @@ function projectName(root: string): string {
 }
 
 export function AppChrome({
+  view = null,
   onLayoutPreset,
   activePreset = null,
   customPresets = [],
@@ -74,7 +80,6 @@ export function AppChrome({
   titleOverride,
 }: AppChromeProps) {
   const state = useAppState();
-  const dispatch = useAppDispatch();
   const send = useSend();
 
   const [menu, setMenu] = useState<null | 'layout'>(null);
@@ -107,9 +112,11 @@ export function AppChrome({
     closeMenu();
   };
 
-  const view = state.activeSidebarView as View;
-  const meta = VIEW_META[view] ?? VIEW_META.overview;
-  const title = titleOverride ?? meta.label;
+  const meta = view ? VIEW_META[view] : null;
+  // No destination open means no view title. A phone still names the pane it is
+  // showing (titleOverride); on the desktop the breadcrumb ends at the
+  // workspace rather than naming a view that is not on screen.
+  const title = titleOverride ?? meta?.label ?? '';
   const active = state.activeSession ? state.sessions.get(state.activeSession) : null;
   const repo = state.repoStatus;
   const dirtyTotal = (repo?.staged_count ?? 0) + (repo?.unstaged_count ?? 0);
@@ -199,7 +206,7 @@ export function AppChrome({
         {!mobile && (
           <>
             <button
-              onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'overview' })}
+              onClick={() => openNavPane('overview')}
               title={active?.project_root ?? 'No workspace'}
               style={{
                 display: 'inline-flex',
@@ -229,10 +236,12 @@ export function AppChrome({
           </>
         )}
 
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: 'var(--text-primary)', fontSize: 'var(--font-size-title)', fontWeight: 600, letterSpacing: '-0.01em', minWidth: 0 }}>
-          <meta.Icon size={15} strokeWidth={1.9} style={{ flexShrink: 0 }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
-        </span>
+        {title && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: 'var(--text-primary)', fontSize: 'var(--font-size-title)', fontWeight: 600, letterSpacing: '-0.01em', minWidth: 0 }}>
+            {meta && <meta.Icon size={15} strokeWidth={1.9} style={{ flexShrink: 0 }} />}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+          </span>
+        )}
       </div>
 
       {/* Meta chips — desktop only; the drawer and StatusBar carry this on a phone. */}
@@ -246,7 +255,7 @@ export function AppChrome({
           )}
           {dirtyTotal > 0 ? (
             <button
-              onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', view: 'changes' })}
+              onClick={() => openNavPane('changes')}
               style={{ ...chipStyle, color: 'var(--accent-warn)', cursor: 'pointer' }}
               title="Uncommitted changes"
             >
@@ -260,30 +269,34 @@ export function AppChrome({
 
       <div style={{ flex: 1 }} />
 
-      {/* Contextual primary action */}
-      <button
-        onClick={refresh}
-        title={`Reload ${meta.label.toLowerCase()}`}
-        aria-label={`Reload ${meta.label.toLowerCase()}`}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          height: 28, padding: mobile ? 0 : '0 10px',
-          width: mobile ? 30 : undefined,
-          justifyContent: 'center',
-          // Longhands, not `border`: the hover handlers below mutate
-          // borderColor imperatively, and shorthand+longhand mixing makes React
-          // lose the colour on the next rerender.
-          borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--tint-border)',
-          borderRadius: 'var(--radius-sm)',
-          background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer',
-          fontFamily: 'var(--font-display)', fontSize: 'var(--font-size-small)', fontWeight: 550,
-        }}
-        onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--border-default)'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--tint-border)'; }}
-      >
-        <RefreshCw size={13} strokeWidth={2} />
-        {!mobile && 'Refresh'}
-      </button>
+      {/* Contextual primary action — reloads the open destination's data. With
+          no destination on screen there is nothing to reload, so it is absent
+          rather than present-and-inert. */}
+      {view && meta && (
+        <button
+          onClick={refresh}
+          title={`Reload ${meta.label.toLowerCase()}`}
+          aria-label={`Reload ${meta.label.toLowerCase()}`}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            height: 28, padding: mobile ? 0 : '0 10px',
+            width: mobile ? 30 : undefined,
+            justifyContent: 'center',
+            // Longhands, not `border`: the hover handlers below mutate
+            // borderColor imperatively, and shorthand+longhand mixing makes React
+            // lose the colour on the next rerender.
+            borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--tint-border)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer',
+            fontFamily: 'var(--font-display)', fontSize: 'var(--font-size-small)', fontWeight: 550,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--border-default)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--tint-border)'; }}
+        >
+          <RefreshCw size={13} strokeWidth={2} />
+          {!mobile && 'Refresh'}
+        </button>
+      )}
 
       {/* Layout presets — desktop only. A phone shows one pane at a time, so
           there is no grid to arrange; the pane switcher covers what is left. */}
