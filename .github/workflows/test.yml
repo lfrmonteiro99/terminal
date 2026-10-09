@@ -17,6 +17,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88
+          components: clippy
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -33,6 +34,12 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test -p terminal-core -p terminal-daemon
+
+      # Clippy is a merge gate, not a release gate. It used to live only in
+      # release.yml (push to main), so a green PR could still kill the release:
+      # warnings are denied there and nothing checked them before the merge.
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::uninlined_format_args
 
   frontend-checks:
     name: Frontend checks
